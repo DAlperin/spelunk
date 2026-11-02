@@ -107,22 +107,75 @@ final class AppModel {
 }
 
 enum ReviewNav {
-    @MainActor static func ordered(_ ws: Workspace) -> [Hunk] {
+    /// Every hunk in reading order: important tiers first, then low-signal ones.
+    @MainActor static func ordered(_ ws: Workspace, importantOnly: Bool = false) -> [Hunk] {
         guard let r = ws.review else { return [] }
-        return ChangeTier.allCases.filter { !r.hideTiers.contains($0) }.flatMap { r.hunks(in: $0) }
+        let tiers = importantOnly ? ChangeTier.important : ChangeTier.allCases
+        return tiers.flatMap { r.hunks(in: $0) }
     }
 
-    @MainActor static func next(_ ws: Workspace) {
-        let hs = ordered(ws)
+    @MainActor static func next(_ ws: Workspace) { step(ws, 1, importantOnly: false) }
+    @MainActor static func previous(_ ws: Workspace) { step(ws, -1, importantOnly: false) }
+
+    /// Next important hunk not yet viewed, wrapping around.
+    @MainActor static func nextImportant(_ ws: Workspace) {
+        guard let r = ws.review else { return }
+        let hs = ordered(ws, importantOnly: true)
         guard !hs.isEmpty else { return }
         let i = hs.firstIndex { $0.id == ws.selectedHunkID } ?? -1
-        ws.selectHunk(hs[min(hs.count - 1, i + 1)])
+        let rotated = Array(hs[(i + 1)...]) + Array(hs[...max(0, i)])
+        if let h = rotated.first(where: { !r.isViewed($0) }) ?? rotated.first { ws.selectHunk(h) }
     }
 
-    @MainActor static func previous(_ ws: Workspace) {
-        let hs = ordered(ws)
+    @MainActor private static func step(_ ws: Workspace, _ d: Int, importantOnly: Bool) {
+        let hs = ordered(ws, importantOnly: importantOnly)
         guard !hs.isEmpty else { return }
-        let i = hs.firstIndex { $0.id == ws.selectedHunkID } ?? 1
-        ws.selectHunk(hs[max(0, i - 1)])
+        guard let i = hs.firstIndex(where: { $0.id == ws.selectedHunkID }) else { ws.selectHunk(hs[d > 0 ? 0 : hs.count - 1]); return }
+        ws.selectHunk(hs[max(0, min(hs.count - 1, i + d))])
+    }
+
+    /// Position of the selected hunk among important hunks, as (index, count).
+    @MainActor static func importantPosition(_ ws: Workspace) -> (Int, Int)? {
+        let hs = ordered(ws, importantOnly: true)
+        guard let i = hs.firstIndex(where: { $0.id == ws.selectedHunkID }) else { return nil }
+        return (i + 1, hs.count)
+    }
+}
+
+/// Single-key review commands, active while a review is open and focus is not in a text field.
+enum ReviewKeys {
+    /// Several monitors can briefly coexist while SwiftUI rebuilds the window; handle each event once.
+    @MainActor private static var lastHandled: TimeInterval = -1
+
+    @MainActor static func handle(_ event: NSEvent, ws: Workspace) -> Bool {
+        if event.timestamp == lastHandled { return true }
+        guard ws.review != nil, ws.palette == nil, ws.commentDraft == nil else { return false }
+        let mods = event.modifierFlags.intersection([.command, .option, .control])
+        guard mods.isEmpty, let chars = event.charactersIgnoringModifiers?.lowercased(), chars.count == 1 else { return false }
+        let shift = event.modifierFlags.contains(.shift)
+        switch chars {
+        case "j": shift ? ReviewNav.nextImportant(ws) : ReviewNav.next(ws)
+        case "k": ReviewNav.previous(ws)
+        case "v":
+            guard let id = ws.selectedHunkID else { return false }
+            ws.review?.toggleViewed(id)
+            ReviewNav.nextImportant(ws)
+        case "c":
+            guard ws.review?.pullRequest != nil else { return false }
+            ws.draftComment()
+        case "n": ws.moveThread(1)
+        case "p": ws.moveThread(-1)
+        case "r": ws.resolveCurrentThread()
+        default: return false
+        }
+        lastHandled = event.timestamp
+        return true
+    }
+
+    /// Whether the key window's focus accepts typing, in which case letters must go to it.
+    @MainActor static func focusIsTextInput() -> Bool {
+        guard let r = (NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible })?.firstResponder else { return false }
+        if let tv = r as? NSTextView { return tv.isEditable }
+        return r is NSTextField
     }
 }

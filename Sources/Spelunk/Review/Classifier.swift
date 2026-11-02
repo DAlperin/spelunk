@@ -10,9 +10,9 @@ enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendab
 
     var title: String {
         switch self {
-        case .critical: "Needs attention"
-        case .behavior: "Behavior changes"
-        case .supporting: "Supporting plumbing"
+        case .critical: "Critical"
+        case .behavior: "Behavior"
+        case .supporting: "Plumbing"
         case .docs: "Docs & comments"
         case .tests: "Tests"
         case .mechanical: "Mechanical"
@@ -30,7 +30,21 @@ enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendab
         }
     }
 
-    var isLowSignal: Bool { self == .tests || self == .mechanical }
+    /// Docs, tests and mechanical changes are acknowledged in bulk; the rest are reviewed one by one.
+    var isLowSignal: Bool { self == .docs || self == .tests || self == .mechanical }
+
+    /// Shape as well as color, so tiers stay distinguishable without hue.
+    var glyph: String {
+        switch self {
+        case .critical: "diamond.fill"
+        case .behavior: "circle.fill"
+        case .supporting: "circle"
+        case .docs, .tests, .mechanical: "minus"
+        }
+    }
+
+    static let important: [ChangeTier] = [.critical, .behavior, .supporting]
+    static let lowSignal: [ChangeTier] = [.docs, .tests, .mechanical]
 }
 
 struct HunkAnalysis: Sendable {

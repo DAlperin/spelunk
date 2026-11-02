@@ -266,9 +266,10 @@ enum PaletteCommands {
         add("Mark Hunk Viewed", nil, "⇧⌘V", icon: "checkmark.circle", when: hasReview && ws.selectedHunkID != nil) {
             if let id = ws.selectedHunkID { ws.review?.toggleViewed(id); ReviewNav.next(ws) }
         }
-        add(ws.inlineDiff ? "Hide Inline Diff" : "Show Inline Diff", "removed lines in After, added lines in Before", icon: "text.line.first.and.arrowtriangle.forward", when: hasReview) { ws.inlineDiff.toggle() }
-        add("Show Before", icon: "arrow.uturn.backward", when: hasReview) { ws.setReviewSide(.before) }
-        add("Show After", icon: "arrow.uturn.forward", when: hasReview) { ws.setReviewSide(.after) }
+        for m in DiffMode.allCases {
+            add("Diff: \(m.rawValue)", m == .inline ? "new version with removed lines in place" : m == .split ? "old and new side by side" : "\(m.rawValue.lowercased()) version only",
+                icon: "rectangle.split.2x1", when: hasReview && ws.diffMode != m) { ws.setDiffMode(m) }
+        }
         add("Submit GitHub Review…", "\(ws.review?.pendingComments.count ?? 0) pending comments", icon: "paperplane",
             when: ws.review?.pullRequest != nil) { ws.showSubmitReview = true }
         add("Close Review", ws.review?.target.label, icon: "xmark.circle", when: ws.activeReviewKey != nil) { ws.review = nil }

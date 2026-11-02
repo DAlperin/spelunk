@@ -50,6 +50,7 @@ struct WelcomeView: View {
 
 struct MainView: View {
     @Bindable var ws: Workspace
+    @State private var keyMonitor: Any?
     @State private var showInspector = true
     @State private var columns = NavigationSplitViewVisibility.all
 
@@ -71,6 +72,16 @@ struct MainView: View {
         .sheet(isPresented: $ws.showSubmitReview) {
             if let r = ws.review { SubmitReviewSheet(ws: ws, review: r) }
         }
+        .onAppear {
+            if let m = keyMonitor { NSEvent.removeMonitor(m) }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws] e in
+                MainActor.assumeIsolated {
+                    guard e.window?.isVisible == true, e.window?.attachedSheet == nil, e.window?.isSheet == false, !ReviewKeys.focusIsTextInput() else { return e }
+                    return ReviewKeys.handle(e, ws: ws) ? nil : e
+                }
+            }
+        }
+        .onDisappear { if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil } }
         .overlay(alignment: .top) {
             if let mode = ws.palette {
                 ZStack(alignment: .top) {
@@ -97,7 +108,7 @@ struct MainToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .principal) {
             Menu {
                 Text(ws.root.path)
-                if ws.vcs.kind != .none { Text("\(ws.vcs.kind.rawValue) \(ws.vcs.revision) \(ws.vcs.description)") }
+                if ws.vcs.kind != .none { Text(verbatim: "\(ws.vcs.kind.rawValue) \(ws.vcs.revision) \(ws.vcs.description)") }
                 Divider()
                 Button("Restart rust-analyzer") { ws.ra.restart() }
                 Button("Run cargo clippy") { ws.clippy.run() }
@@ -108,27 +119,71 @@ struct MainToolbar: ToolbarContent {
             }
             .help("Repository")
 
-            Button { showReviewPicker = true } label: {
-                Label(ws.review?.target.label ?? "Review…", systemImage: "arrow.triangle.pull").labelStyle(.titleAndIcon)
-            }
-            .help("Review a change")
-            .popover(isPresented: $showReviewPicker) { ReviewPicker(ws: ws, dismiss: { showReviewPicker = false }) }
+            ReviewTargetMenu(ws: ws, showPicker: $showReviewPicker)
+                .popover(isPresented: $showReviewPicker) { ReviewPicker(ws: ws, dismiss: { showReviewPicker = false }) }
 
             if ws.review != nil {
-                Picker("Side", selection: Binding(get: { ws.reviewSide }, set: { ws.setReviewSide($0) })) {
-                    ForEach(ReviewSide.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                Picker("Diff", selection: Binding(get: { ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
+                    ForEach(DiffMode.toolbar) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 130)
-                .help("Show the file before or after the change")
+                .frame(width: 170)
+                .help("Inline: new version with removed lines in place. Split: old and new side by side.")
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            Button { ws.showAsk = true } label: { Image(systemName: "sparkles") }.help("Ask Claude (⌘L)")
-            Button { ws.addCurrentToTrace() } label: { Image(systemName: "point.topleft.down.to.point.bottomright.curvepath") }
-                .help("Add cursor location to the code path (⇧⌘T)")
+            Button { ws.showAsk = true } label: { Label("Ask", systemImage: "sparkles").labelStyle(.titleAndIcon) }.help("Ask Claude (⌘L)")
+            Button { ws.addCurrentToTrace() } label: { Label("Trace", systemImage: "point.topleft.down.to.point.bottomright.curvepath").labelStyle(.titleAndIcon) }
+                .help("Add the cursor location to the code path (⇧⌘T)")
             Button { showInspector.toggle() } label: { Image(systemName: "sidebar.right") }.help("Toggle context pane")
         }
+    }
+}
+
+/// The review being shown: working copy, pinned PRs and changes (⌃1…⌃9), and ways to open more.
+struct ReviewTargetMenu: View {
+    @Bindable var ws: Workspace
+    @Binding var showPicker: Bool
+
+    var body: some View {
+        let all = [ws.workingReview].compactMap { $0 } + ws.pinnedReviews
+        Menu {
+            ForEach(Array(all.enumerated()), id: \.element.target.key) { i, r in
+                let active = (r.tracksWorkingCopy && ws.activeReviewKey == nil) || ws.activeReviewKey == r.target.key
+                Button {
+                    if r.tracksWorkingCopy { ws.showWorkingReview() } else { ws.activeReviewKey = r.target.key; ws.sidebarTab = .changes }
+                } label: {
+                    if active { Label(menuTitle(r), systemImage: "checkmark") } else { Text(menuTitle(r)) }
+                }
+                .keyboardShortcut(i < 9 ? KeyEquivalent(Character(String(i + 1))) : "0", modifiers: .control)
+            }
+            Divider()
+            Button("Review a Pull Request…") { ws.sidebarTab = .scm; ws.scmSection = .pullRequests }
+            Button("Compare Revisions…") { showPicker = true }
+            if ws.activeReviewKey != nil {
+                Divider()
+                Button("Close \(ws.review?.shortLabel ?? "Review")") { ws.review = nil }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                if let r = ws.review {
+                    Image(systemName: r.pullRequest != nil || isPR(r) ? "arrow.triangle.pull" : r.tracksWorkingCopy ? "circle.fill" : "square.stack")
+                        .font(.system(size: r.tracksWorkingCopy ? 6 : 11)).foregroundStyle(r.tracksWorkingCopy ? .green : .secondary)
+                    Text(r.shortLabel)
+                    if r.tracksWorkingCopy, let id = r.changeID { Text(id).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                } else {
+                    Text("No review")
+                }
+                if all.count > 1 { Text(verbatim: "\(all.count) open").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .help(ws.review?.target.label ?? "Choose what to review")
+    }
+
+    func isPR(_ r: ReviewSession) -> Bool { if case .githubPR = r.target { return true }; return false }
+
+    func menuTitle(_ r: ReviewSession) -> String {
+        r.tracksWorkingCopy ? "Working copy" + (r.changeID.map { " (\($0))" } ?? "") : "\(r.shortLabel) · \(r.title.prefix(50))"
     }
 }
 
@@ -204,8 +259,23 @@ struct EditorColumn: View {
                 Divider()
             }
             if let doc = ws.document {
-                CodeView(ws: ws, document: doc)
+                if ws.review != nil && ws.diffMode == .split, let old = ws.splitDocument, old.path == (ws.review?.files.first { $0.newPath == doc.path }?.oldPath ?? doc.path) {
+                    HStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            SplitPaneHeader(title: "Before", color: .red)
+                            CodeView(ws: ws, document: old, secondary: true).id("split-" + old.id.uuidString)
+                        }
+                        Divider()
+                        VStack(spacing: 0) {
+                            SplitPaneHeader(title: "After", color: .green)
+                            CodeView(ws: ws, document: doc)
+                        }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    CodeView(ws: ws, document: doc)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 ContentUnavailableView("No file open", systemImage: "doc.text", description: Text("Pick a file from the sidebar, or press ⌘K."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -213,6 +283,20 @@ struct EditorColumn: View {
             Divider()
             StatusBar(ws: ws)
         }
+    }
+}
+
+struct SplitPaneHeader: View {
+    let title: String
+    let color: Color
+    var body: some View {
+        HStack {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 10).frame(height: 20)
+        .background(Color.secondary.opacity(0.06))
     }
 }
 
@@ -232,11 +316,6 @@ struct BreadcrumbBar: View {
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     Text(item.qualifiedName).fontWeight(.medium)
                 }
-                if let label = d.revisionLabel {
-                    Text(label).font(.caption.weight(.semibold))
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(label == "Before" ? Color.red.opacity(0.15) : Color.green.opacity(0.15), in: Capsule())
-                }
             }
             Spacer()
         }
@@ -255,14 +334,14 @@ struct StatusBar: View {
         HStack(spacing: 10) {
             if let d = ws.document {
                 Text(d.languageName)
-                Text("\(d.lines.lineCount) lines").foregroundStyle(.secondary)
+                Text(verbatim: "\(d.lines.lineCount) lines").foregroundStyle(.secondary)
                 if d.language == .rust {
                     if d.syntax.errorCount > 0 {
                         Label("Partial structure", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                             .help("tree-sitter recovered from \(d.syntax.errorCount) syntax errors")
                     }
                     let tests = d.syntax.testLineRanges.count
-                    if tests > 0 { Text("\(tests) test region\(tests == 1 ? "" : "s")").foregroundStyle(.secondary) }
+                    if tests > 0 { Text(verbatim: "\(tests) test region\(tests == 1 ? "" : "s")").foregroundStyle(.secondary) }
                 }
             }
             if let msg = ws.statusMessage {
@@ -271,7 +350,7 @@ struct StatusBar: View {
             }
             if let g = ws.traceGenerating {
                 ProgressView().controlSize(.mini)
-                Text("Tracing: \(g)").foregroundStyle(.purple).lineLimit(1)
+                Text(verbatim: "Tracing: \(g)").foregroundStyle(.purple).lineLimit(1)
             }
             Spacer()
             clippyStatus
@@ -285,8 +364,16 @@ struct StatusBar: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
-            if let c = ws.cursor { Text("Line \(c.line + 1)").foregroundStyle(.secondary) }
-            Text("UTF-8 · Read Only").foregroundStyle(.secondary)
+            if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
+            if ws.review != nil {
+                HStack(spacing: 4) {
+                    KeyCap("J"); KeyCap("K"); Text("hunk")
+                    KeyCap("⇧J"); Text("next important")
+                    KeyCap("V"); Text("viewed")
+                    if ws.review?.pullRequest != nil { KeyCap("C"); Text("comment"); KeyCap("N"); KeyCap("P"); Text("thread") }
+                }
+                .foregroundStyle(.secondary)
+            }
         }
         .font(.system(size: 11))
         .lineLimit(1)
@@ -298,7 +385,7 @@ struct StatusBar: View {
         switch ws.clippy.state {
         case .idle: EmptyView()
         case .running(let s):
-            HStack(spacing: 4) { ProgressView().controlSize(.mini); Text("clippy: \(s)").lineLimit(1).frame(maxWidth: 220) }
+            HStack(spacing: 4) { ProgressView().controlSize(.mini); Text(verbatim: "clippy: \(s)").lineLimit(1).frame(maxWidth: 220) }
         case .done:
             let errs = ws.clippy.diagnostics.filter { $0.level == .error }.count
             let warns = ws.clippy.diagnostics.count - errs
@@ -349,11 +436,11 @@ struct IndexPopover: View {
             Divider()
             row("SCIP index", scipLabel, color: ws.scip.index == nil ? .gray : (ws.scip.uncoveredFiles.isEmpty ? .green : .yellow)) {
                 if let m = ws.scip.meta {
-                    Text("Generated \(m.generatedAt.formatted(date: .abbreviated, time: .shortened)) at \(m.revision) · \(m.tool)")
+                    Text(verbatim: "Generated \(m.generatedAt.formatted(date: .abbreviated, time: .shortened)) at \(m.revision) · \(m.tool)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let idx = ws.scip.index {
-                    Text("\(idx.documents.count) files · \(idx.occurrencesBySymbol.count) symbols").font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: "\(idx.documents.count) files · \(idx.occurrencesBySymbol.count) symbols").font(.caption).foregroundStyle(.secondary)
                 }
                 if !ws.scip.uncoveredFiles.isEmpty {
                     DisclosureGroup("\(ws.scip.uncoveredFiles.count) Rust files not covered", isExpanded: $showUncovered) {
@@ -436,44 +523,63 @@ struct HunkStrip: View {
     @Bindable var ws: Workspace
     let review: ReviewSession
     let hunk: Hunk
-    @State private var showDiff = false
 
     var body: some View {
+        let tier = review.tier(of: hunk)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                TierBadge(tier: review.tier(of: hunk)).fixedSize()
-                Text(review.reasons(of: hunk).joined(separator: " · ")).font(.callout).lineLimit(1)
-                    .help(ruleHelp)
-                if let e = review.analyses[hunk.id]?.enclosing {
-                    Text("in \(e)").font(.callout.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: tier.glyph).font(.system(size: 9)).foregroundStyle(tier.color)
+                Text(tier.title).font(.callout.weight(.semibold)).foregroundStyle(tier.color).fixedSize()
+                Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent)
+                    .font(.callout.monospaced().weight(.medium)).lineLimit(1).truncationMode(.middle).layoutPriority(1)
+                Text(verbatim: sizeText).font(.callout.monospaced()).foregroundStyle(.secondary).fixedSize()
+                if let t = review.triage(of: hunk) {
+                    Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption).foregroundStyle(.purple)
                 }
-                Spacer()
-                Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption.monospaced()).foregroundStyle(.secondary)
-                Toggle("Inline diff", isOn: $ws.inlineDiff).toggleStyle(.checkbox).fixedSize()
-                    .help("Show the other side's lines in place: removed lines in After, added lines in Before")
-                Button(showDiff ? "Hide diff" : "Show diff") { showDiff.toggle() }.fixedSize()
-                if review.pullRequest != nil {
-                    Button("Comment") { ws.draftComment() }.fixedSize().help("Comment on the cursor line")
+                Text(review.summary(of: hunk)).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(ruleHelp)
+                Spacer(minLength: 4)
+                if let (i, n) = ReviewNav.importantPosition(ws) {
+                    Text(verbatim: "\(i) of \(n) important").font(.caption).foregroundStyle(.secondary).fixedSize()
                 }
-                Toggle("Viewed", isOn: Binding(get: { review.isViewed(hunk) }, set: { _ in review.toggleViewed(hunk) }))
-                    .toggleStyle(.checkbox).fixedSize()
-                Button { ReviewNav.previous(ws) } label: { Image(systemName: "chevron.up") }.help("Previous hunk (⇧⌘J)")
-                Button { ReviewNav.next(ws) } label: { Image(systemName: "chevron.down") }.help("Next hunk (⌘J)")
-            }
-            if let s = review.triage(of: hunk)?.summary {
-                Label(s, systemImage: "sparkles").font(.caption).foregroundStyle(.purple)
+                Button { ReviewNav.previous(ws) } label: { KeyCap("K") }.help("Previous hunk (K)")
+                Button { ReviewNav.next(ws) } label: { KeyCap("J") }.help("Next hunk (J); ⇧J next unviewed important hunk")
+                Button { review.toggleViewed(hunk); if review.isViewed(hunk) { ReviewNav.nextImportant(ws) } } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: review.isViewed(hunk) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(review.isViewed(hunk) ? .green : .secondary)
+                        Text("Viewed")
+                        KeyCap("V")
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                }
+                .help("Mark viewed and go to the next important hunk (V)")
             }
             if review.pullRequest != nil {
                 ScrollView { HunkConversation(ws: ws, review: review, hunk: hunk) }.frame(maxHeight: 220).fixedSize(horizontal: false, vertical: true)
             }
-            if showDiff {
-                UnifiedHunkView(hunk: hunk).frame(maxHeight: 220)
-            }
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .controlSize(.small)
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(review.tier(of: hunk).color.opacity(0.06))
+        .background(tier.color.opacity(0.06))
+        .overlay(alignment: .leading) { Rectangle().fill(tier.color).frame(width: 3) }
+    }
+
+    var sizeText: String {
+        hunk.addedCount == 0 ? "−\(hunk.removedCount)" : hunk.removedCount == 0 ? "+\(hunk.addedCount)" : "+\(hunk.addedCount) −\(hunk.removedCount)"
+    }
+}
+
+/// A small keyboard-key glyph.
+struct KeyCap: View {
+    let key: String
+    init(_ key: String) { self.key = key }
+    var body: some View {
+        Text(key).font(.system(size: 10, weight: .medium, design: .rounded))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -514,7 +620,7 @@ struct TraceStepBanner: View {
     var body: some View {
         let step = trace.steps[index]
         HStack(alignment: .top, spacing: 8) {
-            Text("\(index + 1)/\(trace.steps.count)").font(.caption.monospaced().weight(.semibold))
+            Text(verbatim: "\(index + 1)/\(trace.steps.count)").font(.caption.monospaced().weight(.semibold))
                 .padding(.horizontal, 6).padding(.vertical, 2).background(Color.purple.opacity(0.15), in: Capsule())
             VStack(alignment: .leading, spacing: 2) {
                 HStack {

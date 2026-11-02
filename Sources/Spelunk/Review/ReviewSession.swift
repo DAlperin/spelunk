@@ -52,6 +52,38 @@ final class ReviewSession {
     var triageState: String?
     var triaging = false
     var overviewIsStale = false
+    /// Short jj change id of the reviewed revision, when it is one.
+    var changeID: String?
+
+    var addedCount: Int { files.reduce(0) { $0 + $1.addedCount } }
+    var removedCount: Int { files.reduce(0) { $0 + $1.removedCount } }
+
+    /// Short name for menus: the PR number, the change id, or the range.
+    var shortLabel: String {
+        switch target {
+        case .githubPR(let n): "PR #" + String(n)
+        case .jj: tracksWorkingCopy ? "Working copy" : (changeID ?? target.label)
+        case .git(_, let h): tracksWorkingCopy ? "Working copy" : (h.map { String($0.prefix(8)) } ?? "uncommitted")
+        }
+    }
+
+    func markViewed(_ hs: [Hunk]) {
+        for h in hs { viewed.insert(h.contentKey) }
+        save()
+    }
+
+    /// One line describing a hunk: Claude's summary when there is one, else the rule reasons.
+    func summary(of h: Hunk) -> String {
+        if let s = triage(of: h)?.summary, !s.isEmpty { return s }
+        return reasons(of: h).joined(separator: " · ")
+    }
+
+    /// `file.rs:123`, the hunk's first changed line in the version it is reviewed in.
+    func location(of h: Hunk) -> String {
+        guard let f = file(for: h) else { return h.path.lastPathComponent }
+        let line = f.status == .deleted ? h.anchorOldLine : h.anchorNewLine
+        return f.path.lastPathComponent + ":" + String(line + 1)
+    }
     /// Problems in the review rule files, shown above the change list.
     var ruleErrors: [String] { ReviewRules.shared.rules(for: root).errors }
     var lastLoaded: Date?
@@ -199,6 +231,8 @@ final class ReviewSession {
             title = lines.first.map(String.init) ?? target.label
             if title.isEmpty { title = "(no description)" }
             body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            changeID = (try? await Shell.output("jj", ["log", "--no-graph", "-r", to, "-T", "change_id.short(8)"], cwd: root))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return try await Shell.output("jj", ["diff", "--git", "--context", "3", "--from", from, "--to", to], cwd: root)
         case .git(let base, let head):
             vcs = .git

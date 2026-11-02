@@ -148,7 +148,7 @@ struct SettingsView: View {
         Form {
             Section("rust-analyzer") {
                 TextField("Path (empty = auto-detect)", text: $raPath)
-                Text("Detected: \(detected)").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "Detected: \(detected)").font(.caption).foregroundStyle(.secondary)
                     .task { detected = await RustAnalyzer.resolveBinary() ?? "none" }
                 Toggle("Start automatically for Cargo workspaces", isOn: $autoStart)
             }

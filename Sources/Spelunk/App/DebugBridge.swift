@@ -81,6 +81,20 @@ final class DebugBridge {
                 for c in v.subviews { walk(c, depth + 1) }
             }
             walk(root, 0)
+        case "mode": ws.setDiffMode(DiffMode(rawValue: arg.capitalized) ?? .inline)
+        case "key":
+            // key <chars>, posted through the event queue so local monitors see it.
+            guard let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }) else { break }
+            w.makeKeyAndOrderFront(nil)
+            w.makeFirstResponder(w.contentView?.firstSubview(ofType: SourceTextView.self))
+            for ch in arg {
+                let shift = ch.isUppercase
+                if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.shift] : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: w.windowNumber, context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch),
+                                            isARepeat: false, keyCode: 0) {
+                    NSApp.postEvent(e, atStart: false)
+                }
+            }
         case "clickat":
             // clickat <x> <y> in points from the window's top-left; goes through normal event dispatch.
             let n = arg.split(separator: " ").compactMap { Double($0) }
@@ -134,7 +148,7 @@ final class DebugBridge {
         }
         if let t = ws.traces.active { s += "trace '\(t.title)' steps=\(t.steps.map { "\($0.title)[\($0.edge.rawValue)]@\($0.location.shortDescription)\($0.verified ? "" : "?")" })\n" }
         if let r = ws.review {
-            s += "review \(r.title) state=\(r.state) files=\(r.files.count) hunks=\(r.allHunks.count)\n"
+            s += "review \(r.title) state=\(r.state) files=\(r.files.count) hunks=\(r.allHunks.count) viewed=\(r.progress.viewed)/\(r.progress.total) selected=\(ws.selectedHunkID ?? "-")\n"
             for t in ChangeTier.allCases {
                 let hs = r.hunks(in: t)
                 if hs.isEmpty { continue }
@@ -197,5 +211,13 @@ final class DebugBridge {
             try? data.write(to: URL(fileURLWithPath: path))
             Log.debug("snapshot(cg) \(path) \(final.width)x\(final.height)")
         }
+    }
+}
+
+extension NSView {
+    func firstSubview<T: NSView>(ofType t: T.Type) -> T? {
+        if let v = self as? T { return v }
+        for c in subviews { if let v = c.firstSubview(ofType: t) { return v } }
+        return nil
     }
 }

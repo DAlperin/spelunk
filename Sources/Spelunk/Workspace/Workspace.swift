@@ -3,11 +3,20 @@ import Foundation
 import Observation
 
 enum SidebarTab: String, CaseIterable, Identifiable {
-    case changes = "Changes", files = "Files", search = "Search", scm = "Source"
+    case changes = "Review", files = "Files", search = "Search", scm = "History"
     var id: String { rawValue }
 }
 
 enum ReviewSide: String, CaseIterable { case before = "Before", after = "After" }
+
+/// How a review shows a file: the new version with removed lines inline, both versions side by
+/// side, or either version alone.
+enum DiffMode: String, CaseIterable, Identifiable {
+    case inline = "Inline", split = "Split", after = "After", before = "Before"
+    var id: String { rawValue }
+    /// The modes offered in the toolbar; Before stays reachable from menus and the palette.
+    static let toolbar: [DiffMode] = [.inline, .split, .after]
+}
 
 /// What the context pane is about: the symbol under the cursor.
 @MainActor @Observable
@@ -91,7 +100,12 @@ final class Workspace {
             if newValue == nil, let k = activeReviewKey { closeReview(k) }
         }
     }
-    var reviewSide: ReviewSide = .after
+    var diffMode: DiffMode = DiffMode(rawValue: UserDefaults.standard.string(forKey: "editor.diffMode") ?? "") ?? .inline {
+        didSet { UserDefaults.standard.set(diffMode.rawValue, forKey: "editor.diffMode") }
+    }
+    var reviewSide: ReviewSide { diffMode == .before ? .before : .after }
+    /// The old side of the selected file, for the split view's left pane.
+    var splitDocument: SourceDocument?
     var selectedHunkID: String?
 
     var askEntries: [AskEntry] = []
@@ -475,18 +489,98 @@ final class Workspace {
             } else if let doc = await r.document(side == .old ? f.oldPath : f.newPath, side: side) {
                 show(doc, line: line)
             }
+            if diffMode == .split, f.status != .added, let old = await r.document(f.oldPath, side: .old) {
+                splitDocument = old
+                splitRevealLine = h.anchorOldLine
+                splitRevealRequest += 1
+            } else {
+                splitDocument = nil
+            }
         }
     }
 
+    /// Set by the split view's old-side pane; the main editor calls it with its top visible line.
+    @ObservationIgnored var splitScroller: ((Int) -> Void)?
+    /// Index into the PR's threads (sorted by file and line) for N / P navigation.
+    var currentThreadID: String?
+
+    var sortedThreads: [GitHubService.ReviewThread] {
+        (review?.pullRequest?.threads ?? []).sorted { a, b in
+            if a.isResolved != b.isResolved { return !a.isResolved }
+            return a.path == b.path ? (a.anchorLine ?? 0) < (b.anchorLine ?? 0) : a.path < b.path
+        }
+    }
+
+    func moveThread(_ d: Int) {
+        let ts = sortedThreads
+        guard !ts.isEmpty else { return }
+        let i = ts.firstIndex { $0.id == currentThreadID } ?? (d > 0 ? -1 : ts.count)
+        let t = ts[(i + d + ts.count) % ts.count]
+        showThread(t)
+    }
+
+    func showThread(_ t: GitHubService.ReviewThread) {
+        currentThreadID = t.id
+        guard let r = review, let line = t.anchorLine else { return }
+        let side: ReviewSession.Side = t.side == "LEFT" ? .old : .new
+        if let h = r.allHunks.first(where: { r.threads(for: $0).contains { $0.id == t.id } }) { selectedHunkID = h.id }
+        Task {
+            if side == .old {
+                if diffMode != .before { diffMode = .before }
+                if let doc = await r.document(t.path, side: .old) { show(doc, line: line - 1) }
+            } else if r.afterIsWorkingCopy {
+                if diffMode == .before { diffMode = .inline }
+                open(CodeLocation(path: t.path, range: SourceRange(line: line - 1)))
+            } else if let doc = await r.document(t.path, side: .new) {
+                if diffMode == .before { diffMode = .inline }
+                show(doc, line: line - 1)
+            }
+        }
+    }
+
+    func resolveCurrentThread() {
+        guard let id = currentThreadID, let r = review, let t = r.pullRequest?.threads.first(where: { $0.id == id }) else { return }
+        Task {
+            do { try await github.setResolved(threadId: id, !t.isResolved) } catch { statusMessage = error.localizedDescription }
+            await r.refreshPullRequest()
+        }
+    }
+
+    var splitRevealLine = 0
+    var splitRevealRequest = 0
+
+    /// Old-file line corresponding to a new-file line, through the review's hunks; used to keep the
+    /// split view's panes aligned while scrolling.
+    func oldLine(forNew line: Int, path: String) -> Int {
+        guard let f = review?.files.first(where: { $0.newPath == path }) else { return line }
+        var delta = 0
+        for h in f.hunks {
+            if line < h.newStart - 1 { break }
+            if line < h.newStart - 1 + h.newCount {
+                // Inside a hunk: use the nearest context line's old number.
+                if let l = h.lines.last(where: { ($0.newLine ?? Int.max) <= line && $0.oldLine != nil }), let o = l.oldLine {
+                    return o + (l.newLine.map { line - $0 } ?? 0)
+                }
+                return h.oldStart - 1
+            }
+            delta = (h.oldStart + h.oldCount) - (h.newStart + h.newCount)
+        }
+        return max(0, line + delta)
+    }
+
+    func setDiffMode(_ mode: DiffMode) {
+        let sideChanged = (mode == .before) != (diffMode == .before)
+        diffMode = mode
+        if sideChanged || mode == .split, let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
+    }
+
     func setReviewSide(_ side: ReviewSide) {
-        reviewSide = side
+        if side == .before { diffMode = .before } else if diffMode == .before { diffMode = .inline }
         if let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
     }
 
     /// Show the other side's lines inline (removed lines in the After view, added lines in Before).
-    var inlineDiff = UserDefaults.standard.object(forKey: "editor.inlineDiff") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(inlineDiff, forKey: "editor.inlineDiff") }
-    }
+    var inlineDiff: Bool { diffMode == .inline }
 
     /// Lines from the other side of the diff to show inline, keyed by the real line they precede.
     func phantomLines(for doc: SourceDocument) -> [Int: [PhantomLine]] {

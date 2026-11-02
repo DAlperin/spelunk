@@ -66,7 +66,7 @@ struct FileTreeView: View {
             }
             Divider()
             HStack {
-                Text("\(ws.visibleFileCount) of \(ws.allFiles.count) files · \(ws.sourceOnly ? "Source only" : "All") · \(ws.showTests ? "Tests shown" : "Tests hidden")")
+                Text(verbatim: "\(ws.visibleFileCount) of \(ws.allFiles.count) files · \(ws.sourceOnly ? "Source only" : "All") · \(ws.showTests ? "Tests shown" : "Tests hidden")")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer()
                 Menu {
@@ -261,7 +261,7 @@ struct SearchView: View {
                         ForEach(grouped[path]!) { m in
                             Button { ws.open(m.location, edge: .manual) } label: {
                                 HStack(alignment: .firstTextBaseline) {
-                                    Text("\(m.line + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
+                                    Text(verbatim: "\(m.line + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
                                     Text(m.text.trimmingCharacters(in: .whitespaces)).font(.system(size: 11, design: .monospaced)).lineLimit(1)
                                 }
                             }.buttonStyle(.plain)
@@ -272,7 +272,7 @@ struct SearchView: View {
                 }
             }
             .listStyle(.sidebar)
-            Text("\(results.count) matches").font(.caption).foregroundStyle(.secondary).padding(.bottom, 6)
+            Text(verbatim: "\(results.count) matches").font(.caption).foregroundStyle(.secondary).padding(.bottom, 6)
         }
     }
 

@@ -14,7 +14,7 @@ struct PullRequestHeader: View {
                 Text(pr.isDraft ? "Draft" : pr.state.capitalized).font(.caption2.weight(.semibold))
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background((pr.state == "OPEN" ? Color.green : Color.purple).opacity(0.18), in: Capsule())
-                Text("\(pr.author) · \(pr.headRef) → \(pr.baseRef)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(verbatim: "\(pr.author) · \(pr.headRef) → \(pr.baseRef)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button { if let u = URL(string: pr.url) { NSWorkspace.shared.open(u) } } label: { Image(systemName: "safari") }
                     .buttonStyle(.borderless).help("Open on GitHub")
@@ -98,7 +98,7 @@ struct HunkConversation: View {
                     HStack(alignment: .top) {
                         Image(systemName: "pencil.circle").foregroundStyle(.blue)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Pending · \(c.side == "LEFT" ? "old" : "new") line \(c.line)").font(.caption2).foregroundStyle(.secondary)
+                            Text(verbatim: "Pending · \(c.side == "LEFT" ? "old" : "new") line \(c.line)").font(.caption2).foregroundStyle(.secondary)
                             Text(c.body).font(.caption).textSelection(.enabled)
                         }
                         Spacer()
@@ -114,7 +114,7 @@ struct HunkConversation: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: t.isResolved ? "checkmark.bubble" : "bubble.left").foregroundStyle(t.isResolved ? Color.secondary : Color.orange)
-                Text("\(t.side == "LEFT" ? "old" : "new") line \(t.anchorLine ?? 0)\(t.isOutdated ? " · outdated" : "")").font(.caption2).foregroundStyle(.secondary)
+                Text(verbatim: "\(t.side == "LEFT" ? "old" : "new") line \(t.anchorLine ?? 0)\(t.isOutdated ? " · outdated" : "")").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 if busy == t.id { ProgressView().controlSize(.mini) }
                 Button(t.isResolved ? "Unresolve" : "Resolve") { act(t.id) { try await ws.github.setResolved(threadId: t.id, !t.isResolved) } }
@@ -175,7 +175,7 @@ struct CommentSheet: View {
         let commentable = ws.review?.isCommentable(path: draft.path, line: draft.line, side: draft.side) ?? false
         VStack(alignment: .leading, spacing: 10) {
             Text("Review comment").font(.headline)
-            Text("\(draft.path):\(draft.line) · \(draft.side == "LEFT" ? "old version" : "new version")")
+            Text(verbatim: "\(draft.path):\(draft.line) · \(draft.side == "LEFT" ? "old version" : "new version")")
                 .font(.caption.monospaced()).foregroundStyle(.secondary)
             if !commentable {
                 Label("This line is outside the diff; GitHub only accepts comments on changed hunks and their context.", systemImage: "exclamationmark.triangle")
@@ -216,21 +216,21 @@ struct SubmitReviewSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Submit review").font(.headline)
             if let pr = review.pullRequest {
-                Text("#\(pr.number) \(pr.title)").font(.callout).lineLimit(2)
-                Text("Posting as \(ws.github.login ?? "your gh account") at \(String(pr.headSha.prefix(10)))").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "#\(pr.number) \(pr.title)").font(.callout).lineLimit(2)
+                Text(verbatim: "Posting as \(ws.github.login ?? "your gh account") at \(String(pr.headSha.prefix(10)))").font(.caption).foregroundStyle(.secondary)
             }
             Picker("", selection: $event) {
                 ForEach(GitHubService.ReviewEvent.allCases) { Text($0.label).tag($0) }
             }.pickerStyle(.segmented).labelsHidden()
             TextEditor(text: $body_).frame(minHeight: 90)
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.3)))
-            Text("\(review.pendingComments.count) line comments").font(.caption.weight(.semibold))
+            Text(verbatim: "\(review.pendingComments.count) line comments").font(.caption.weight(.semibold))
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(review.pendingComments) { c in
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("\(c.path):\(c.line) \(c.side == "LEFT" ? "(old)" : "")").font(.caption.monospaced()).foregroundStyle(.secondary)
+                                Text(verbatim: "\(c.path):\(c.line) \(c.side == "LEFT" ? "(old)" : "")").font(.caption.monospaced()).foregroundStyle(.secondary)
                                 Text(c.body).font(.caption)
                             }
                             Spacer()
@@ -253,7 +253,7 @@ struct SubmitReviewSheet: View {
             Button("Post \(event.label)") { post() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\(event.label) with \(review.pendingComments.count) line comments will be visible on the pull request.")
+            Text(verbatim: "\(event.label) with \(review.pendingComments.count) line comments will be visible on the pull request.")
         }
     }
 

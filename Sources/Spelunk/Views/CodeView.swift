@@ -5,8 +5,11 @@ import SwiftUI
 struct CodeView: NSViewRepresentable {
     let ws: Workspace
     let document: SourceDocument
+    /// The split view's old-side pane: shows `document` as given, follows the main editor's scrolling,
+    /// and does not drive navigation.
+    var secondary = false
 
-    func makeCoordinator() -> Coordinator { Coordinator(ws: ws) }
+    func makeCoordinator() -> Coordinator { Coordinator(ws: ws, secondary: secondary) }
 
     /// Fill whatever space is offered; the Auto Layout fitting size of the scroll view tracks its document.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
@@ -71,6 +74,7 @@ struct CodeView: NSViewRepresentable {
         NotificationCenter.default.addObserver(gutter, selector: #selector(GutterView.redraw), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         context.coordinator.textView = tv
         context.coordinator.gutter = gutter
+        context.coordinator.observeScrolling(scroll.contentView)
         return host
     }
 
@@ -79,9 +83,9 @@ struct CodeView: NSViewRepresentable {
         c.ws = ws
         // Read the document from the workspace: SwiftUI may call this with a stale struct when only
         // workspace state (such as the reveal counter) changed.
-        let document = ws.document ?? self.document
+        let document = secondary ? self.document : (ws.document ?? self.document)
         guard let tv = c.textView else { return }
-        let phantoms = ws.phantomLines(for: document)
+        let phantoms = secondary ? [:] : ws.phantomLines(for: document)
         let display = DisplayDoc(doc: document, phantoms: phantoms)
         if c.documentID != document.id {
             c.documentID = document.id
@@ -94,14 +98,22 @@ struct CodeView: NSViewRepresentable {
             c.load(display, into: tv, keepScroll: true)
         }
         c.diffMarkers = ws.diffMarkers(for: document)
-        c.diagnostics = document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
-        c.traceLines = Set((ws.traces.active?.steps ?? []).filter { $0.location.path == document.path }.map(\.location.line))
-        c.bookmarkedLines = Set(ws.bookmarks.items.filter { $0.location.path == document.path }.map(\.location.line))
-        c.commentLines = ws.commentLines(for: document)
-        c.applyBackgrounds(selection: ws.selection, highlights: ws.highlightRanges)
-        if c.revealToken != ws.revealRequest {
-            c.revealToken = ws.revealRequest
-            if let sel = ws.selection { c.reveal(sel) }
+        c.diagnostics = !secondary && document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
+        c.traceLines = secondary ? [] : Set((ws.traces.active?.steps ?? []).filter { $0.location.path == document.path }.map(\.location.line))
+        c.bookmarkedLines = secondary ? [] : Set(ws.bookmarks.items.filter { $0.location.path == document.path }.map(\.location.line))
+        c.commentLines = secondary ? [:] : ws.commentLines(for: document)
+        if secondary {
+            c.applyBackgrounds(selection: nil, highlights: [])
+            if c.revealToken != ws.splitRevealRequest {
+                c.revealToken = ws.splitRevealRequest
+                c.reveal(SourceRange(line: ws.splitRevealLine))
+            }
+        } else {
+            c.applyBackgrounds(selection: ws.selection, highlights: ws.highlightRanges)
+            if c.revealToken != ws.revealRequest {
+                c.revealToken = ws.revealRequest
+                if let sel = ws.selection { c.reveal(sel) }
+            }
         }
         c.gutter?.needsDisplay = true
     }
@@ -123,7 +135,52 @@ struct CodeView: NSViewRepresentable {
         var commentLines: [Int: Bool] = [:]
         private var lastBackgroundKey = ""
 
-        init(ws: Workspace) { self.ws = ws }
+        let secondary: Bool
+        private var syncing = false
+
+        init(ws: Workspace, secondary: Bool) {
+            self.ws = ws
+            self.secondary = secondary
+        }
+
+        /// Split view: the main pane reports its top line; the old-side pane scrolls to match.
+        func observeScrolling(_ clip: NSClipView) {
+            if secondary {
+                ws.splitScroller = { [weak self] oldLine in self?.scrollTop(toRealLine: oldLine) }
+                return
+            }
+            NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reportTopLine() }
+            }
+        }
+
+        private func reportTopLine() {
+            guard !syncing, ws.diffMode == .split, let scroller = ws.splitScroller, let tv = textView, let lm = tv.layoutManager,
+                  let tc = tv.textContainer, let display, let doc = document else { return }
+            let visible = tv.visibleRect
+            let g = lm.glyphIndex(for: NSPoint(x: 0, y: visible.minY + 4), in: tc)
+            let idx = lm.characterIndexForGlyph(at: g)
+            let dline = display.lines.position(of: min(idx, display.ns.length)).line
+            let real: Int
+            switch display.entry(dline) {
+            case .real(let l): real = l
+            default: real = (display.realPos(SourcePos(line: dline + 1, col: 0))?.line) ?? 0
+            }
+            scroller(ws.oldLine(forNew: real, path: doc.path))
+        }
+
+        func scrollTop(toRealLine line: Int) {
+            guard let tv = textView, let lm = tv.layoutManager, let display, let clip = tv.enclosingScrollView?.contentView,
+                  display.ns.length > 0 else { return }
+            let off = display.lines.offset(of: SourcePos(line: display.displayLine(line), col: 0))
+            let g = lm.glyphIndexForCharacter(at: min(off, display.ns.length - 1))
+            let rect = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+            syncing = true
+            clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: max(0, rect.minY + tv.textContainerInset.height - 4)))
+            tv.enclosingScrollView?.reflectScrolledClipView(clip)
+            syncing = false
+            gutter?.needsDisplay = true
+        }
 
         func load(_ display: DisplayDoc, into tv: NSTextView, keepScroll: Bool) {
             let doc = display.doc
@@ -240,10 +297,12 @@ struct CodeView: NSViewRepresentable {
         }
 
         func click(at p: SourcePos, command: Bool) {
+            guard !secondary else { return }
             if command { ws.goToDefinition(at: p) } else { ws.didClick(at: p) }
         }
 
         func menu(at p: SourcePos) -> NSMenu {
+            guard !secondary else { return NSMenu() }
             ws.didClick(at: p)
             let m = NSMenu()
             let word = document?.word(at: p)?.0

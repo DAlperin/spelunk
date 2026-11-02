@@ -121,7 +121,7 @@ struct ChangeGraphView: View {
                     if wc.hasConflict { Text("conflict").font(.caption2).foregroundStyle(.red) }
                 }
                 Spacer()
-                Text("\(scm.workingCopyFiles.count) files").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "\(scm.workingCopyFiles.count) files").font(.caption).foregroundStyle(.secondary)
             }
             TextField("Describe the working copy", text: $scm.descriptionDraft, axis: .vertical)
                 .textFieldStyle(.roundedBorder).font(.callout)
@@ -142,7 +142,7 @@ struct ChangeGraphView: View {
                         FileStatusRow(file: f) { ws.open(CodeLocation(path: f.path, range: SourceRange(line: 0))) }
                     }
                     if scm.workingCopyFiles.count > 40 {
-                        Text("+\(scm.workingCopyFiles.count - 40) more").font(.caption2).foregroundStyle(.secondary)
+                        Text(verbatim: "+\(scm.workingCopyFiles.count - 40) more").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -318,14 +318,14 @@ struct PRRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text("#\(pr.number)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(verbatim: "#\(pr.number)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 if pr.isDraft { Text("draft").font(.system(size: 9)).foregroundStyle(.secondary) }
                 Spacer()
                 let c = pr.checkSummary
                 if c.failed > 0 { Label("\(c.failed)", systemImage: "xmark.circle.fill").font(.caption2).foregroundStyle(.red) }
                 else if c.pending > 0 { Label("\(c.pending)", systemImage: "clock").font(.caption2).foregroundStyle(.orange) }
                 else if c.passed > 0 { Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green) }
-                Text("+\(pr.additions) −\(pr.deletions)").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                Text(verbatim: "+\(pr.additions) −\(pr.deletions)").font(.caption2.monospaced()).foregroundStyle(.secondary)
             }
             Text(pr.title).font(.callout).lineLimit(2)
             HStack(spacing: 4) {

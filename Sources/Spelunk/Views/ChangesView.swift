@@ -1,63 +1,16 @@
 import SwiftUI
 
 /// The working-copy review plus any pinned reviews, as tabs.
+/// The active review (working copy or a pinned one, chosen from the toolbar).
 struct ReviewTabsView: View {
     @Bindable var ws: Workspace
-    @State private var showPicker = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    chip(title: "Working copy", subtitle: ws.workingReview.map { workingSubtitle($0) }, icon: "pencil.and.outline",
-                         active: ws.activeReviewKey == nil, closable: false) { ws.showWorkingReview() }
-                    ForEach(ws.pinnedReviews, id: \.target.key) { r in
-                        chip(title: r.target.label, subtitle: nil, icon: r.pullRequest != nil || { if case .githubPR = r.target { return true }; return false }() ? "arrow.triangle.pull" : "square.stack",
-                             active: ws.activeReviewKey == r.target.key, closable: true) {
-                            ws.activeReviewKey = r.target.key
-                        } onClose: {
-                            ws.closeReview(r.target.key)
-                        }
-                    }
-                    Button { showPicker = true } label: { Image(systemName: "plus") }
-                        .buttonStyle(.borderless).help("Compare something else: a PR, a range, a change")
-                        .popover(isPresented: $showPicker) { ReviewPicker(ws: ws, dismiss: { showPicker = false }) }
-                }
-                .padding(.horizontal, 8)
-            }
-            .padding(.bottom, 6)
-            if let r = ws.review {
-                ChangesView(ws: ws, review: r).id(r.target.key)
-            } else {
-                NoReviewView(ws: ws)
-            }
+        if let r = ws.review {
+            ChangesView(ws: ws, review: r).id(r.target.key)
+        } else {
+            NoReviewView(ws: ws)
         }
-    }
-
-    private func workingSubtitle(_ r: ReviewSession) -> String {
-        switch r.target {
-        case .jj(_, let to): to == "@" ? "@" : "@- (@ is empty)"
-        case .git(_, let head): head == nil ? "uncommitted" : "last commit"
-        case .githubPR: ""
-        }
-    }
-
-    @ViewBuilder
-    private func chip(title: String, subtitle: String?, icon: String, active: Bool, closable: Bool,
-                      select: @escaping () -> Void, onClose: @escaping () -> Void = {}) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.caption2)
-            Text(title).font(.caption.weight(active ? .semibold : .regular)).lineLimit(1)
-            if let subtitle, !subtitle.isEmpty { Text(subtitle).font(.caption2).foregroundStyle(.secondary) }
-            if closable {
-                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Close this review")
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(active ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.1), in: Capsule())
-        .contentShape(Capsule())
-        .onTapGesture(perform: select)
     }
 }
 
@@ -93,7 +46,8 @@ struct CheckoutMenu: View {
 struct ChangesView: View {
     @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
-    @State private var showOverview = true
+    @State private var lowSignalOpen = false
+    @State private var descriptionOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,157 +61,153 @@ struct ChangesView: View {
             default:
                 if review.files.isEmpty {
                     ContentUnavailableView("No changes", systemImage: "checkmark.circle")
+                } else if review.groupByTier {
+                    tierList
                 } else {
-                    list
+                    fileList
                 }
             }
         }
     }
+
+    // MARK: Header
 
     var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(review.title).font(.headline).lineLimit(2)
             if let pr = review.pullRequest {
-                PullRequestHeader(ws: ws, review: review, pr: pr)
-            } else if let e = review.githubError {
-                Text(e).font(.caption).foregroundStyle(.red).lineLimit(3)
+                prHeader(pr)
+            } else {
+                HStack(spacing: 6) {
+                    if let id = review.changeID {
+                        Text(verbatim: (review.tracksWorkingCopy ? "@ " : "") + id).font(.caption.monospaced()).foregroundStyle(.purple)
+                    }
+                    Text(verbatim: "· \(review.files.count) files · +\(review.addedCount) −\(review.removedCount)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if review.tracksWorkingCopy {
+                        HStack(spacing: 3) { Circle().fill(.green).frame(width: 6, height: 6); Text("live") }
+                            .font(.caption).foregroundStyle(.secondary).help("Refreshes as files change on disk")
+                    } else {
+                        CheckoutMenu(ws: ws, review: review).controlSize(.small)
+                    }
+                }
+                Text(review.title).font(.headline).lineLimit(3)
+                if let e = review.githubError { Text(e).font(.caption).foregroundStyle(.red).lineLimit(2) }
             }
+            ImportanceBar(review: review)
             HStack(spacing: 8) {
                 let p = review.progress
-                ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(width: 80)
-                Text("\(p.viewed)/\(p.total) important hunks viewed").font(.caption).foregroundStyle(.secondary)
-            }
-            ViewThatFits(in: .horizontal) {
-                tierChips
-                ScrollView(.horizontal, showsIndicators: false) { tierChips }
-            }
-            if !review.tracksWorkingCopy {
-                HStack {
-                    CheckoutMenu(ws: ws, review: review)
-                    Spacer()
+                ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(width: 70)
+                Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                if let pr = review.pullRequest {
+                    let open = pr.threads.filter { !$0.isResolved }.count
+                    if open > 0 {
+                        Text(verbatim: "· ● \(open) unresolved").font(.caption).foregroundStyle(.orange)
+                    }
                 }
-                .controlSize(.small)
+                Spacer()
+                TriageMenu(ws: ws, review: review)
             }
-            HStack {
-                Button {
-                    Task { await review.triageWithClaude() }
-                } label: {
-                    Label(review.llm.isEmpty ? "Triage with Claude" : "Re-triage", systemImage: "sparkles")
-                }
-                .disabled(review.triaging || review.state != .ready)
-                ModelMenu(task: .triage)
-                Picker("", selection: $review.groupByTier) {
-                    Text("By importance").tag(true)
-                    Text("By file").tag(false)
-                }.labelsHidden().frame(width: 120)
-            }
-            .controlSize(.small)
             if !review.ruleErrors.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(review.ruleErrors.prefix(4), id: \.self) { Text($0).font(.caption2.monospaced()).foregroundStyle(.red) }
-                }
-                .onTapGesture { RulesFiles.openUserRules() }
-                .help("Errors in review rules; those lines are skipped")
+                Label("\(review.ruleErrors.count) rule errors", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+                    .onTapGesture { RulesFiles.openUserRules() }
+                    .help(review.ruleErrors.joined(separator: "\n"))
             }
-            if let s = review.classifyState {
+            if review.triaging || review.classifyState?.hasPrefix("Classifying") == true {
                 HStack(spacing: 4) {
-                    Image(systemName: "sparkle").font(.caption2)
-                    Text(s).font(.caption).lineLimit(1)
-                    Spacer()
-                    ModelMenu(task: .classify)
+                    ProgressView().controlSize(.mini)
+                    Text(review.triaging ? (review.triageState ?? "Triaging") : (review.classifyState ?? "")).lineLimit(1)
                 }
-                .foregroundStyle(.secondary)
-            }
-            if let s = review.triageState {
-                Text(s).font(.caption).foregroundStyle(.purple).lineLimit(2)
-            }
-            if let o = review.overview {
-                DisclosureGroup(review.overviewIsStale ? "Overview (written before the latest edits)" : "Overview", isExpanded: $showOverview) {
-                    ScrollView { Text(o).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                        .frame(maxHeight: 140)
-                }.font(.caption.weight(.semibold))
-            } else if !review.body.isEmpty {
-                DisclosureGroup("Description", isExpanded: $showOverview) {
-                    ScrollView { Text(review.body).font(.caption).textSelection(.enabled) }.frame(maxHeight: 120)
-                }.font(.caption.weight(.semibold))
+                .font(.caption).foregroundStyle(.purple)
             }
         }
-        .padding(.horizontal, 10).padding(.bottom, 8)
+        .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 8)
     }
 
-    var tierChips: some View {
+    @ViewBuilder func prHeader(_ pr: GitHubService.PullRequestDetails) -> some View {
+        HStack(spacing: 6) {
+            Text(verbatim: "#" + String(pr.number)).font(.callout.monospaced().weight(.semibold))
+            Text(pr.isDraft ? "Draft" : pr.state.capitalized).font(.caption2.weight(.semibold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background((pr.state == "OPEN" ? Color.green : Color.purple).opacity(0.18), in: Capsule())
+            ChecksSummary(checks: pr.checks)
+            Spacer()
+            CheckoutMenu(ws: ws, review: review).controlSize(.small)
+        }
+        Text(pr.title).font(.headline).lineLimit(3)
         HStack(spacing: 4) {
-            ForEach(ChangeTier.allCases) { t in
-                    let n = review.allHunks.filter { review.tier(of: $0) == t }.count
-                    Button {
-                        if review.hideTiers.contains(t) { review.hideTiers.remove(t) } else { review.hideTiers.insert(t) }
-                    } label: {
-                        Text("\(t.shortTitle) \(n)").font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(review.hideTiers.contains(t) ? Color.clear : t.color.opacity(0.18), in: Capsule())
-                            .overlay(Capsule().strokeBorder(t.color.opacity(0.4)))
-                            .foregroundStyle(review.hideTiers.contains(t) ? .secondary : t.color)
-                    }
-                    .buttonStyle(.plain)
-                    .help(review.hideTiers.contains(t) ? "Show \(t.title.lowercased())" : "Hide \(t.title.lowercased())")
+            Text(verbatim: "\(pr.author) → \(pr.baseRef)")
+            if let d = pr.reviewDecision {
+                Text("·")
+                Text(d == "REVIEW_REQUIRED" ? "review required" : d.replacingOccurrences(of: "_", with: " ").lowercased())
+                    .foregroundStyle(d == "APPROVED" ? .green : d == "CHANGES_REQUESTED" ? .red : .secondary)
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        if !review.body.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(review.body).font(.caption).foregroundStyle(.secondary).lineLimit(descriptionOpen ? 30 : 2)
+                    .textSelection(.enabled)
+                Button(descriptionOpen ? "Less" : "More") { descriptionOpen.toggle() }.buttonStyle(.link).font(.caption)
             }
         }
     }
 
-    var list: some View {
-        List(selection: Binding(get: { ws.selectedHunkID }, set: { id in
+    // MARK: Lists
+
+    var selection: Binding<String?> {
+        Binding(get: { ws.selectedHunkID }, set: { id in
             if let id, let h = review.allHunks.first(where: { $0.id == id }) { ws.selectHunk(h) }
-        })) {
-            if review.groupByTier {
-                ForEach(ChangeTier.allCases) { tier in
-                    let hs = review.hunks(in: tier)
-                    if !hs.isEmpty {
-                        Section {
-                            if review.hideTiers.contains(tier) {
-                                Button {
-                                    review.hideTiers.remove(tier)
-                                } label: {
-                                    Label("Show \(hs.count) \(tier.shortTitle.lowercased()) hunks", systemImage: "chevron.down")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .selectionDisabled()
-                            } else {
-                                ForEach(hs) { h in HunkRow(review: review, hunk: h, showFile: true).tag(h.id) }
-                            }
-                        } header: {
-                            Button {
-                                if review.hideTiers.contains(tier) { review.hideTiers.remove(tier) } else { review.hideTiers.insert(tier) }
-                            } label: {
-                                HStack {
-                                    Image(systemName: review.hideTiers.contains(tier) ? "chevron.right" : "chevron.down").font(.caption2)
-                                    Circle().fill(tier.color).frame(width: 7, height: 7)
-                                    Text(tier.title)
-                                    Spacer()
-                                    Text("\(hs.count)").foregroundStyle(.secondary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help(review.hideTiers.contains(tier) ? "Show these hunks" : "Collapse these hunks")
+        })
+    }
+
+    var tierList: some View {
+        List(selection: selection) {
+            ForEach(ChangeTier.important) { tier in
+                let hs = review.hunks(in: tier)
+                if !hs.isEmpty {
+                    Section {
+                        ForEach(hs) { h in ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id).tag(h.id) }
+                    } header: {
+                        HStack(spacing: 5) {
+                            Image(systemName: tier.glyph).font(.system(size: 8)).foregroundStyle(tier.color)
+                            Text(tier.title).foregroundStyle(tier.color)
+                            Spacer()
+                            Text(verbatim: "\(hs.filter(review.isViewed).count)/\(hs.count)").foregroundStyle(.secondary)
                         }
                     }
                 }
-            } else {
-                ForEach(review.files.sorted { review.fileTier($0) < review.fileTier($1) }) { f in
-                    Section {
-                        ForEach(f.hunks.filter { !review.hideTiers.contains(review.tier(of: $0)) }) { h in
-                            HunkRow(review: review, hunk: h, showFile: false).tag(h.id)
+            }
+            let low = ChangeTier.lowSignal.flatMap { review.hunks(in: $0) }
+            if !low.isEmpty {
+                Section {
+                    LowSignalBox(review: review, hunks: low, open: $lowSignalOpen)
+                        .selectionDisabled()
+                    if lowSignalOpen {
+                        ForEach(ChangeTier.lowSignal) { tier in
+                            ForEach(review.hunks(in: tier)) { h in LowSignalRow(review: review, hunk: h).tag(h.id) }
                         }
-                    } header: {
-                        HStack {
-                            Circle().fill(review.fileTier(f).color).frame(width: 7, height: 7)
-                            Text(f.path).lineLimit(1).truncationMode(.head)
-                            Spacer()
-                            Text(f.status == .modified ? "" : f.status.rawValue).foregroundStyle(.secondary)
-                            Text("+\(f.addedCount) −\(f.removedCount)").font(.caption2.monospaced()).foregroundStyle(.secondary)
-                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    var fileList: some View {
+        List(selection: selection) {
+            ForEach(review.files.sorted { review.fileTier($0) < review.fileTier($1) }) { f in
+                Section {
+                    ForEach(f.hunks) { h in
+                        if review.tier(of: h).isLowSignal { LowSignalRow(review: review, hunk: h).tag(h.id) }
+                        else { ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id).tag(h.id) }
+                    }
+                } header: {
+                    HStack {
+                        Image(systemName: review.fileTier(f).glyph).font(.system(size: 8)).foregroundStyle(review.fileTier(f).color)
+                        Text(f.path).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Text(verbatim: "+\(f.addedCount) −\(f.removedCount)").font(.caption2.monospaced()).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -266,41 +216,197 @@ struct ChangesView: View {
     }
 }
 
-struct HunkRow: View {
+/// One proportional bar for the tier mix, with a line of non-zero counts.
+struct ImportanceBar: View {
     let review: ReviewSession
-    let hunk: Hunk
-    let showFile: Bool
 
     var body: some View {
-        let a = review.analyses[hunk.id]
-        let viewed = review.isViewed(hunk)
-        VStack(alignment: .leading, spacing: 2) {
+        let counts = ChangeTier.important.map { ($0, review.hunks(in: $0).count) }
+        let low = ChangeTier.lowSignal.reduce(0) { $0 + review.hunks(in: $1).count }
+        let total = max(1, counts.reduce(0) { $0 + $1.1 } + low)
+        VStack(alignment: .leading, spacing: 3) {
+            GeometryReader { g in
+                HStack(spacing: 2) {
+                    ForEach(counts.filter { $0.1 > 0 }, id: \.0) { t, n in
+                        RoundedRectangle(cornerRadius: 2).fill(t.color).frame(width: max(4, g.size.width * CGFloat(n) / CGFloat(total)))
+                    }
+                    if low > 0 { RoundedRectangle(cornerRadius: 2).fill(Color.secondary.opacity(0.35)) }
+                }
+            }
+            .frame(height: 5)
             HStack(spacing: 4) {
-                Image(systemName: viewed ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(viewed ? .green : .secondary).font(.caption)
-                    .onTapGesture { review.toggleViewed(hunk) }
-                Text(a?.enclosing ?? hunk.path.lastPathComponent)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1)
-                Spacer()
-                let threads = review.threads(for: hunk)
-                if !threads.isEmpty {
-                    let open = threads.filter { !$0.isResolved }.count
-                    Label("\(threads.count)", systemImage: open > 0 ? "bubble.left.fill" : "bubble.left")
-                        .font(.caption2).foregroundStyle(open > 0 ? .orange : .secondary).labelStyle(.titleAndIcon)
+                ForEach(counts.filter { $0.1 > 0 }, id: \.0) { t, n in
+                    Text(verbatim: "\(n) \(t.title.lowercased())").foregroundStyle(t.color)
+                    Text("·").foregroundStyle(.tertiary)
                 }
-                if !review.pending(for: hunk).isEmpty { Image(systemName: "pencil.circle.fill").font(.caption2).foregroundStyle(.blue) }
-                if let t = review.triage(of: hunk) {
-                    Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption2).foregroundStyle(.purple)
-                        .help(t.isQuick ? "Classified by the quick pass" : "Triaged by Claude")
-                }
-                Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                Text(verbatim: "\(low) low-signal").foregroundStyle(.secondary)
             }
-            if showFile {
-                Text(hunk.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-            }
-            Text(review.reasons(of: hunk).joined(separator: " · ")).font(.caption).foregroundStyle(review.tier(of: hunk).color).lineLimit(2)
+            .font(.caption).lineLimit(1)
         }
-        .opacity(viewed ? 0.55 : 1)
-        .padding(.vertical, 2)
+    }
+}
+
+struct ChecksSummary: View {
+    let checks: [GitHubService.Check]
+    @State private var show = false
+    var body: some View {
+        let failed = checks.filter(\.isFailure).count, pending = checks.filter(\.isPending).count
+        Button { show.toggle() } label: {
+            HStack(spacing: 3) {
+                Circle().fill(failed > 0 ? Color.red : pending > 0 ? .orange : .green).frame(width: 6, height: 6)
+                Text(verbatim: failed > 0 ? "\(failed) failing" : pending > 0 ? "\(pending) pending" : "\(checks.count) checks")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $show) { ChecksList(checks: checks) }
+    }
+}
+
+/// Deep triage, quick classification and list options, in one menu.
+struct TriageMenu: View {
+    @Bindable var ws: Workspace
+    @Bindable var review: ReviewSession
+
+    var body: some View {
+        Menu {
+            Button(review.llm.values.contains { !$0.isQuick } ? "Re-run Deep Triage" : "Deep Triage with Claude") {
+                Task { await review.triageWithClaude() }
+            }
+            .disabled(review.triaging || review.state != .ready)
+            modelMenu("Deep triage model", .triage)
+            Divider()
+            Button("Classify New Hunks Now") { Task { await review.quickClassify() } }
+            modelMenu("Quick classification model", .classify)
+            if let s = review.classifyState { Text(s) }
+            if let s = review.triageState { Text(s) }
+            Divider()
+            Toggle("Group by File", isOn: Binding(get: { !review.groupByTier }, set: { review.groupByTier = !$0 }))
+            Button("Edit Review Rules…") { RulesFiles.openUserRules() }
+        } label: {
+            Label("Triage", systemImage: "sparkles")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .font(.caption)
+    }
+
+    func modelMenu(_ title: String, _ task: ClaudeTask) -> some View {
+        Menu(title + ": " + ClaudeModels.label(Claude.model(for: task))) {
+            ForEach(ClaudeModels.aliases, id: \.id) { m in
+                Button(m.label) { UserDefaults.standard.set(m.id, forKey: task.modelKey) }
+            }
+        }
+    }
+}
+
+struct ImportantHunkRow: View {
+    let review: ReviewSession
+    let hunk: Hunk
+    let selected: Bool
+
+    var body: some View {
+        let viewed = review.isViewed(hunk)
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: viewed ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(viewed ? .green : .secondary).font(.callout)
+                .onTapGesture { review.toggleViewed(hunk) }
+                .help("Mark viewed (V)")
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 2)
+                    badges
+                    Text(verbatim: sizeText).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                }
+                Text(review.summary(of: hunk)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(verbatim: review.location(of: hunk)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+            }
+        }
+        .opacity(viewed && !selected ? 0.55 : 1)
+        .padding(.vertical, 3)
+    }
+
+    var sizeText: String {
+        hunk.addedCount == 0 ? "−\(hunk.removedCount)" : hunk.removedCount == 0 ? "+\(hunk.addedCount)" : "+\(hunk.addedCount) −\(hunk.removedCount)"
+    }
+
+    @ViewBuilder var badges: some View {
+        let threads = review.threads(for: hunk)
+        if !threads.isEmpty {
+            let open = threads.filter { !$0.isResolved }.count
+            Label(String(threads.count), systemImage: "text.bubble").labelStyle(.titleAndIcon)
+                .font(.caption2).foregroundStyle(open > 0 ? .orange : .secondary)
+        }
+        if !review.pending(for: hunk).isEmpty { Image(systemName: "pencil.circle.fill").font(.caption2).foregroundStyle(.blue) }
+        if let t = review.triage(of: hunk) {
+            Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption2).foregroundStyle(.purple)
+                .help(t.isQuick ? "Classified by the quick pass" : "Triaged by Claude")
+        }
+    }
+}
+
+/// Docs, tests and mechanical hunks, acknowledged together.
+struct LowSignalBox: View {
+    let review: ReviewSession
+    let hunks: [Hunk]
+    @Binding var open: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Button { open.toggle() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption2)
+                        Image(systemName: "minus").font(.caption2).foregroundStyle(.secondary)
+                        Text("Low signal").fontWeight(.medium).fixedSize()
+                        Text(verbatim: "\(hunks.count)").font(.caption).foregroundStyle(.secondary).fixedSize()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                let unviewed = hunks.filter { !review.isViewed($0) }
+                Button("Mark viewed") { review.markViewed(hunks) }.controlSize(.mini).disabled(unviewed.isEmpty).fixedSize()
+            }
+            if !open {
+                ForEach(ChangeTier.lowSignal) { t in
+                    let hs = review.hunks(in: t)
+                    if !hs.isEmpty {
+                        Text(verbatim: "\(t.title) \(hs.count) · " + Self.describe(hs, review)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+    }
+
+    static func describe(_ hs: [Hunk], _ r: ReviewSession) -> String {
+        var seen: [String] = []
+        for h in hs {
+            let s = r.reasons(of: h).first ?? h.path.lastPathComponent
+            if !seen.contains(s) { seen.append(s) }
+        }
+        return seen.prefix(3).joined(separator: ", ")
+    }
+}
+
+struct LowSignalRow: View {
+    let review: ReviewSession
+    let hunk: Hunk
+    var body: some View {
+        let viewed = review.isViewed(hunk)
+        HStack(spacing: 6) {
+            Image(systemName: viewed ? "checkmark.circle.fill" : "circle").font(.caption)
+                .foregroundStyle(viewed ? .green : .secondary)
+                .onTapGesture { review.toggleViewed(hunk) }
+            Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent).font(.caption.monospaced()).lineLimit(1)
+            Text(review.reasons(of: hunk).first ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Text(verbatim: review.location(of: hunk)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+        }
+        .opacity(viewed ? 0.55 : 0.85)
     }
 }

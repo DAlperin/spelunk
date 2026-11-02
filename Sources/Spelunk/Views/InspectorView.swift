@@ -69,7 +69,7 @@ struct SectionHeader: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let count { Text("\(count)").font(.caption).foregroundStyle(.secondary) }
+            if let count { Text(verbatim: "\(count)").font(.caption).foregroundStyle(.secondary) }
             if loading { ProgressView().controlSize(.mini) }
             Spacer()
             if let source { SourceBadge(source: source) }
@@ -162,10 +162,10 @@ struct ContextSection: View {
                         ForEach(grouped[path]!.sorted { $0.location.line < $1.location.line }) { h in
                             Button { ws.followReference(h) } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text("\(h.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+                                    Text(verbatim: "\(h.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
                                     VStack(alignment: .leading, spacing: 0) {
                                         Text(h.preview).font(.system(size: 11, design: .monospaced)).lineLimit(1)
-                                        if let e = h.enclosing { Text("in \(e)").font(.caption2).foregroundStyle(.tertiary) }
+                                        if let e = h.enclosing { Text(verbatim: "in \(e)").font(.caption2).foregroundStyle(.tertiary) }
                                     }
                                     if h.isDefinition { Text("def").font(.caption2.weight(.bold)).foregroundStyle(.green) }
                                 }
@@ -201,8 +201,8 @@ struct CallNodeRow: View {
                         HStack {
                             Text(node.name).font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1)
                             Spacer()
-                            if node.callSites.count > 1 { Text("×\(node.callSites.count)").font(.caption2).foregroundStyle(.secondary) }
-                            Text("\(node.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            if node.callSites.count > 1 { Text(verbatim: "×\(node.callSites.count)").font(.caption2).foregroundStyle(.secondary) }
+                            Text(verbatim: "\(node.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         Text(node.location.path.lastPathComponent).font(.caption2).foregroundStyle(.secondary)
                     }
@@ -249,7 +249,7 @@ struct TracePanel: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Code Paths").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                if let t = traces.active { Text("\(t.steps.count) steps").font(.caption).foregroundStyle(.secondary) }
+                if let t = traces.active { Text(verbatim: "\(t.steps.count) steps").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 Button { ws.addCurrentToTrace() } label: { Image(systemName: "plus") }
                     .buttonStyle(.borderless)
@@ -394,7 +394,7 @@ struct TraceStepRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(index + 1)").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
+            Text(verbatim: "\(index + 1)").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 18, alignment: .trailing)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
@@ -462,7 +462,7 @@ struct OutlinePanel: View {
                             Text(item.kind == .impl ? item.detail : item.name).font(.system(size: 12, design: .monospaced)).lineLimit(1)
                             if item.isTest { Text("test").font(.caption2).foregroundStyle(.teal) }
                             Spacer()
-                            Text("\(item.lineCount) L").font(.caption2).foregroundStyle(.secondary)
+                            Text(verbatim: "\(item.lineCount) L").font(.caption2).foregroundStyle(.secondary)
                         }
                     }.buttonStyle(.plain)
                 }
@@ -487,9 +487,9 @@ struct BookmarksPanel: View {
                             HStack {
                                 Text(b.title).font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 Spacer()
-                                if i < 10 { Text("⌘\(i)").font(.caption2).foregroundStyle(.secondary) }
+                                if i < 10 { Text(verbatim: "⌘\(i)").font(.caption2).foregroundStyle(.secondary) }
                             }
-                            Text("\(b.location.path):\(b.location.displayLine)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                            Text(verbatim: "\(b.location.path):\(b.location.displayLine)").font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                             if !b.context.isEmpty { Text(b.context).font(.caption2).foregroundStyle(.tertiary) }
                         }
                     }
@@ -518,7 +518,7 @@ struct ProblemsPanel: View {
                                 .foregroundStyle(d.level == .error ? .red : .yellow)
                             Text(d.message).font(.caption).lineLimit(2)
                         }
-                        Text("\(d.location.path):\(d.location.displayLine)\(d.code.map { " · \($0)" } ?? "")")
+                        Text(verbatim: "\(d.location.path):\(d.location.displayLine)\(d.code.map { " · \($0)" } ?? "")")
                             .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                     }
                 }.buttonStyle(.plain)
