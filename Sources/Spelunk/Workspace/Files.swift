@@ -168,6 +168,9 @@ final class SourceDocument: Identifiable {
 
     func lineText(_ line: Int) -> String { ns.line(lines, line) }
 
+    /// Syntax tree for tree-sitter rule queries, parsed on first use.
+    lazy var parsed: ParsedTree? = SyntaxAnalyzer.parseTree(text, language: language, path: path)
+
     func word(at p: SourcePos) -> (String, SourceRange)? {
         let off = lines.offset(of: p)
         guard let r = ns.identifierRange(at: off) else { return nil }

@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class AppModel {
     var workspace: Workspace?
     var focusFilter = false
+    @ObservationIgnored var openSettings: (() -> Void)?
     var recent: [String] = UserDefaults.standard.stringArray(forKey: "recentRepos") ?? []
 
     init() {

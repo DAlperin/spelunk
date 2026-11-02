@@ -34,6 +34,12 @@ final class DebugBridge {
         switch verb {
         case "snapshot": snapshot(arg)
         case "snapshotv": snapshot(arg, viaWindowServer: false)
+        case "snapshotwin":
+            // snapshotwin <title-substring> <path>
+            let p = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            if p.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.title.localizedCaseInsensitiveContains(p[0]) }) {
+                capture(w, to: p[1])
+            }
         case "open":
             let p = arg.split(separator: ":")
             let line = p.count > 1 ? (Int(p[1]) ?? 1) - 1 : 0
@@ -63,6 +69,38 @@ final class DebugBridge {
         case "clippy": ws.clippy.run()
         case "scip": ws.scip.generate(revision: ws.vcs.revision, sourceFiles: ws.allFiles)
         case "dump": dump(ws)
+        case "hitchain":
+            let n = arg.split(separator: " ").compactMap { Double($0) }
+            guard n.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }),
+                  let root = w.contentView?.superview else { break }
+            let p = NSPoint(x: n[0], y: w.frame.height - n[1])
+            func walk(_ v: NSView, _ depth: Int) {
+                let r = v.convert(v.bounds, to: nil)
+                guard r.contains(p), !v.isHidden else { return }
+                Log.debug("hitchain " + String(repeating: " ", count: depth) + "\(type(of: v)) win=\(r) hidden=\(v.isHidden) alpha=\(v.alphaValue)")
+                for c in v.subviews { walk(c, depth + 1) }
+            }
+            walk(root, 0)
+        case "clickat":
+            // clickat <x> <y> in points from the window's top-left; goes through normal event dispatch.
+            let n = arg.split(separator: " ").compactMap { Double($0) }
+            guard n.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }) else { break }
+            let p = NSPoint(x: n[0], y: w.frame.height - n[1])
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    w.sendEvent(e)
+                }
+            }
+            if let hit = w.contentView?.superview?.hitTest(p) { Log.debug("clickat hit \(type(of: hit)) \(hit.frame)") }
+        case "settings":
+            UserDefaults.standard.set(arg.isEmpty ? "general" : arg, forKey: "settings.tab")
+            model?.openSettings?()
+        case "closesettings":
+            NSApp.windows.first { $0.title.contains("Settings") || $0.identifier?.rawValue.contains("Settings") == true }?.close()
+        case "askopen": ws.showAsk = true
+        case "submitclose": ws.showSubmitReview = false
+        case "commentclose": ws.commentDraft = nil
         case "palette": ws.palette = arg == "commands" ? .commands : .files
         case "ptype": ws.paletteQuery = arg
         case "pclose": ws.palette = nil
@@ -117,28 +155,47 @@ final class DebugBridge {
     }
 
     private func snapshot(_ path: String, viaWindowServer: Bool = true) {
-        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 }) else { return }
-        // CGWindowListCreateImage is marked unavailable in the SDK but still works for a process's own
-        // windows without screen-recording permission; resolve it dynamically.
-        typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-        if viaWindowServer, let h = dlopen(nil, RTLD_NOW), let sym = dlsym(h, "CGWindowListCreateImage") {
-            let fn = unsafeBitCast(sym, to: Fn.self)
-            // kCGWindowListOptionIncludingWindow = 1 << 3, kCGWindowImageBoundsIgnoreFraming = 1 << 0
-            if let img = fn(.null, 1 << 3, UInt32(window.windowNumber), 1)?.takeRetainedValue() {
-                let rep = NSBitmapImageRep(cgImage: img)
-                if let data = rep.representation(using: .png, properties: [:]) {
-                    try? data.write(to: URL(fileURLWithPath: path))
-                    Log.debug("snapshot(cg) \(path) \(img.width)x\(img.height)")
-                    return
-                }
-            }
-        }
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && $0.title != "Settings" && !$0.title.contains("Settings") }) else { return }
+        if viaWindowServer { capture(window, to: path); return }
         guard let view = window.contentView?.superview ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         if let data = rep.representation(using: .png, properties: [:]) {
             try? data.write(to: URL(fileURLWithPath: path))
             Log.debug("snapshot \(path) \(Int(view.bounds.width))x\(Int(view.bounds.height))")
+        }
+    }
+
+    private func windowImage(_ w: NSWindow) -> CGImage? {
+        // CGWindowListCreateImage is marked unavailable in the SDK but still works for a process's own
+        // windows without screen-recording permission; resolve it dynamically.
+        typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        guard let h = dlopen(nil, RTLD_NOW), let sym = dlsym(h, "CGWindowListCreateImage") else { return nil }
+        let fn = unsafeBitCast(sym, to: Fn.self)
+        // kCGWindowListOptionIncludingWindow = 1 << 3, kCGWindowImageBoundsIgnoreFraming = 1 << 0
+        return fn(.null, 1 << 3, UInt32(w.windowNumber), 1)?.takeRetainedValue()
+    }
+
+    /// Captures a window, compositing an attached sheet on top so sheets appear in context.
+    private func capture(_ window: NSWindow, to path: String) {
+        guard let base = windowImage(window) else { return }
+        var final = base
+        if let sheet = window.attachedSheet, let sheetImg = windowImage(sheet) {
+            let scale = CGFloat(base.width) / window.frame.width
+            let w = base.width, h = base.height
+            if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.draw(base, in: CGRect(x: 0, y: 0, width: w, height: h))
+                let sf = sheet.frame, wf = window.frame
+                let rect = CGRect(x: (sf.minX - wf.minX) * scale, y: (sf.minY - wf.minY) * scale,
+                                  width: CGFloat(sheetImg.width), height: CGFloat(sheetImg.height))
+                ctx.draw(sheetImg, in: rect)
+                if let img = ctx.makeImage() { final = img }
+            }
+        }
+        if let data = NSBitmapImageRep(cgImage: final).representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+            Log.debug("snapshot(cg) \(path) \(final.width)x\(final.height)")
         }
     }
 }

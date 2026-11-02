@@ -152,6 +152,13 @@ struct ChangesView: View {
                 }.labelsHidden().frame(width: 120)
             }
             .controlSize(.small)
+            if !review.ruleErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(review.ruleErrors.prefix(4), id: \.self) { Text($0).font(.caption2.monospaced()).foregroundStyle(.red) }
+                }
+                .onTapGesture { RulesFiles.openUserRules() }
+                .help("Errors in review rules; those lines are skipped")
+            }
             if let s = review.classifyState {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkle").font(.caption2)

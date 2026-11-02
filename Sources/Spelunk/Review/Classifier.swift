@@ -1,4 +1,5 @@
 import Foundation
+import SwiftTreeSitter
 
 enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendable {
     case critical, behavior, supporting, docs, tests, mechanical
@@ -36,6 +37,10 @@ struct HunkAnalysis: Sendable {
     var tier: ChangeTier
     var reasons: [String]
     var enclosing: String?
+    /// Keeps the hunk out of the Claude classification pass.
+    var settled = false
+    /// Where the deciding rule is defined, e.g. `defaults:42`.
+    var rule: String?
 }
 
 /// Small Rust lexer for comparing hunks token-by-token. Comments and whitespace are dropped.
@@ -93,34 +98,35 @@ enum RustTokens {
         "dyn", "crate", "super", "as", "in", "ref", "break", "continue", "true", "false", "Some", "None", "Ok", "Err"]
 }
 
-/// Heuristic, Rust-aware classification of diff hunks. Uses full old/new file syntax when available.
+/// Classifies diff hunks by computing facts about each hunk and evaluating the review rules
+/// (see `ReviewRule`). The built-in behaviour lives in `DefaultRules`; repositories and users layer
+/// their own rule files on top.
 enum ChangeClassifier {
-    static func classify(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?) -> HunkAnalysis {
-        let path = file.path
-        // Name the hunk after the first changed line that sits inside an item, so a hunk that starts
-        // with import churn is still titled by the item it actually touches.
-        let enclosing = hunk.added.lazy.compactMap { $0.newLine }.compactMap { newDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
+    static func classify(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?, root: URL? = nil) -> HunkAnalysis {
+        let rules = root.map { ReviewRules.shared.rules(for: $0) } ?? ReviewRules.shared.defaultsOnly
+        let facts = Self.facts(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc)
+        let outcome = rules.evaluate(facts)
+        return HunkAnalysis(tier: outcome.tier, reasons: outcome.reasons, enclosing: enclosing(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc),
+                            settled: outcome.settled, rule: outcome.rule)
+    }
+
+    /// Names the hunk after the first changed line that sits inside an item, so a hunk that starts
+    /// with import churn is still titled by the item it actually touches.
+    static func enclosing(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?) -> String? {
+        hunk.added.lazy.compactMap { $0.newLine }.compactMap { newDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.removed.lazy.compactMap { $0.oldLine }.compactMap { oldDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.added.first?.newLine.flatMap { newDoc?.syntax.enclosingItem(line: $0)?.qualifiedName }
             ?? (FileClassifier.isGenerated(file.path) || hunk.header.isEmpty ? nil : hunk.header)
-        func result(_ t: ChangeTier, _ r: String...) -> HunkAnalysis { HunkAnalysis(tier: t, reasons: r, enclosing: enclosing) }
+    }
 
-        if FileClassifier.isGenerated(path) {
-            return result(.mechanical, path.hasSuffix(".lock") || path.hasSuffix("lock.json") ? "lockfile" : "generated or snapshot")
-        }
+    static func facts(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?) -> HunkFacts {
+        let path = file.path
         let lang = SourceLanguage.from(path: path)
-        if lang == .markdown { return result(.docs, file.status == .added ? "new document" : "documentation") }
-        if FileClassifier.isTest(path) { return result(.tests, "test file") }
-        if path.lastPathComponent == "Cargo.toml" {
-            let changed = (hunk.added + hunk.removed).map(\.text).joined(separator: "\n")
-            if changed.contains("features") || changed.contains("[dependencies") || changed.range(of: #"^\s*[\w-]+\s*=\s*(\{|")"#, options: .regularExpression) != nil {
-                return result(.supporting, "dependency or feature change")
-            }
-            return result(.supporting, "manifest change")
-        }
-        guard lang == .rust else {
-            return HunkAnalysis(tier: .behavior, reasons: ["\(lang.displayName) change"], enclosing: enclosing)
-        }
+        var langs: Set<String> = [lang.rawValue]
+        if let g = GrammarRegistry.shared.grammar(forPath: path) { langs.insert(g.spec.name) }
+        var kinds: Set<String> = [file.status.rawValue]
+        if FileClassifier.isGenerated(path) { kinds.insert("generated") }
+        if FileClassifier.isTest(path) { kinds.insert("test") }
 
         let addedText = hunk.added.map(\.text).joined(separator: "\n")
         let removedText = hunk.removed.map(\.text).joined(separator: "\n")
@@ -128,98 +134,100 @@ enum ChangeClassifier {
         let removedToks = RustTokens.lex(removedText)
         let addedCode = addedToks.filter { !$0.isComment }
         let removedCode = removedToks.filter { !$0.isComment }
-
-        // Test regions inside the file.
-        let addedInTest = hunk.added.allSatisfy { l in l.newLine.map { newDoc?.syntax.isTestLine($0) ?? false } ?? true }
-        let removedInTest = hunk.removed.allSatisfy { l in l.oldLine.map { oldDoc?.syntax.isTestLine($0) ?? false } ?? true }
-        if (!hunk.added.isEmpty || !hunk.removed.isEmpty) && addedInTest && removedInTest
-            && (newDoc != nil || oldDoc != nil) {
-            return result(.tests, "inside #[cfg(test)] / #[test]")
-        }
-
         let addedComments = addedToks.filter(\.isComment).map(\.text)
         let removedComments = removedToks.filter(\.isComment).map(\.text)
-        let commentWordsChanged = Self.wordDelta(addedComments, removedComments)
-        if addedCode.map(\.text) == removedCode.map(\.text) {
-            if commentWordsChanged == 0 { return result(.mechanical, "formatting only") }
-            if (addedComments + removedComments).contains(where: Self.isInvariantComment) {
-                return result(.critical, "safety / invariant comment changed")
+        let commentWords = wordDelta(addedComments, removedComments)
+
+        var facts: Set<String> = []
+        var publicName: String?
+        var rename: String?
+        // Token-level facts rely on the Rust lexer, so they only apply to Rust files.
+        if lang == .rust {
+            let addedInTest = hunk.added.allSatisfy { l in l.newLine.map { newDoc?.syntax.isTestLine($0) ?? false } ?? true }
+            let removedInTest = hunk.removed.allSatisfy { l in l.oldLine.map { oldDoc?.syntax.isTestLine($0) ?? false } ?? true }
+            if (!hunk.added.isEmpty || !hunk.removed.isEmpty) && addedInTest && removedInTest && (newDoc != nil || oldDoc != nil) {
+                facts.insert("in-test")
             }
-            let isDoc = (addedComments + removedComments).contains { $0.hasPrefix("///") || $0.hasPrefix("//!") || $0.hasPrefix("/**") }
-            // A few words reworded in existing comments is a typo fix; anything more is content.
-            if commentWordsChanged <= 3 && !removedComments.isEmpty && !addedComments.isEmpty {
-                return result(.mechanical, "comment wording")
+            if addedCode.map(\.text) == removedCode.map(\.text) {
+                facts.insert(commentWords == 0 ? "formatting-only" : "comments-only")
             }
-            return result(.docs, isDoc ? "doc comments" : "comments")
-        }
+            if !addedComments.isEmpty && !removedComments.isEmpty { facts.insert("comment-edit") }
 
-        let changedLines = (hunk.added + hunk.removed).map { $0.text.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let importLike = changedLines.allSatisfy { l in
-            l.hasPrefix("use ") || l.hasPrefix("pub use ") || l.hasPrefix("pub(crate) use ") || l.hasPrefix("//")
-                || l.range(of: #"^[\w:{}, *]+[,};]*$"#, options: .regularExpression) != nil && !l.contains("(")
-        }
-        if importLike && changedLines.contains(where: { $0.contains("use ") }) { return result(.mechanical, "imports") }
-        if changedLines.allSatisfy({ $0.hasPrefix("mod ") || $0.hasPrefix("pub mod ") || $0.hasPrefix("pub(crate) mod ") }) {
-            return result(.supporting, "module declarations")
-        }
-
-        var reasons: [String] = []
-        var critical = false
-        func delta(_ pattern: String) -> Int {
-            count(pattern, addedCode, addedText) - count(pattern, removedCode, removedText)
-        }
-        func touched(_ pattern: String) -> Bool { count(pattern, addedCode, addedText) + count(pattern, removedCode, removedText) > 0 }
-
-        if touched(#"\bunsafe\b"#) { critical = true; reasons.append("unsafe code") }
-        if touched(#"Ordering::|Atomic\w+|\bfence\("#) { critical = true; reasons.append("atomics / memory ordering") }
-        if touched(#"\bMutex\b|\bRwLock\b|\.lock\(\)|Condvar|\bSemaphore\b"#) { critical = true; reasons.append("locking") }
-        if touched(#"\bspawn\w*\(|\bselect!|\bjoin!|mpsc::|oneshot::|broadcast::|watch::"#) { critical = true; reasons.append("concurrency / channels") }
-        let panicDelta = delta(#"\.unwrap\(\)|\.expect\(|panic!|unreachable!|todo!|unimplemented!|assert!|\[[^\]]+\]"#)
-        if delta(#"\.unwrap\(\)|\.expect\(|panic!|unreachable!|todo!|unimplemented!"#) > 0 { critical = true; reasons.append("adds panic path") }
-        else if panicDelta < 0 && delta(#"\?"#) > 0 { reasons.append("panic replaced with error") }
-        if delta(#"\?"#) < 0 { reasons.append("error propagation removed") }
-        if touched(#"#\[serde|Serialize|Deserialize|\bproto\b|prost::|#\[derive\([^)]*(Serialize|Arbitrary)"#) { critical = true; reasons.append("serialization format") }
-        if touched(#"impl\s+Drop\b|unsafe\s+impl\s+(Send|Sync)"#) { critical = true; reasons.append("Drop / Send / Sync") }
-
-        // Public API: the hunk touches the signature lines of a pub item.
-        func touchesPublicSignature(_ doc: SourceDocument?, _ lines: [Int]) -> String? {
-            guard let doc else { return nil }
-            for l in lines {
-                for item in doc.syntax.flatOutline where item.isPublic && item.kind != .impl && item.kind != .module
-                    && l >= item.range.start.line && l <= item.headerEndLine {
-                    return item.name
-                }
-                if let item = doc.syntax.enclosingItem(line: l, includeContainers: false), item.kind == .trait { return item.name }
+            let changed = (hunk.added + hunk.removed).map { $0.text.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let importLike = changed.allSatisfy { l in
+                l.hasPrefix("use ") || l.hasPrefix("pub use ") || l.hasPrefix("pub(crate) use ") || l.hasPrefix("//")
+                    || l.range(of: #"^[\w:{}, *]+[,};]*$"#, options: .regularExpression) != nil && !l.contains("(")
             }
-            return nil
-        }
-        if let name = touchesPublicSignature(newDoc, hunk.added.compactMap(\.newLine))
-            ?? touchesPublicSignature(oldDoc, hunk.removed.compactMap(\.oldLine)) {
-            critical = true
-            reasons.append("public API: \(name)")
-        }
-        if commentWordsChanged > 3 { reasons.append("also edits comments") }
-        if critical { return HunkAnalysis(tier: .critical, reasons: reasons, enclosing: enclosing) }
+            if importLike && changed.contains(where: { $0.contains("use ") }) { facts.insert("imports-only") }
+            if !changed.isEmpty && changed.allSatisfy({ $0.hasPrefix("mod ") || $0.hasPrefix("pub mod ") || $0.hasPrefix("pub(crate) mod ") }) {
+                facts.insert("mod-decls-only")
+            }
 
-        if let rename = consistentRename(removedCode, addedCode, oldDoc: oldDoc, newDoc: newDoc) { return result(.mechanical, rename) }
+            publicName = touchesPublicSignature(newDoc, hunk.added.compactMap(\.newLine)) ?? touchesPublicSignature(oldDoc, hunk.removed.compactMap(\.oldLine))
+            if publicName != nil { facts.insert("public-signature") }
+            rename = consistentRename(removedCode, addedCode, oldDoc: oldDoc, newDoc: newDoc)
+            if rename != nil { facts.insert("rename") }
 
-        // Plumbing: the net token change is only identifiers threaded through calls/struct literals.
-        var counts: [String: Int] = [:]
-        for t in addedCode { counts[t.text, default: 0] += 1 }
-        for t in removedCode { counts[t.text, default: 0] -= 1 }
-        let net = counts.filter { $0.value != 0 }.map(\.key)
-        let plumbingTokens: Set<String> = [",", ":", "&", ".", "clone", "(", ")", "self", "into", "Arc", "Rc", "<", ">", "{", "}", "::", "mut", "ref", "as_ref", "to_owned", "to_string"]
-        let netIsPlumbing = !net.isEmpty && net.allSatisfy { tok in
-            plumbingTokens.contains(tok) || (tok.first.map { $0.isLetter || $0 == "_" } == true && !RustTokens.keywords.contains(tok))
+            var counts: [String: Int] = [:]
+            for t in addedCode { counts[t.text, default: 0] += 1 }
+            for t in removedCode { counts[t.text, default: 0] -= 1 }
+            let net = counts.filter { $0.value != 0 }.map(\.key)
+            let plumbingTokens: Set<String> = [",", ":", "&", ".", "clone", "(", ")", "self", "into", "Arc", "Rc", "<", ">", "{", "}", "::", "mut", "ref", "as_ref", "to_owned", "to_string"]
+            let netIsPlumbing = !net.isEmpty && net.allSatisfy { tok in
+                plumbingTokens.contains(tok) || (tok.first.map { $0.isLetter || $0 == "_" } == true && !RustTokens.keywords.contains(tok))
+            }
+            let structuralAdded: Set<String> = ["if", "match", "else", "for", "while", "loop", "return", "=>", "==", "!=", "<=", ">=", "&&", "||", "+", "-", "*", "/", "=", "let", "break", "continue"]
+            let structuralRemoved: Set<String> = ["if", "match", "else", "for", "while", "loop", "return", "=>", "==", "!=", "&&", "||", "=", "let", "break", "continue"]
+            let structural = addedCode.contains { structuralAdded.contains($0.text) } || removedCode.contains { structuralRemoved.contains($0.text) }
+            if structural { facts.insert("structural") }
+            if netIsPlumbing && !structural && max(hunk.addedCount, hunk.removedCount) <= 12 { facts.insert("plumbing") }
         }
-        let structural = addedCode.contains { ["if", "match", "else", "for", "while", "loop", "return", "=>", "==", "!=", "<=", ">=", "&&", "||", "+", "-", "*", "/", "=", "let", "break", "continue"].contains($0.text) }
-            || removedCode.contains { ["if", "match", "else", "for", "while", "loop", "return", "=>", "==", "!=", "&&", "||", "=", "let", "break", "continue"].contains($0.text) }
-        if netIsPlumbing && !structural && max(hunk.addedCount, hunk.removedCount) <= 12 {
-            return HunkAnalysis(tier: .supporting, reasons: reasons + ["threads values through"], enclosing: enclosing)
+        if hunk.removedCount == 0 && hunk.addedCount > 0 { facts.insert("additions-only") }
+        if hunk.addedCount == 0 && hunk.removedCount > 0 { facts.insert("deletions-only") }
+
+        let newLines = Set(hunk.added.compactMap(\.newLine))
+        let oldLines = Set(hunk.removed.compactMap(\.oldLine))
+        return HunkFacts(
+            path: path, langs: langs, langDisplay: GrammarRegistry.shared.grammar(forPath: path)?.spec.displayName ?? lang.displayName,
+            fileKinds: kinds, facts: facts,
+            addedCode: compact(addedCode), removedCode: compact(removedCode),
+            changedComments: (addedComments + removedComments).joined(separator: "\n"),
+            changedText: addedText + "\n" + removedText,
+            commentWords: commentWords, changedLines: hunk.addedCount + hunk.removedCount,
+            publicName: publicName, rename: rename,
+            tsMatches: { query in
+                tsMatch(query, doc: newDoc, lines: newLines) || tsMatch(query, doc: oldDoc, lines: oldLines)
+            })
+    }
+
+    /// Whether any match of `query` overlaps the changed lines of `doc`.
+    static func tsMatch(_ query: String, doc: SourceDocument?, lines: Set<Int>) -> Bool {
+        guard let doc, let first = lines.min(), let last = lines.max(), let parsed = doc.parsed, let root = parsed.tree.rootNode,
+              let q = QueryCache.shared.query(query, language: parsed.language, key: parsed.key) else { return false }
+        let start = doc.lines.lineRange(first).location
+        let end = NSMaxRange(doc.lines.lineRange(last))
+        let cursor = q.execute(node: root, in: parsed.tree)
+        cursor.setRange(NSRange(location: start, length: max(0, end - start)))
+        for match in cursor.resolve(with: SwiftTreeSitter.Predicate.Context(string: doc.text)) {
+            for c in match.captures {
+                let s = doc.lines.position(of: c.range.location).line
+                let e = doc.lines.position(of: NSMaxRange(c.range)).line
+                if lines.contains(where: { $0 >= s && $0 <= e }) { return true }
+            }
         }
-        if structural { reasons.append(hunk.removedCount == 0 ? "new logic" : "control flow / logic") }
-        if reasons.isEmpty { reasons.append(hunk.removedCount == 0 ? "added code" : hunk.addedCount == 0 ? "removed code" : "code change") }
-        return HunkAnalysis(tier: .behavior, reasons: reasons, enclosing: enclosing)
+        return false
+    }
+
+    private static func touchesPublicSignature(_ doc: SourceDocument?, _ lines: [Int]) -> String? {
+        guard let doc else { return nil }
+        for l in lines {
+            for item in doc.syntax.flatOutline where item.isPublic && item.kind != .impl && item.kind != .module
+                && l >= item.range.start.line && l <= item.headerEndLine {
+                return item.name
+            }
+            if let item = doc.syntax.enclosingItem(line: l, includeContainers: false), item.kind == .trait { return item.name }
+        }
+        return nil
     }
 
     /// Size of the multiset difference between the words of two comment sets.
@@ -235,15 +243,10 @@ enum ChangeClassifier {
         return Set(wa.keys).union(wb.keys).reduce(0) { $0 + abs((wa[$1] ?? 0) - (wb[$1] ?? 0)) }
     }
 
-    /// Comments that document an obligation rather than describe code.
-    static func isInvariantComment(_ c: String) -> Bool {
-        c.range(of: #"SAFETY|INVARIANT|#\s*(Safety|Panics)|\bunsafe\b|\bmust (not|never|always|only)\b|\bnever\b.*\b(called|held|null|empty)"#,
-                options: [.regularExpression]) != nil
-    }
 
-    private static func count(_ pattern: String, _ toks: [RustTokens.Tok], _ text: String) -> Int {
-        // Rebuild compact code from tokens: comments are already gone and string contents are blanked,
-        // so prose cannot trigger signals. Spaces only separate adjacent word tokens.
+    /// Compact code from tokens: comments are already gone and string contents are blanked, so prose
+    /// cannot trigger code rules. Spaces only separate adjacent word tokens, so `x.unwrap()` stays intact.
+    static func compact(_ toks: [RustTokens.Tok]) -> String {
         var code = ""
         var prevWord = false
         for t in toks {
@@ -252,8 +255,7 @@ enum ChangeClassifier {
             code += t.text.hasPrefix("\"") ? "\"\"" : t.text
             prevWord = word
         }
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return 0 }
-        return re.numberOfMatches(in: code, range: NSRange(location: 0, length: (code as NSString).length))
+        return code
     }
 
     /// Same token stream modulo a consistent substitution of local-looking identifiers. A substitution

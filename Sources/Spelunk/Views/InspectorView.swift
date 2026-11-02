@@ -17,12 +17,21 @@ struct InspectorView: View {
             let total = geo.size.height
             let topHeight = max(140, min(total - 180, total * split))
             VStack(spacing: 0) {
-                ScrollView {
-                    if let c = ws.context { ContextSection(ws: ws, ctx: c) } else {
-                        Text("Click a symbol to see its definition, references and call paths. ⌘-click jumps to the definition.")
-                            .font(.callout).foregroundStyle(.secondary).padding()
+                // A List rather than a ScrollView: in the inspector column a SwiftUI ScrollView sits
+                // under the toolbar and its contents stop receiving clicks.
+                List {
+                    Group {
+                        if let c = ws.context { ContextSection(ws: ws, ctx: c) } else {
+                            Text("Click a symbol to see its definition, references and call paths. ⌘-click jumps to the definition.")
+                                .font(.callout).foregroundStyle(.secondary).padding()
+                        }
                     }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
                 .frame(height: topHeight)
                 Divider()
                     .overlay(Color.secondary.opacity(0.001).frame(height: 8).contentShape(Rectangle()))

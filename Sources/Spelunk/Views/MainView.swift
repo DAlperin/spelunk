@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) var model
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Group {
@@ -11,7 +12,10 @@ struct RootView: View {
                 WelcomeView()
             }
         }
-        .onAppear { Log.debug("RootView appeared") }
+        .onAppear {
+            Log.debug("RootView appeared")
+            model.openSettings = { openSettings() }
+        }
     }
 }
 
@@ -439,6 +443,7 @@ struct HunkStrip: View {
             HStack(spacing: 8) {
                 TierBadge(tier: review.tier(of: hunk)).fixedSize()
                 Text(review.reasons(of: hunk).joined(separator: " · ")).font(.callout).lineLimit(1)
+                    .help(ruleHelp)
                 if let e = review.analyses[hunk.id]?.enclosing {
                     Text("in \(e)").font(.callout.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -467,6 +472,15 @@ struct HunkStrip: View {
         .controlSize(.small)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(review.tier(of: hunk).color.opacity(0.06))
+    }
+}
+
+extension HunkStrip {
+    var ruleHelp: String {
+        let a = review.analyses[hunk.id]
+        var lines = ["Rules: \(a?.tier.title ?? "?") — \(a?.reasons.joined(separator: ", ") ?? "")" + (a?.rule.map { " (\($0))" } ?? "")]
+        if let t = review.triage(of: hunk) { lines.append("Claude (\(t.isQuick ? "quick" : "deep")): \(t.tier.title) — \(t.reason)") }
+        return lines.joined(separator: "\n")
     }
 }
 

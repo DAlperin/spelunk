@@ -133,12 +133,13 @@ struct SettingsView: View {
     @AppStorage("fontSize") var fontSize = 13.0
     @AppStorage("autoStartRA") var autoStart = true
     @AppStorage("review.autoClassify") var autoClassify = true
+    @AppStorage("settings.tab") var tab = "general"
     @State private var detected = "…"
 
     var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            LanguagesSettings().tabItem { Label("Languages", systemImage: "chevron.left.forwardslash.chevron.right") }
+        TabView(selection: $tab) {
+            general.tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+            LanguagesSettings().tabItem { Label("Languages", systemImage: "chevron.left.forwardslash.chevron.right") }.tag("languages")
         }
         .frame(width: 680, height: 560)
     }
@@ -152,6 +153,12 @@ struct SettingsView: View {
                 Toggle("Start automatically for Cargo workspaces", isOn: $autoStart)
             }
             Section("Review") {
+                HStack {
+                    Button("Edit My Rules…") { RulesFiles.openUserRules() }
+                    Button("View Default Rules") { RulesFiles.openDefaults() }
+                }
+                Text("Rules decide each hunk's tier. Your rules (and a repository's .spelunk/review.rules) run before the defaults; the first match wins. Edits apply on the next refresh.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Classify new hunks with Claude automatically", isOn: $autoClassify)
                 Text("Runs the quick classification model on hunks the static rules cannot settle. Results are cached by hunk content.")
                     .font(.caption).foregroundStyle(.secondary)

@@ -142,7 +142,31 @@ struct SyntaxInfo: Sendable {
     }
 }
 
+struct ParsedTree {
+    var tree: MutableTree
+    var language: SwiftTreeSitter.Language
+    /// Grammar identity, for caching compiled queries per language.
+    var key: String
+}
+
 enum SyntaxAnalyzer {
+    static func parseTree(_ text: String, language: SourceLanguage, path: String) -> ParsedTree? {
+        let lang: SwiftTreeSitter.Language
+        let key: String
+        if language == .rust {
+            lang = SwiftTreeSitter.Language(language: tree_sitter_rust())
+            key = "rust"
+        } else if let g = GrammarRegistry.shared.grammar(forPath: path), let l = g.language {
+            lang = l
+            key = g.spec.name
+        } else {
+            return nil
+        }
+        let parser = Parser()
+        guard (try? parser.setLanguage(lang)) != nil, let tree = parser.parse(text) else { return nil }
+        return ParsedTree(tree: tree, language: lang, key: key)
+    }
+
     /// Rust uses the built-in grammar; other languages use an installed grammar when one claims the
     /// file's extension, and the regex lexer otherwise.
     static func analyze(_ text: String, language: SourceLanguage, path: String) -> SyntaxInfo {

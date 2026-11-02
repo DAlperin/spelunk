@@ -52,6 +52,8 @@ final class ReviewSession {
     var triageState: String?
     var triaging = false
     var overviewIsStale = false
+    /// Problems in the review rule files, shown above the change list.
+    var ruleErrors: [String] { ReviewRules.shared.rules(for: root).errors }
     var lastLoaded: Date?
     private var loading = false
     private var reloadPending = false
@@ -160,7 +162,7 @@ final class ReviewSession {
             for f in newFiles {
                 let oldDoc = f.status == .added ? nil : await document(f.oldPath, side: .old)
                 let newDoc = f.status == .deleted ? nil : await document(f.newPath, side: .new)
-                for h in f.hunks { newAnalyses[h.id] = ChangeClassifier.classify(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc) }
+                for h in f.hunks { newAnalyses[h.id] = ChangeClassifier.classify(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc, root: root) }
             }
             files = newFiles
             analyses = newAnalyses
@@ -434,9 +436,7 @@ final class ReviewSession {
     private var classifyCandidates: [Hunk] {
         allHunks.filter { h in
             guard llm[h.contentKey] == nil else { return false }
-            let reasons = analyses[h.id]?.reasons ?? []
-            let settled = ["lockfile", "generated or snapshot", "formatting only"]
-            return !reasons.contains { settled.contains($0) }
+            return !(analyses[h.id]?.settled ?? false)
         }
     }
 

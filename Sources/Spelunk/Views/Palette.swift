@@ -343,6 +343,9 @@ enum PaletteCommands {
         for r in model.recent.prefix(6) where r != ws.root.path {
             add("Open Recent: \(r.lastPathComponent)", r, icon: "clock") { model.open(URL(fileURLWithPath: r)) }
         }
+        add("Edit My Review Rules", "~/Library/Application Support/Spelunk/review.rules", icon: "list.bullet.rectangle") { RulesFiles.openUserRules() }
+        add("Edit Repository Review Rules", ".spelunk/review.rules", icon: "list.bullet.rectangle") { RulesFiles.openRepoRules(ws.root) }
+        add("View Default Review Rules", icon: "list.bullet.rectangle") { RulesFiles.openDefaults() }
         add("Settings…", nil, "⌘,", icon: "gearshape") { openSettings() }
         add("Install Language Grammar…", "Settings › Languages", icon: "chevron.left.forwardslash.chevron.right") { openSettings() }
         return c
