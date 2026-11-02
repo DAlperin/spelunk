@@ -1,63 +1,127 @@
 import SwiftUI
 
-enum InspectorTab: String, CaseIterable, Identifiable {
-    case trace = "Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
-    var id: String { rawValue }
-}
-
+/// The right pane. It follows what you are doing: the symbol under the cursor, the selected review
+/// hunk's impact, or (from the Panes menu) code paths, the outline, bookmarks or problems.
 struct InspectorView: View {
     @Bindable var ws: Workspace
-    @State private var tab: InspectorTab = .trace
 
-    @State private var split: CGFloat = 0.5
-    @State private var dragStart: CGFloat?
+    var showingHunk: Bool {
+        ws.review != nil && ws.contextFocus == .hunk && ws.changeContext != nil && !ws.contextPinned
+    }
 
     var body: some View {
-        GeometryReader { geo in
-            let total = geo.size.height
-            let topHeight = max(140, min(total - 180, total * split))
-            VStack(spacing: 0) {
-                // A List rather than a ScrollView: in the inspector column a SwiftUI ScrollView sits
-                // under the toolbar and its contents stop receiving clicks.
-                List {
-                    Group {
-                        if let c = ws.context { ContextSection(ws: ws, ctx: c) } else {
-                            Text("Click a symbol to see its definition, references and call paths. ⌘-click jumps to the definition.")
-                                .font(.callout).foregroundStyle(.secondary).padding()
+        VStack(spacing: 0) {
+            header
+            Divider()
+            Group {
+                switch ws.inspectorPane {
+                case .context:
+                    List {
+                        Group {
+                            if showingHunk, let cc = ws.changeContext, let r = ws.review,
+                               let h = r.allHunks.first(where: { $0.id == cc.hunkID }) {
+                                ChangeContextSection(ws: ws, review: r, hunk: h, cc: cc)
+                            } else if let c = ws.context {
+                                ContextSection(ws: ws, ctx: c)
+                            } else {
+                                Text("Click a symbol to see its definition, callers and references. ⌘-click jumps to the definition.")
+                                    .font(.callout).foregroundStyle(.secondary).padding(12)
+                            }
                         }
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                case .paths: TracePanel(ws: ws, traces: ws.traces)
+                case .outline: OutlinePanel(ws: ws)
+                case .bookmarks: BookmarksPanel(ws: ws)
+                case .problems: ProblemsPanel(ws: ws)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .frame(height: topHeight)
-                Divider()
-                    .overlay(Color.secondary.opacity(0.001).frame(height: 8).contentShape(Rectangle()))
-                    .gesture(DragGesture(minimumDistance: 1)
-                        .onChanged { v in
-                            if dragStart == nil { dragStart = split }
-                            split = min(0.85, max(0.15, (dragStart ?? split) + v.translation.height / max(1, total)))
-                        }
-                        .onEnded { _ in dragStart = nil })
-                    .onHover { inside in if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
-                VStack(spacing: 0) {
-                    Picker("", selection: $tab) {
-                        ForEach(InspectorTab.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden().padding(8)
-                    switch tab {
-                    case .trace: TracePanel(ws: ws, traces: ws.traces)
-                    case .outline: OutlinePanel(ws: ws)
-                    case .bookmarks: BookmarksPanel(ws: ws)
-                    case .problems: ProblemsPanel(ws: ws)
-                    }
-                }
-                .frame(height: max(0, total - topHeight - 1))
-                .clipped()
             }
+            .frame(maxHeight: .infinity, alignment: .top)
+            if ws.inspectorPane == .context {
+                Divider()
+                CollapsedRows(ws: ws)
+            }
+            Divider()
+            ProvenanceFooter(ws: ws, showingHunk: showingHunk)
         }
+    }
+
+    var header: some View {
+        HStack(spacing: 6) {
+            switch ws.inspectorPane {
+            case .context:
+                if showingHunk {
+                    Text("Change context").font(.callout.weight(.semibold))
+                    if let (i, n) = ReviewNav.importantPosition(ws) { Text(verbatim: "hunk \(i) of \(n)").font(.caption).foregroundStyle(.secondary) }
+                } else {
+                    Text("Context").font(.callout.weight(.semibold))
+                    Text(ws.contextPinned ? "pinned" : "follows cursor").font(.caption).foregroundStyle(.secondary)
+                }
+            default:
+                Text(ws.inspectorPane.rawValue).font(.callout.weight(.semibold))
+            }
+            Spacer()
+            if ws.inspectorPane == .context {
+                if showingHunk, ws.context != nil {
+                    Button("Symbol") { ws.contextFocus = .symbol }.help("Show the last clicked symbol instead")
+                } else if ws.review != nil, ws.changeContext != nil, !ws.contextPinned {
+                    Button("Hunk") { ws.contextFocus = .hunk }.help("Show the selected hunk's impact")
+                }
+                Button { ws.contextPinned.toggle() } label: {
+                    Label("Pin", systemImage: ws.contextPinned ? "pin.fill" : "pin").labelStyle(.titleAndIcon)
+                }
+                .help(ws.contextPinned ? "Unpin: follow the cursor again" : "Keep this symbol while you click elsewhere")
+                .disabled(ws.context == nil)
+            }
+            Menu {
+                ForEach(InspectorPane.allCases) { p in
+                    Button { ws.inspectorPane = p } label: {
+                        if ws.inspectorPane == p { Label(p.rawValue, systemImage: "checkmark") } else { Text(p.rawValue) }
+                    }
+                }
+            } label: { Text("Panes") }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 12).frame(height: 32)
+    }
+}
+
+/// Source tag shown only when an answer comes from something weaker than rust-analyzer.
+struct WeakSourceTag: View {
+    let source: IntelSource?
+    var body: some View {
+        if let s = source, s != .rustAnalyzer, s != .manual {
+            Text(s.label).font(.system(size: 9, weight: .semibold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background((s == .scip ? Color.blue : Color.orange).opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+                .foregroundStyle(s == .scip ? Color.blue : Color.orange)
+                .help(s == .textSearch ? "Found by text search; may include false matches" : s == .treeSitter ? "From syntax only; types are not resolved" : s == .scip ? "From the SCIP index, which may trail the working copy" : "")
+        }
+    }
+}
+
+struct PaneSectionHeader: View {
+    let title: String
+    var subtitle: String?
+    var trailing: String?
+    var source: IntelSource?
+    var loading = false
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.tertiary) }
+            WeakSourceTag(source: source)
+            if loading { ProgressView().controlSize(.mini) }
+            Spacer()
+            if let trailing { Text(verbatim: trailing).font(.caption).foregroundStyle(.tertiary) }
+        }
+        .padding(.top, 10).padding(.bottom, 3)
     }
 }
 
@@ -67,147 +131,302 @@ struct SectionHeader: View {
     var source: IntelSource?
     var loading = false
     var body: some View {
-        HStack(spacing: 6) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let count { Text(verbatim: "\(count)").font(.caption).foregroundStyle(.secondary) }
-            if loading { ProgressView().controlSize(.mini) }
-            Spacer()
-            if let source { SourceBadge(source: source) }
-        }
+        PaneSectionHeader(title: title, trailing: count.map(String.init), source: source, loading: loading)
     }
 }
+
+extension CodeLocation {
+    /// `file.rs:123`, never with digit grouping.
+    var short: String { path.lastPathComponent + ":" + String(displayLine) }
+}
+
+extension IntelSource {
+    var isStdLike: Bool { false }
+}
+
+/// Paths outside the repository that belong to the Rust toolchain's standard library.
+func isStdPath(_ p: String) -> Bool {
+    p.hasPrefix("/") && (p.contains("/rustlib/") || p.contains("/library/core/") || p.contains("/library/std/") || p.contains("/library/alloc/"))
+}
+
+/// Std callees plus trivial conversions and trait plumbing, folded into one row of the callee list.
+let trivialCallees: Set<String> = ["clone", "into", "from", "to_string", "to_owned", "as_ref", "as_mut", "default", "borrow",
+                                   "borrow_mut", "deref", "fmt", "eq", "hash", "cmp", "partial_cmp", "try_into", "try_from"]
+
+@MainActor func isStdCallee(_ n: CallNode) -> Bool { isStdPath(n.location.path) || trivialCallees.contains(n.name) }
 
 struct ContextSection: View {
     @Bindable var ws: Workspace
     @Bindable var ctx: SymbolContext
-    @State private var refsExpanded = true
+    @State private var stdOpen = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Symbol
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(ctx.name).font(.title3.monospaced().weight(.semibold)).textSelection(.enabled)
-                    Spacer()
-                    if let d = ctx.details { SourceBadge(source: d.source) } else { ProgressView().controlSize(.mini) }
+        VStack(alignment: .leading, spacing: 0) {
+            symbolHeader
+            callersSection
+            calleesSection
+            if !ctx.implementations.isEmpty { implementationsSection }
+            referencesSection
+            if !ctx.mentions.isEmpty { mentionsSection }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 8)
+    }
+
+    var kindTag: String {
+        switch ctx.details?.kindLabel {
+        case "Method", "Function": "fn"
+        case "Struct": "struct"
+        case "Enum": "enum"
+        case "Trait": "trait"
+        case "Module": "mod"
+        case "Constant": "const"
+        case "Static": "static"
+        case "Type Alias": "type"
+        case "Macro": "macro"
+        case "Field": "field"
+        case "Local": "let"
+        default: "sym"
+        }
+    }
+
+    var symbolHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(kindTag).font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.blue.opacity(0.18), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.blue)
+                Text(ctx.name).font(.title3.monospaced().weight(.semibold)).textSelection(.enabled).lineLimit(1)
+                if ctx.details == nil { ProgressView().controlSize(.mini) }
+                Spacer()
+                WeakSourceTag(source: ctx.details?.source)
+            }
+            HStack(spacing: 4) {
+                Text(ctx.container ?? ctx.details?.kindLabel ?? "")
+                if let def = ctx.details?.definition {
+                    Text("·").foregroundStyle(.tertiary)
+                    Button(def.short) { ws.open(def, edge: .definition, title: ctx.name, source: ctx.details?.source ?? .manual) }.buttonStyle(.link)
                 }
-                if let d = ctx.details {
+                if let p = ctx.isPublic { Text("·").foregroundStyle(.tertiary); Text(p ? "pub" : "private") }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            if let sig = ctx.details?.signature {
+                Text(sig).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                    .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+            }
+            if let docs = ctx.details?.docs { RustdocView(markdown: docs) }
+        }
+    }
+
+    var callersSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            PaneSectionHeader(title: "Callers", subtitle: "up to entry points", trailing: ctx.callers.isEmpty ? nil : String(ctx.callers.count),
+                              source: ctx.callers.first?.source, loading: ctx.loadingCallers)
+            if ctx.callers.isEmpty && !ctx.loadingCallers { Text("No callers found").font(.caption).foregroundStyle(.tertiary) }
+            ForEach(ctx.callers.filter { ws.showTests || !$0.isTest }) { n in CallTreeRow(ws: ws, node: n, direction: .incoming, depth: 0) }
+            let hidden = ctx.callers.filter(\.isTest).count
+            if hidden > 0 && !ws.showTests {
+                Button("\(hidden) test callers hidden") { ws.showTests = true }.buttonStyle(.link).font(.caption)
+            }
+        }
+    }
+
+    var calleesSection: some View {
+        let project = ctx.callees.filter { !isStdCallee($0) }
+        let std = ctx.callees.filter(isStdCallee)
+        return VStack(alignment: .leading, spacing: 1) {
+            PaneSectionHeader(title: "Callees", subtitle: "in call order",
+                              trailing: ctx.callees.isEmpty ? nil : (std.isEmpty ? String(project.count) : "\(project.count) + \(std.count) std"),
+                              source: ctx.callees.first?.source, loading: ctx.loadingCallees)
+            if ctx.callees.isEmpty && !ctx.loadingCallees { Text("No calls found").font(.caption).foregroundStyle(.tertiary) }
+            ForEach(project) { n in CallTreeRow(ws: ws, node: n, direction: .outgoing, depth: 0) }
+            if !std.isEmpty {
+                Button { stdOpen.toggle() } label: {
                     HStack(spacing: 4) {
-                        Text(d.kindLabel).foregroundStyle(.secondary)
-                        if let def = d.definition {
-                            Text("·").foregroundStyle(.tertiary)
-                            Button(def.shortDescription) { ws.open(def, edge: .definition, title: ctx.name, source: d.source) }
-                                .buttonStyle(.link)
+                        Image(systemName: stdOpen ? "chevron.down" : "chevron.right").font(.system(size: 8)).frame(width: 10)
+                        Text(verbatim: "\(std.count) from std and core: " + Self.summarize(std)).lineLimit(1)
+                    }
+                    .font(.caption).foregroundStyle(.secondary).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).padding(.vertical, 2)
+                if stdOpen { ForEach(std) { n in CallTreeRow(ws: ws, node: n, direction: .outgoing, depth: 1) } }
+            }
+        }
+    }
+
+    static func summarize(_ nodes: [CallNode]) -> String {
+        var counts: [(String, Int)] = []
+        for n in nodes {
+            let k = n.name + (n.name.first?.isUppercase == false && n.name.hasSuffix("!") ? "" : "")
+            let c = max(1, n.callSites.count)
+            if let i = counts.firstIndex(where: { $0.0 == k }) { counts[i].1 += c } else { counts.append((k, c)) }
+        }
+        return counts.map { $0.1 > 1 ? "\($0.0) ×\($0.1)" : $0.0 }.joined(separator: ", ")
+    }
+
+    var implementationsSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            PaneSectionHeader(title: "Implementations", trailing: String(ctx.implementations.count), source: ctx.implementationsSource)
+            ForEach(ctx.implementations.prefix(60)) { h in
+                Button { ws.open(h.location, edge: .implementation, title: h.enclosing ?? ctx.name, source: h.source) } label: {
+                    HStack {
+                        Text(h.enclosing ?? h.preview).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+                        Spacer()
+                        Text(verbatim: h.location.short).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+        }
+    }
+
+    var referencesSection: some View {
+        let grouped = Dictionary(grouping: ctx.references, by: { $0.location.path })
+        return VStack(alignment: .leading, spacing: 1) {
+            PaneSectionHeader(title: "References", trailing: ctx.references.isEmpty ? nil : String(ctx.references.count),
+                              source: ctx.referencesSource, loading: ctx.loadingReferences)
+            ForEach(grouped.keys.sorted().prefix(60), id: \.self) { path in
+                Text(path).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head).padding(.top, 3)
+                ForEach(grouped[path]!.sorted { $0.location.line < $1.location.line }) { h in
+                    Button { ws.followReference(h) } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            RoleTag(role: role(of: h))
+                            Text(verbatim: String(h.location.displayLine)).font(.caption2.monospaced()).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
+                            Text(h.preview).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            if let e = h.enclosing, !h.isDefinition { Text("in \(e.split(separator: ":").last.map(String.init) ?? e)").font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                         }
-                    }.font(.caption)
-                    if let sig = d.signature {
-                        Text(sig).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
-                    }
-                    if let docs = d.docs {
-                        Text(LocalizedStringKey(String(docs.prefix(800)))).font(.caption).foregroundStyle(.secondary)
-                            .textSelection(.enabled).lineLimit(8)
-                    }
-                }
-            }
-
-            // Calls
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Picker("", selection: Binding(get: { ctx.callDirection }, set: { d in
-                        ctx.callDirection = d
-                        Task { await ws.loadCalls(ctx) }
-                    })) {
-                        ForEach(CallDirection.allCases) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented).labelsHidden().frame(width: 150)
-                    if ctx.loadingCalls { ProgressView().controlSize(.mini) }
-                    Spacer()
-                    if let s = ctx.calls.first?.source { SourceBadge(source: s) }
-                }
-                if ctx.calls.isEmpty && !ctx.loadingCalls {
-                    Text(ctx.callDirection == .incoming ? "No callers found" : "No calls found").font(.caption).foregroundStyle(.secondary)
-                }
-                let visible = ws.showTests ? ctx.calls : ctx.calls.filter { !$0.isTest }
-                ForEach(visible) { n in CallNodeRow(ws: ws, node: n, direction: ctx.callDirection, depth: 0) }
-                if visible.count < ctx.calls.count {
-                    Button("\(ctx.calls.count - visible.count) test \(ctx.callDirection == .incoming ? "callers" : "callees") hidden") { ws.showTests = true }
-                        .buttonStyle(.link).font(.caption)
-                }
-            }
-
-            // Implementations
-            if !ctx.implementations.isEmpty || ctx.loadingImpls {
-                VStack(alignment: .leading, spacing: 4) {
-                    SectionHeader(title: "Implementations", count: ctx.implementations.count, source: ctx.implementationsSource, loading: ctx.loadingImpls)
-                    ForEach(ctx.implementations.prefix(100)) { h in
-                        Button { ws.open(h.location, edge: .implementation, title: h.enclosing ?? ctx.name, source: h.source) } label: {
-                            HStack {
-                                Text(h.enclosing ?? h.preview).font(.system(size: 11, design: .monospaced)).lineLimit(1)
-                                Spacer()
-                                Text(h.location.shortDescription).font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }.buttonStyle(.plain)
-                    }
-                }
-            }
-
-            // References
-            VStack(alignment: .leading, spacing: 4) {
-                SectionHeader(title: "References", count: ctx.references.count, source: ctx.referencesSource, loading: ctx.loadingReferences)
-                let grouped = Dictionary(grouping: ctx.references, by: { $0.location.path })
-                ForEach(grouped.keys.sorted().prefix(80), id: \.self) { path in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(path).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                        ForEach(grouped[path]!.sorted { $0.location.line < $1.location.line }) { h in
-                            Button { ws.followReference(h) } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(verbatim: "\(h.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
-                                    VStack(alignment: .leading, spacing: 0) {
-                                        Text(h.preview).font(.system(size: 11, design: .monospaced)).lineLimit(1)
-                                        if let e = h.enclosing { Text(verbatim: "in \(e)").font(.caption2).foregroundStyle(.tertiary) }
-                                    }
-                                    if h.isDefinition { Text("def").font(.caption2.weight(.bold)).foregroundStyle(.green) }
-                                }
-                                .contentShape(Rectangle())
-                            }.buttonStyle(.plain)
-                        }
-                    }
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
                 }
             }
         }
-        .padding(12)
+    }
+
+    func role(of h: ReferenceHit) -> String {
+        if h.isDefinition { return "def" }
+        let p = h.preview
+        if let r = p.range(of: ctx.name) {
+            let after = p[r.upperBound...].drop { $0 == " " }
+            if after.hasPrefix("(") || after.hasPrefix("::<") || after.hasPrefix("!") { return "call" }
+            if after.hasPrefix("=") && !after.hasPrefix("==") { return "write" }
+        }
+        if p.hasPrefix("use ") || p.hasPrefix("pub use ") { return "use" }
+        return "ref"
+    }
+
+    var mentionsSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text("Mentions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                WeakSourceTag(source: .textSearch)
+                Text("outside Rust").font(.caption).foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.top, 10).padding(.bottom, 3)
+            let byFile = Dictionary(grouping: ctx.mentions, by: \.path)
+            ForEach(byFile.keys.sorted().prefix(12), id: \.self) { p in
+                Button { if let m = byFile[p]?.first { ws.open(m.location, edge: .reference, source: .textSearch) } } label: {
+                    HStack {
+                        Text(p).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.head)
+                        Spacer()
+                        Text(verbatim: String((byFile[p]?.first?.line ?? 0) + 1)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+        }
     }
 }
 
-struct CallNodeRow: View {
+struct RoleTag: View {
+    let role: String
+    var body: some View {
+        Text(role).font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .frame(width: 30)
+            .padding(.vertical, 1)
+            .background((role == "def" ? Color.blue : role == "write" ? .orange : .secondary).opacity(0.16), in: RoundedRectangle(cornerRadius: 3))
+            .foregroundStyle(role == "def" ? Color.blue : role == "write" ? .orange : .secondary)
+    }
+}
+
+/// Rustdoc with `# Panics`, `# Errors` and `# Safety` sections shown as labeled blocks.
+struct RustdocView: View {
+    let markdown: String
+    var body: some View {
+        let (summary, sections) = Self.split(markdown)
+        VStack(alignment: .leading, spacing: 4) {
+            if !summary.isEmpty {
+                Text(LocalizedStringKey(String(summary.prefix(600)))).font(.callout).textSelection(.enabled).lineLimit(6)
+            }
+            ForEach(sections, id: \.0) { title, body in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(title).font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.orange)
+                    Text(LocalizedStringKey(String(body.prefix(300)))).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                }
+            }
+        }
+    }
+
+    static func split(_ md: String) -> (String, [(String, String)]) {
+        var summary: [String] = []
+        var sections: [(String, [String])] = []
+        for line in md.components(separatedBy: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("# ") {
+                sections.append((String(t.dropFirst(2)), []))
+            } else if sections.isEmpty {
+                summary.append(line)
+            } else if !t.isEmpty {
+                sections[sections.count - 1].1.append(t)
+            }
+        }
+        let shown: Set<String> = ["Panics", "Errors", "Safety", "Invariants", "Cancel safety"]
+        return (summary.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+                sections.filter { shown.contains($0.0) && !$0.1.isEmpty }.map { ($0.0, $0.1.joined(separator: " ")) })
+    }
+}
+
+/// One-line caller/callee row; expanding peeks at the call site and lists the next level.
+struct CallTreeRow: View {
     @Bindable var ws: Workspace
     @Bindable var node: CallNode
     let direction: CallDirection
     let depth: Int
+    var inChange = false
     @State private var expanded = false
 
+    var site: CodeLocation? { node.callSites.first }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Button {
                     expanded.toggle()
                     if expanded { Task { await ws.intel.expand(node, direction) } }
                 } label: {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2).frame(width: 12)
-                }.buttonStyle(.plain)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                        .frame(width: 12, height: 16).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
                 Button { ws.followCall(node, direction: direction) } label: {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text(node.name).font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1)
-                            Spacer()
-                            if node.callSites.count > 1 { Text(verbatim: "×\(node.callSites.count)").font(.caption2).foregroundStyle(.secondary) }
-                            Text(verbatim: "\(node.location.displayLine)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(node.name).font(.system(size: 12, weight: depth == 0 ? .medium : .regular, design: .monospaced)).lineLimit(1)
+                            .foregroundStyle(node.isRecursive ? .orange : .primary)
+                        if direction == .outgoing, let s = site, s.path == ws.context?.path {
+                            Text(verbatim: "at :" + String(s.displayLine)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
                         }
-                        Text(node.location.path.lastPathComponent).font(.caption2).foregroundStyle(.secondary)
+                        if node.callSites.count > 1 { Text(verbatim: "×\(node.callSites.count)").font(.caption2).foregroundStyle(.tertiary) }
+                        if inChange || ws.isInReview(node.location) {
+                            Text("in this change").font(.system(size: 9, weight: .medium)).padding(.horizontal, 4).padding(.vertical, 1)
+                                .background(Color.green.opacity(0.18), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.green)
+                        }
+                        Spacer(minLength: 4)
+                        let loc = direction == .incoming ? (site ?? node.location) : node.location
+                        Text(verbatim: loc.short).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(node.isRecursive ? Color.orange.opacity(0.12) : Color.accentColor.opacity(0.08)))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -216,19 +435,19 @@ struct CallNodeRow: View {
                         ws.traces.insert(TraceStep(title: node.name, location: node.location, edge: direction == .incoming ? .caller : .callee, source: node.source,
                                                    snippet: ws.docs.document(node.location.path)?.lineText(node.location.line).trimmingCharacters(in: .whitespaces) ?? ""))
                     }
-                    if node.callSites.count > 1 {
-                        ForEach(node.callSites, id: \.self) { s in
-                            Button("Call site \(s.shortDescription)") { ws.open(s, edge: direction == .incoming ? .caller : .callee, title: node.name, source: node.source) }
-                        }
+                    ForEach(node.callSites.prefix(12), id: \.self) { s in
+                        Button("Call site \(s.short)") { ws.open(s, edge: direction == .incoming ? .caller : .callee, title: node.name, source: node.source) }
                     }
                 }
             }
+            .padding(.leading, CGFloat(depth) * 14)
             if expanded {
-                if node.isLoading { ProgressView().controlSize(.mini).padding(.leading, 24) }
-                if let note = node.note { Text(note).font(.caption2).foregroundStyle(.secondary).padding(.leading, 24) }
-                if let children = node.children, depth < 12 {
+                if direction == .incoming, let s = site { CallSitePeek(ws: ws, site: s).padding(.leading, CGFloat(depth) * 14 + 16) }
+                if node.isLoading { ProgressView().controlSize(.mini).padding(.leading, CGFloat(depth) * 14 + 16) }
+                if let note = node.note { Text(note).font(.caption2).foregroundStyle(.tertiary).padding(.leading, CGFloat(depth) * 14 + 16) }
+                if let children = node.children, depth < 10 {
                     ForEach(ws.showTests ? children : children.filter { !$0.isTest }) { c in
-                        CallNodeRow(ws: ws, node: c, direction: direction, depth: depth + 1).padding(.leading, 14)
+                        CallTreeRow(ws: ws, node: c, direction: direction, depth: depth + 1)
                     }
                 }
             }
@@ -236,7 +455,187 @@ struct CallNodeRow: View {
     }
 }
 
-/// Named, ordered code paths: each step is a location plus a note on what happens there.
+/// Three lines of code around a call site.
+struct CallSitePeek: View {
+    let ws: Workspace
+    let site: CodeLocation
+    var body: some View {
+        if let doc = ws.docs.document(site.path) {
+            let lines = Array(max(0, site.line - 1)...min(doc.lines.lineCount - 1, site.line + 1))
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(lines, id: \.self) { l in
+                    HStack(spacing: 8) {
+                        Text(verbatim: String(l + 1)).foregroundStyle(.tertiary).frame(width: 34, alignment: .trailing)
+                        Text(doc.lineText(l)).lineLimit(1)
+                    }
+                    .padding(.vertical, 1)
+                    .background(l == site.line ? Color.accentColor.opacity(0.16) : .clear)
+                }
+            }
+            .font(.system(size: 10.5, design: .monospaced))
+            .padding(4)
+            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.secondary.opacity(0.18)))
+            .onTapGesture { ws.open(site, edge: .caller) }
+        }
+    }
+}
+
+/// The selected review hunk's impact.
+struct ChangeContextSection: View {
+    @Bindable var ws: Workspace
+    let review: ReviewSession
+    let hunk: Hunk
+    @Bindable var cc: ChangeContext
+
+    var body: some View {
+        let tier = review.tier(of: hunk)
+        let t = review.triage(of: hunk)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles").font(.caption).foregroundStyle(.purple)
+                    Text("Why this is \(tier.title.lowercased())").font(.callout.weight(.semibold))
+                    Spacer()
+                    Text(t == nil ? "rules" : t!.isQuick ? "quick pass" : "deep triage").font(.caption).foregroundStyle(.tertiary)
+                }
+                Text(t?.summary ?? t?.reason ?? review.reasons(of: hunk).joined(separator: "; ")).font(.callout).textSelection(.enabled)
+                if let t, t.summary != nil, t.reason != t.summary { Text(t.reason).font(.caption).foregroundStyle(.secondary) }
+                HStack(spacing: 6) {
+                    Button {
+                        let what = cc.enclosing ?? hunk.path.lastPathComponent
+                        ws.generateTrace("Trace the effect of the change in `\(what)` (\(review.location(of: hunk))) through the code: who depends on it and what behaves differently now.", includeAnchor: true)
+                        ws.inspectorPane = .paths
+                    } label: { Label("Trace from here", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
+                        .buttonStyle(.borderedProminent)
+                    if let loc = cc.enclosingLocation {
+                        Button("Go to \(loc.short)") { ws.open(loc) }.buttonStyle(.bordered)
+                    }
+                }
+                .controlSize(.small)
+            }
+            .padding(.top, 10)
+
+            if let o = review.overview {
+                DisclosureGroup("Change overview" + (review.overviewIsStale ? " (before latest edits)" : "")) {
+                    Text(o).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.caption.weight(.semibold)).padding(.top, 8)
+            }
+
+            if let e = cc.enclosing {
+                PaneSectionHeader(title: "Callers of \(e.split(separator: ":").last.map(String.init) ?? e)",
+                                  trailing: cc.callers.isEmpty ? nil : String(cc.callers.count), source: cc.source, loading: cc.loading && cc.callers.isEmpty)
+                if cc.callers.isEmpty && !cc.loading { Text("No callers found").font(.caption).foregroundStyle(.tertiary) }
+                ForEach(cc.callers) { n in CallTreeRow(ws: ws, node: n, direction: .incoming, depth: 0) }
+            }
+            ForEach(cc.callChanges) { change in
+                PaneSectionHeader(title: change.added ? "Other callers of \(change.name)" : "Remaining callers of \(change.name)",
+                                  subtitle: change.added ? "call added" : "call removed", trailing: String(change.callers.count), source: .textSearch)
+                if change.callers.isEmpty { Text("None left").font(.caption).foregroundStyle(.orange) }
+                ForEach(change.callers.prefix(8)) { n in CallTreeRow(ws: ws, node: n, direction: .incoming, depth: 0) }
+            }
+            PaneSectionHeader(title: "Tests that reach this hunk", loading: cc.loading)
+            ForEach(cc.tests) { n in CallTreeRow(ws: ws, node: n, direction: .incoming, depth: 0) }
+            if !cc.loading && cc.tests.isEmpty {
+                HStack(spacing: 6) {
+                    Text("no Rust test").font(.system(size: 9, weight: .semibold)).padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.orange)
+                    Text(verbatim: "No unit test calls \(cc.enclosing.map { $0.split(separator: ":").last.map(String.init) ?? $0 } ?? "this code")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(cc.testMentions.prefix(6)) { m in
+                    Button { ws.open(m.location, edge: .reference, source: .textSearch) } label: {
+                        HStack {
+                            Text(m.path).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.head)
+                            Spacer()
+                            Text(verbatim: String(m.line + 1)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 12)
+    }
+}
+
+/// Code Paths and Bookmarks as one line each while the context pane is showing.
+struct CollapsedRows: View {
+    @Bindable var ws: Workspace
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Code Paths").font(.caption.weight(.semibold)).frame(width: 78, alignment: .leading)
+                if ws.traces.traces.isEmpty {
+                    Text("none").font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    Button(ws.traces.active?.title ?? "\(ws.traces.traces.count) paths") { ws.inspectorPane = .paths }
+                        .buttonStyle(.link).font(.caption).lineLimit(1)
+                }
+                Spacer()
+                Button("New from cursor") { ws.newCodePath(fromCursor: true); ws.inspectorPane = .paths }.disabled(ws.document == nil)
+                Text("·").foregroundStyle(.tertiary)
+                Button("Generate") { ws.inspectorPane = .paths; ws.showGenerateTrace = true }
+            }
+            HStack(spacing: 6) {
+                Text("Bookmarks").font(.caption.weight(.semibold)).frame(width: 78, alignment: .leading)
+                if ws.bookmarks.items.isEmpty {
+                    Text("none").font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    Button("\(ws.bookmarks.items.count)") { ws.inspectorPane = .bookmarks }.buttonStyle(.link).font(.caption)
+                }
+                Spacer()
+                KeyCap("⇧⌘B"); Text("add").font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.link).font(.caption)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+}
+
+/// Where the pane's answers came from, stated once.
+struct ProvenanceFooter: View {
+    @Bindable var ws: Workspace
+    let showingHunk: Bool
+    @State private var showIndex = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            let src = showingHunk ? ws.changeContext?.source : ws.context?.details?.source
+            Circle().fill(color(src)).frame(width: 6, height: 6)
+            Text(verbatim: text(src)).lineLimit(1)
+            Spacer()
+            Button("Details") { showIndex.toggle() }.buttonStyle(.link)
+                .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.horizontal, 12).frame(height: 24)
+    }
+
+    func color(_ s: IntelSource?) -> Color {
+        switch s {
+        case .rustAnalyzer: .green
+        case .scip: .blue
+        case nil: ws.ra.status == .ready ? .green : .yellow
+        default: .orange
+        }
+    }
+
+    func text(_ s: IntelSource?) -> String {
+        var parts: [String] = []
+        if let s {
+            var p = "From \(s.label)"
+            if !showingHunk, let e = ws.context?.elapsed { p += String(format: " in %.1fs", e) }
+            parts.append(p)
+        } else {
+            parts.append("rust-analyzer " + ws.ra.status.label.lowercased())
+        }
+        if ws.scip.index != nil { parts.append(ws.scip.uncoveredFiles.isEmpty ? "index complete" : "index partial") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct TracePanel: View {
     @Bindable var ws: Workspace
     @Bindable var traces: TraceStore

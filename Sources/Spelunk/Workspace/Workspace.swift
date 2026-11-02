@@ -7,6 +7,13 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum ContextFocus { case symbol, hunk }
+
+enum InspectorPane: String, CaseIterable, Identifiable {
+    case context = "Context", paths = "Code Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
+    var id: String { rawValue }
+}
+
 enum ReviewSide: String, CaseIterable { case before = "Before", after = "After" }
 
 /// How a review shows a file: the new version with removed lines inline, both versions side by
@@ -34,6 +41,17 @@ final class SymbolContext {
     var loadingReferences = false
     var loadingCalls = false
     var loadingImpls = false
+    var callers: [CallNode] = []
+    var callees: [CallNode] = []
+    var loadingCallers = false
+    var loadingCallees = false
+    /// Text matches outside Rust files (scripts, docs, SQL tests).
+    var mentions: [TextMatch] = []
+    /// "Method of Instance", from the definition's enclosing impl or trait.
+    var container: String?
+    var isPublic: Bool?
+    var started = Date()
+    var elapsed: TimeInterval?
 
     init(name: String, path: String, pos: SourcePos) { self.name = name; self.path = path; self.pos = pos }
 }
@@ -76,6 +94,19 @@ final class Workspace {
     /// How the current location was reached; becomes the edge of a step added here.
     var arrival: (edge: TraceEdge, source: IntelSource)?
     var editingStepID: UUID?
+    var changeContext: ChangeContext?
+    /// Which subject the context pane shows; set by the last hunk selection or symbol click.
+    var contextFocus: ContextFocus = .symbol
+    /// Keeps the current symbol in the context pane while you click elsewhere.
+    var contextPinned = false
+    var inspectorPane: InspectorPane = .context
+    var showGenerateTrace = false
+
+    /// Whether the open file is part of the review being shown (diff controls apply only then).
+    var documentInReview: Bool {
+        guard let r = review, let d = document else { return false }
+        return sidebarTab == .changes || r.files.contains { $0.newPath == d.path || $0.oldPath == d.path }
+    }
     var palette: PaletteMode? { didSet { if palette != oldValue { paletteQuery = "" } } }
     var paletteQuery = ""
     var scmSection: SCMSection = .changes
@@ -321,6 +352,8 @@ final class Workspace {
     func didClick(at p: SourcePos) {
         cursor = p
         guard let d = document, let (name, range) = d.word(at: p) else { return }
+        if contextPinned { return }
+        contextFocus = .symbol
         if context?.name == name && context?.path == d.path && context?.pos.line == p.line { return }
         let isWorkingCopy = d.revisionLabel == nil
         // Code intelligence answers about the files on disk. For a Before/After view, query the same
@@ -343,9 +376,14 @@ final class Workspace {
             }
             ctx.details = await intel.details(path: d.path, at: queryPos, name: name)
             guard context === ctx else { return }
-            await loadReferences(ctx)
-            await loadCalls(ctx)
+            describeContainer(ctx)
+            async let refs: Void = loadReferences(ctx)
+            async let both: Void = loadCallersAndCallees(ctx)
+            await refs
+            await both
+            ctx.elapsed = Date().timeIntervalSince(ctx.started)
             await loadImplementations(ctx)
+            await loadMentions(ctx)
         }
     }
 
@@ -362,6 +400,39 @@ final class Workspace {
         ctx.references = refs
         ctx.referencesSource = src
         ctx.loadingReferences = false
+    }
+
+    func loadCallersAndCallees(_ ctx: SymbolContext) async {
+        ctx.loadingCallers = true
+        ctx.loadingCallees = true
+        ctx.callers = await intel.callRoots(.incoming, path: ctx.path, at: ctx.pos, name: ctx.name)
+        ctx.loadingCallers = false
+        let callees = await intel.callRoots(.outgoing, path: ctx.path, at: ctx.pos, name: ctx.name)
+        // In call order: by the first call site.
+        ctx.callees = callees.sorted { ($0.callSites.first?.line ?? .max, $0.callSites.first?.range.start.col ?? 0) < ($1.callSites.first?.line ?? .max, $1.callSites.first?.range.start.col ?? 0) }
+        ctx.loadingCallees = false
+        ctx.calls = ctx.callDirection == .incoming ? ctx.callers : ctx.callees
+    }
+
+    private func describeContainer(_ ctx: SymbolContext) {
+        guard let def = ctx.details?.definition, let doc = docs.document(def.path),
+              let item = doc.syntax.flatOutline.first(where: { $0.nameRange.start.line == def.line && $0.name == ctx.name }) else { return }
+        ctx.isPublic = item.isPublic
+        if let p = item.parent {
+            let what = item.kind == .method ? "Method" : item.kind.label
+            ctx.container = p.kind == .impl ? "\(what) of \(p.name)" : "\(what) in \(p.kind.label.lowercased()) \(p.name)"
+        }
+    }
+
+    func loadMentions(_ ctx: SymbolContext) async {
+        guard ctx.name.count >= 4 else { return }
+        var opts = TextSearch.Options()
+        opts.wholeWord = true
+        opts.caseSensitive = true
+        opts.globs = ["!*.rs"]
+        opts.limit = 40
+        let hits = (try? await TextSearch.search(root: root, query: ctx.name, options: opts)) ?? []
+        if context === ctx { ctx.mentions = hits }
     }
 
     func loadCalls(_ ctx: SymbolContext) async {
@@ -480,6 +551,8 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
+        if !contextPinned { contextFocus = .hunk }
+        if changeContext?.hunkID != h.id { loadChangeContext(for: h) }
         guard let r = review, let f = r.file(for: h) else { return }
         Task {
             let side: ReviewSession.Side = (reviewSide == .before || f.status == .deleted) ? .old : .new

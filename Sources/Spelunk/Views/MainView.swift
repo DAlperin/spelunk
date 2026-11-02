@@ -122,7 +122,7 @@ struct MainToolbar: ToolbarContent {
             ReviewTargetMenu(ws: ws, showPicker: $showReviewPicker)
                 .popover(isPresented: $showReviewPicker) { ReviewPicker(ws: ws, dismiss: { showReviewPicker = false }) }
 
-            if ws.review != nil {
+            if ws.documentInReview {
                 Picker("Diff", selection: Binding(get: { ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
                     ForEach(DiffMode.toolbar) { Text($0.rawValue).tag($0) }
                 }

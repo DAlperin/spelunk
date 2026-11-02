@@ -261,6 +261,14 @@ final class IntelHub {
         n.isTest = FileClassifier.isTest(path) || (docs.document(path)?.syntax.isTestLine(n.location.line) ?? false)
     }
 
+    /// Callers of a function known only by name (for example one a diff removed calls to), found by
+    /// searching for call expressions and grouping by enclosing function.
+    func callersByName(_ name: String) async -> [CallNode] {
+        let node = CallNode(name: name, detail: "", location: CodeLocation(path: "", range: SourceRange(line: 0)), callSites: [],
+                            source: .textSearch, payload: nil, ancestry: [])
+        return await fallbackCallers(of: node, ancestry: [])
+    }
+
     private func fallbackCallers(of node: CallNode, ancestry: Set<String>) async -> [CallNode] {
         var sites: [CodeLocation] = []
         var source = IntelSource.textSearch
