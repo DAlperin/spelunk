@@ -27,6 +27,11 @@ struct ChangesView: View {
     var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(review.title).font(.headline).lineLimit(2)
+            if let pr = review.pullRequest {
+                PullRequestHeader(ws: ws, review: review, pr: pr)
+            } else if let e = review.githubError {
+                Text(e).font(.caption).foregroundStyle(.red).lineLimit(3)
+            }
             HStack(spacing: 8) {
                 let p = review.progress
                 ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(width: 80)
@@ -42,7 +47,8 @@ struct ChangesView: View {
                 } label: {
                     Label(review.llm.isEmpty ? "Triage with Claude" : "Re-triage", systemImage: "sparkles")
                 }
-                .disabled(review.triageState == "Asking Claude" || review.state != .ready)
+                .disabled(review.triaging || review.state != .ready)
+                ModelMenu(task: .triage)
                 Picker("", selection: $review.groupByTier) {
                     Text("By importance").tag(true)
                     Text("By file").tag(false)
@@ -95,17 +101,33 @@ struct ChangesView: View {
                     if !hs.isEmpty {
                         Section {
                             if review.hideTiers.contains(tier) {
-                                Text("\(hs.count) hunks hidden").font(.caption).foregroundStyle(.secondary)
+                                Button {
+                                    review.hideTiers.remove(tier)
+                                } label: {
+                                    Label("Show \(hs.count) \(tier.shortTitle.lowercased()) hunks", systemImage: "chevron.down")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .selectionDisabled()
                             } else {
                                 ForEach(hs) { h in HunkRow(review: review, hunk: h, showFile: true).tag(h.id) }
                             }
                         } header: {
-                            HStack {
-                                Circle().fill(tier.color).frame(width: 7, height: 7)
-                                Text(tier.title)
-                                Spacer()
-                                Text("\(hs.count)").foregroundStyle(.secondary)
+                            Button {
+                                if review.hideTiers.contains(tier) { review.hideTiers.remove(tier) } else { review.hideTiers.insert(tier) }
+                            } label: {
+                                HStack {
+                                    Image(systemName: review.hideTiers.contains(tier) ? "chevron.right" : "chevron.down").font(.caption2)
+                                    Circle().fill(tier.color).frame(width: 7, height: 7)
+                                    Text(tier.title)
+                                    Spacer()
+                                    Text("\(hs.count)").foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .help(review.hideTiers.contains(tier) ? "Show these hunks" : "Collapse these hunks")
                         }
                     }
                 }
@@ -147,6 +169,13 @@ struct HunkRow: View {
                 Text(a?.enclosing ?? hunk.path.lastPathComponent)
                     .font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1)
                 Spacer()
+                let threads = review.threads(for: hunk)
+                if !threads.isEmpty {
+                    let open = threads.filter { !$0.isResolved }.count
+                    Label("\(threads.count)", systemImage: open > 0 ? "bubble.left.fill" : "bubble.left")
+                        .font(.caption2).foregroundStyle(open > 0 ? .orange : .secondary).labelStyle(.titleAndIcon)
+                }
+                if !review.pending(for: hunk).isEmpty { Image(systemName: "pencil.circle.fill").font(.caption2).foregroundStyle(.blue) }
                 if review.llm[hunk.id] != nil { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.purple) }
                 Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption2.monospaced()).foregroundStyle(.secondary)
             }

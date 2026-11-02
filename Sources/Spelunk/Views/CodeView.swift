@@ -90,6 +90,7 @@ struct CodeView: NSViewRepresentable {
         c.diagnostics = document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
         c.traceLines = Set((ws.traces.active?.steps ?? []).filter { $0.location.path == document.path }.map(\.location.line))
         c.bookmarkedLines = Set(ws.bookmarks.items.filter { $0.location.path == document.path }.map(\.location.line))
+        c.commentLines = ws.commentLines(for: document)
         c.applyBackgrounds(selection: ws.selection, highlights: ws.highlightRanges)
         if c.revealToken != ws.revealRequest {
             c.revealToken = ws.revealRequest
@@ -110,6 +111,8 @@ struct CodeView: NSViewRepresentable {
         var diagnostics: [Diagnostic] = []
         var traceLines: Set<Int> = []
         var bookmarkedLines: Set<Int> = []
+        /// Zero-based line -> true when an unresolved thread or pending comment sits there.
+        var commentLines: [Int: Bool] = [:]
         private var lastBackgroundKey = ""
 
         init(ws: Workspace) { self.ws = ws }
@@ -190,7 +193,7 @@ struct CodeView: NSViewRepresentable {
                 let visible = clip.bounds
                 let maxY = max(0, tv.frame.height - visible.height)
                 let y = min(maxY, max(0, rect.midY - visible.height * 0.35))
-                let x = rect.maxX + 40 > visible.width - 58 ? max(0, rect.minX - 80) : 0
+                let x = rect.maxX + 40 > visible.width - 72 ? max(0, rect.minX - 80) : 0
                 let left = tv.enclosingScrollView?.contentInsets.left ?? 0
                 clip.setBoundsOrigin(NSPoint(x: x - left, y: y))
                 tv.enclosingScrollView?.reflectScrolledClipView(clip)
@@ -227,20 +230,16 @@ struct CodeView: NSViewRepresentable {
                 }
                 m.addItem(.separator())
             }
-            item("Add to Trace") { [ws] in ws.addCurrentToTrace() }
-            item(ws.traces.isRecording ? "Stop Recording Trace" : "Start Recording Trace Here") { [ws] in
-                if ws.traces.isRecording { ws.traces.isRecording = false } else {
-                    ws.traces.startRecording(from: ws.currentLocation.map { loc in
-                        TraceStep(title: word ?? loc.shortDescription, location: loc, edge: .start, source: .manual,
-                                  snippet: ws.document?.lineText(loc.line).trimmingCharacters(in: .whitespaces) ?? "")
-                    })
-                }
-            }
+            item("Add to Code Path") { [ws] in ws.addCurrentToTrace() }
+            item("New Code Path from Here") { [ws] in ws.newCodePath(fromCursor: true) }
             item("Toggle Bookmark") { [ws] in ws.toggleBookmark() }
+            if ws.review?.pullRequest != nil {
+                item("Add Review Comment…") { [ws] in ws.draftComment() }
+            }
             m.addItem(.separator())
             item("Ask Claude About This…") { [ws] in ws.showAsk = true }
             if let word {
-                item("Trace “\(word)” with Claude") { [ws] in
+                item("Generate Code Path for “\(word)” with Claude") { [ws] in
                     ws.generateTrace("How does `\(word)` get invoked, and what does it do end to end?", includeAnchor: true)
                 }
             }
@@ -292,7 +291,7 @@ final class SourceTextView: NSTextView {
 final class GutterView: NSView {
     weak var textView: NSTextView?
     weak var coordinator: CodeView.Coordinator?
-    let thickness: CGFloat = 58
+    let thickness: CGFloat = 72
 
     init(textView: NSTextView, coordinator: CodeView.Coordinator) {
         self.textView = textView
@@ -312,9 +311,9 @@ final class GutterView: NSView {
         Theme.gutter.setFill()
         bounds.fill()
         guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
-        let (diff, diags, trace, marks, doc, selLine) = MainActor.assumeIsolated {
+        let (diff, diags, trace, marks, doc, selLine, comments) = MainActor.assumeIsolated {
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
-             coordinator?.bookmarkedLines ?? [], coordinator?.document, coordinator?.ws.cursor?.line)
+             coordinator?.bookmarkedLines ?? [], coordinator?.document, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         }
         guard let doc, doc.ns.length > 0 else { return }
         let visible = tv.visibleRect
@@ -340,15 +339,20 @@ final class GutterView: NSView {
             }
             if let d = diagLines[line]?.first {
                 (d.level == .error ? NSColor.systemRed : NSColor.systemYellow).setFill()
-                NSBezierPath(ovalIn: NSRect(x: 4, y: y + h / 2 - 3, width: 6, height: 6)).fill()
+                NSBezierPath(ovalIn: NSRect(x: 17, y: y + h / 2 - 3, width: 6, height: 6)).fill()
             }
             if trace.contains(line) {
                 NSColor.systemPurple.setFill()
-                NSBezierPath(roundedRect: NSRect(x: 12, y: y + h / 2 - 3, width: 6, height: 6), xRadius: 1, yRadius: 1).fill()
+                NSBezierPath(roundedRect: NSRect(x: 25, y: y + h / 2 - 3, width: 6, height: 6), xRadius: 1, yRadius: 1).fill()
+            }
+            if let open = comments[line] {
+                let img = NSImage(systemSymbolName: open ? "bubble.left.fill" : "bubble.left", accessibilityDescription: nil)
+                let tinted = img?.withSymbolConfiguration(.init(paletteColors: [open ? .systemOrange : .secondaryLabelColor]))
+                tinted?.draw(in: NSRect(x: 3, y: y + h / 2 - 5, width: 11, height: 10))
             }
             if marks.contains(line) {
                 NSColor.systemBlue.setFill()
-                NSRect(x: 20, y: y + 2, width: 3, height: h - 4).fill()
+                NSRect(x: 33, y: y + 2, width: 3, height: h - 4).fill()
             }
             let str = NSAttributedString(string: "\(line + 1)", attributes: line == selLine ? boldAttrs : attrs)
             let size = str.size()

@@ -63,6 +63,18 @@ struct MainView: View {
         .toolbar { MainToolbar(ws: ws, showInspector: $showInspector) }
         .navigationTitle(ws.name)
         .sheet(isPresented: $ws.showAsk) { AskSheet(ws: ws) }
+        .sheet(item: $ws.commentDraft) { d in CommentSheet(ws: ws, draft: d) }
+        .sheet(isPresented: $ws.showSubmitReview) {
+            if let r = ws.review { SubmitReviewSheet(ws: ws, review: r) }
+        }
+        .overlay(alignment: .top) {
+            if let mode = ws.palette {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.08).ignoresSafeArea().onTapGesture { ws.palette = nil }
+                    PaletteView(ws: ws, mode: mode).padding(.top, 40)
+                }
+            }
+        }
     }
 }
 
@@ -109,19 +121,8 @@ struct MainToolbar: ToolbarContent {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { ws.showAsk = true } label: { Image(systemName: "sparkles") }.help("Ask Claude (⌘L)")
-            Button {
-                if ws.traces.isRecording { ws.traces.isRecording = false } else {
-                    ws.traces.startRecording(from: ws.currentLocation.map { loc in
-                        TraceStep(title: ws.document?.syntax.enclosingItem(line: loc.line)?.qualifiedName ?? loc.shortDescription,
-                                  location: loc, edge: .start, source: .manual,
-                                  snippet: ws.document?.lineText(loc.line).trimmingCharacters(in: .whitespaces) ?? "")
-                    })
-                }
-            } label: {
-                Image(systemName: ws.traces.isRecording ? "record.circle.fill" : "record.circle")
-                    .foregroundStyle(ws.traces.isRecording ? .red : .primary)
-            }
-            .help(ws.traces.isRecording ? "Stop recording trace" : "Record navigation as a trace")
+            Button { ws.addCurrentToTrace() } label: { Image(systemName: "point.topleft.down.to.point.bottomright.curvepath") }
+                .help("Add cursor location to the code path (⇧⌘T)")
             Button { showInspector.toggle() } label: { Image(systemName: "sidebar.right") }.help("Toggle context pane")
         }
     }
@@ -202,7 +203,8 @@ struct EditorColumn: View {
                 CodeView(ws: ws, document: doc)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ContentUnavailableView("No file open", systemImage: "doc.text", description: Text("Pick a file from the sidebar."))
+                ContentUnavailableView("No file open", systemImage: "doc.text", description: Text("Pick a file from the sidebar, or press ⌘K."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
             StatusBar(ws: ws)
@@ -233,9 +235,6 @@ struct BreadcrumbBar: View {
                 }
             }
             Spacer()
-            if ws.traces.isRecording {
-                Label("Recording trace", systemImage: "record.circle.fill").foregroundStyle(.red).font(.caption)
-            }
         }
         .font(.system(size: 12))
         .lineLimit(1)
@@ -251,7 +250,7 @@ struct StatusBar: View {
     var body: some View {
         HStack(spacing: 10) {
             if let d = ws.document {
-                Text(d.language.displayName)
+                Text(d.languageName)
                 Text("\(d.lines.lineCount) lines").foregroundStyle(.secondary)
                 if d.language == .rust {
                     if d.syntax.errorCount > 0 {
@@ -386,7 +385,7 @@ struct IndexPopover: View {
                 }
             }
             Divider()
-            row("Claude", Claude.binary == nil ? "claude CLI not found" : "claude CLI · \(Claude.model)", color: Claude.binary == nil ? .red : .purple) {
+            row("Claude", Claude.binary == nil ? "claude CLI not found" : "claude CLI · questions \(Claude.model(for: .ask)), traces \(Claude.model(for: .trace)), triage \(Claude.model(for: .triage))", color: Claude.binary == nil ? .red : .purple) {
                 Text("Questions, generated traces and review triage. Read-only tools (Read, Grep, Glob), rooted at the repository.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -446,13 +445,19 @@ struct HunkStrip: View {
                 Spacer()
                 Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 Button(showDiff ? "Hide diff" : "Show diff") { showDiff.toggle() }.fixedSize()
+                if review.pullRequest != nil {
+                    Button("Comment") { ws.draftComment() }.fixedSize().help("Comment on the cursor line")
+                }
                 Toggle("Viewed", isOn: Binding(get: { review.viewed.contains(hunk.id) }, set: { _ in review.toggleViewed(hunk.id) }))
                     .toggleStyle(.checkbox).fixedSize()
-                Button { ReviewNav.previous(ws) } label: { Image(systemName: "chevron.up") }.help("Previous hunk (⌘K)")
+                Button { ReviewNav.previous(ws) } label: { Image(systemName: "chevron.up") }.help("Previous hunk (⇧⌘J)")
                 Button { ReviewNav.next(ws) } label: { Image(systemName: "chevron.down") }.help("Next hunk (⌘J)")
             }
             if let s = review.llm[hunk.id]?.summary {
                 Label(s, systemImage: "sparkles").font(.caption).foregroundStyle(.purple)
+            }
+            if review.pullRequest != nil {
+                ScrollView { HunkConversation(ws: ws, review: review, hunk: hunk) }.frame(maxHeight: 220).fixedSize(horizontal: false, vertical: true)
             }
             if showDiff {
                 UnifiedHunkView(hunk: hunk).frame(maxHeight: 220)

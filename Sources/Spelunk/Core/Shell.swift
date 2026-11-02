@@ -37,6 +37,11 @@ enum Shell {
         env["CLICOLOR"] = "0"
         env["GIT_PAGER"] = "cat"
         env["PAGER"] = "cat"
+        // Never block on an interactive editor; tools fall back to the message they were given.
+        env["EDITOR"] = "true"
+        env["VISUAL"] = "true"
+        env["JJ_EDITOR"] = "true"
+        env["GIT_EDITOR"] = "true"
         return env
     }
 

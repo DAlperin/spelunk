@@ -1,5 +1,33 @@
 import Foundation
 
+/// The app's Claude features; each has its own model and effort setting.
+enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
+    case ask, trace, triage
+
+    var id: String { rawValue }
+    var modelKey: String { "claude.model.\(rawValue)" }
+    var effortKey: String { "claude.effort.\(rawValue)" }
+    var defaultModel: String { "opus" }
+
+    var label: String {
+        switch self {
+        case .ask: "Questions"
+        case .trace: "Traces"
+        case .triage: "Review triage"
+        }
+    }
+}
+
+enum ClaudeModels {
+    /// CLI aliases resolve to the latest model in each family; full model names also work.
+    static let aliases: [(id: String, label: String)] = [
+        ("fable", "Fable"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"),
+    ]
+    static let efforts = ["low", "medium", "high", "xhigh", "max"]
+
+    static func label(_ id: String) -> String { aliases.first { $0.id == id }?.label ?? id }
+}
+
 /// Progress events from a running Claude session.
 enum ClaudeEvent: Sendable {
     case toolUse(name: String, summary: String)
@@ -23,9 +51,14 @@ struct ClaudeError: Error, LocalizedError {
 /// The invocation strips MCP servers, user settings and slash commands: with them loaded the
 /// prompt cache creation alone was ~350k tokens per call, without them ~4k.
 enum Claude {
-    static var model: String {
-        let m = UserDefaults.standard.string(forKey: "claudeModel") ?? ""
-        return m.isEmpty ? "sonnet" : m
+    static func model(for task: ClaudeTask) -> String {
+        let m = UserDefaults.standard.string(forKey: task.modelKey) ?? ""
+        return m.isEmpty ? task.defaultModel : m
+    }
+
+    static func effort(for task: ClaudeTask) -> String? {
+        let e = UserDefaults.standard.string(forKey: task.effortKey) ?? ""
+        return e.isEmpty ? nil : e
     }
 
     static var binary: String? {
@@ -37,9 +70,9 @@ enum Claude {
         prompt: String,
         system: String,
         cwd: URL,
+        task: ClaudeTask,
         schema: [String: Any]? = nil,
         tools: [String] = ["Read", "Grep", "Glob"],
-        model: String? = nil,
         onEvent: @escaping @Sendable (ClaudeEvent) -> Void = { _ in }
     ) async throws -> ClaudeResult {
         guard let bin = binary else { throw ClaudeError(message: "claude CLI not found on PATH (set it in Settings)") }
@@ -47,9 +80,10 @@ enum Claude {
             "-p", "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#,
             "--disable-slash-commands", "--setting-sources", "project",
-            "--model", model ?? self.model,
+            "--model", model(for: task),
             "--append-system-prompt", system,
         ]
+        if let effort = effort(for: task) { args += ["--effort", effort] }
         if tools.isEmpty {
             args += ["--tools", ""]
         } else {

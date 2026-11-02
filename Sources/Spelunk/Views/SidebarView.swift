@@ -6,18 +6,17 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             Picker("", selection: $ws.sidebarTab) {
-                ForEach(SidebarTab.allCases) { t in
-                    if t != .changes || ws.review != nil { Text(t.rawValue).tag(t) }
-                }
+                ForEach(SidebarTab.allCases) { t in Text(t.rawValue).tag(t) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(8)
             switch ws.sidebarTab {
             case .changes:
-                if let r = ws.review { ChangesView(ws: ws, review: r) } else { FileTreeView(ws: ws) }
+                if let r = ws.review { ChangesView(ws: ws, review: r) } else { NoReviewView(ws: ws) }
             case .files: FileTreeView(ws: ws)
             case .search: SearchView(ws: ws)
+            case .scm: SCMView(ws: ws)
             }
         }
     }
@@ -32,13 +31,23 @@ struct FileTreeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField("Filter files", text: $filter)
+            TextField(ws.childRepos.isEmpty ? "Filter files" : "Filter repositories", text: $filter)
                 .textFieldStyle(.roundedBorder)
                 .focused($filterFocused)
                 .padding(.horizontal, 8).padding(.bottom, 6)
                 .onChange(of: model.focusFilter) { filterFocused = true }
-                .onSubmit { if let first = matches.first { open(first) } }
-            if filter.isEmpty {
+                .onSubmit {
+                    if !ws.childRepos.isEmpty {
+                        if let first = NotARepoView.filtered(ws.childRepos, filter).first { model.open(first) }
+                    } else if let first = matches.first {
+                        open(first)
+                    }
+                }
+            if ws.loadingFiles {
+                ProgressView("Listing files…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !ws.childRepos.isEmpty {
+                NotARepoView(ws: ws, filter: filter)
+            } else if filter.isEmpty {
                 List(selection: Binding(get: { ws.document?.path }, set: { p in if let p, !isDir(p) { open(p) } })) {
                     OutlineGroup(ws.tree.children ?? [], children: \.children) { node in
                         FileRow(node: node, changed: changedTier(node.path))
@@ -70,7 +79,7 @@ struct FileTreeView: View {
         }
     }
 
-    private func isDir(_ p: String) -> Bool { !ws.allFiles.contains(p) }
+    private func isDir(_ p: String) -> Bool { !ws.allFileSet.contains(p) }
 
     private func open(_ p: String) { ws.open(CodeLocation(path: p, range: SourceRange(line: 0))) }
 
@@ -91,21 +100,104 @@ struct FileTreeView: View {
 }
 
 enum Fuzzy {
-    /// Subsequence match; rewards matches in the file name and consecutive runs.
+    /// Space-separated fragments must appear in order. Each fragment prefers to start at a word
+    /// boundary (after `/`, `_`, `-`, `.`), consecutive runs score more, and a last fragment that
+    /// lands in the file name earns a bonus.
     static func score(_ q: String, _ s: String) -> Int? {
-        guard !q.isEmpty else { return 0 }
-        let qa = Array(q), sa = Array(s)
-        let nameStart = (s.lastIndex(of: "/").map { s.distance(from: s.startIndex, to: $0) } ?? -1) + 1
-        var qi = 0, score = 0, run = 0
-        for (i, c) in sa.enumerated() where qi < qa.count {
-            if c == qa[qi] {
-                qi += 1; run += 1
-                score += 1 + run * 2 + (i >= nameStart ? 3 : 0)
-            } else { run = 0 }
+        let fragments = q.split(separator: " ").map { Array($0) }.filter { !$0.isEmpty }
+        guard !fragments.isEmpty else { return 0 }
+        let sa = Array(s)
+        let nameStart = (sa.lastIndex(of: "/") ?? -1) + 1
+        func isBoundary(_ i: Int) -> Bool { i == 0 || "/_-. ".contains(sa[i - 1]) }
+
+        /// Greedy subsequence match of `frag` starting exactly at `start`; returns (score, end).
+        func match(_ frag: [Character], from start: Int) -> (Int, Int)? {
+            var qi = 0, i = start, score = 0, run = 0
+            while i < sa.count && qi < frag.count {
+                if sa[i] == frag[qi] {
+                    run += 1
+                    score += 1 + run * 2 + (i >= nameStart ? 3 : 0) + (isBoundary(i) ? 6 : 0)
+                    qi += 1
+                } else {
+                    run = 0
+                }
+                i += 1
+            }
+            return qi == frag.count ? (score, i) : nil
         }
-        guard qi == qa.count else { return nil }
-        if s.hasSuffix(q) { score += 20 }
-        return score - sa.count / 10
+
+        var pos = 0, total = 0
+        for (fi, frag) in fragments.enumerated() {
+            var best: (Int, Int)?
+            // Try boundary starts first; fall back to the earliest possible start.
+            var i = pos
+            while i < sa.count {
+                if sa[i] == frag[0], isBoundary(i), let m = match(frag, from: i) {
+                    if best == nil || m.0 > best!.0 { best = m }
+                    if fi == fragments.count - 1 && i >= nameStart { break }
+                }
+                i += 1
+            }
+            if best == nil, let first = sa[pos...].firstIndex(of: frag[0]) { best = match(frag, from: first) }
+            guard let (sc, end) = best else { return nil }
+            total += sc
+            if fi == fragments.count - 1 && end > nameStart && end - frag.count >= nameStart - 1 { total += 25 }
+            pos = end
+        }
+        if fragments.count == 1, s.hasSuffix(String(fragments[0])) { total += 20 }
+        return total - sa.count / 10
+    }
+}
+
+struct NoReviewView: View {
+    @Bindable var ws: Workspace
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("No review open").font(.headline)
+                Text("Pick a change to review. Hunks are sorted by importance; mechanical changes are hidden by default.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ReviewPicker(ws: ws, dismiss: {})
+                Button("Browse pull requests") { ws.sidebarTab = .scm; ws.scmSection = .pullRequests }
+                    .buttonStyle(.link).disabled(!ws.vcs.hasGit)
+            }
+            .padding(10)
+        }
+    }
+}
+
+struct NotARepoView: View {
+    @Bindable var ws: Workspace
+    var filter: String
+    @Environment(AppModel.self) var model
+
+    /// Repositories matching the filter, best first; all of them, by name, when it is empty.
+    static func filtered(_ repos: [URL], _ filter: String) -> [URL] {
+        let q = filter.lowercased().trimmingCharacters(in: .whitespaces)
+        let byName = repos.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard !q.isEmpty else { return byName }
+        return byName.compactMap { u -> (URL, Int)? in Fuzzy.score(q, u.lastPathComponent.lowercased()).map { (u, $0) } }
+            .sorted { $0.1 > $1.1 }.map(\.0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("This folder is not a repository").font(.headline)
+            if let p = ws.vcs.problem { Text(p).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+            HStack {
+                let shown = Self.filtered(ws.childRepos, filter)
+                Text(filter.isEmpty ? "\(ws.childRepos.count) repositories inside:" : "\(shown.count) of \(ws.childRepos.count) repositories")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Browse files anyway") { ws.childRepos = [] }.controlSize(.small)
+            }
+            List(Self.filtered(ws.childRepos, filter), id: \.self) { u in
+                Button { model.open(u) } label: { Label(u.lastPathComponent, systemImage: "shippingbox") }
+                    .buttonStyle(.plain)
+            }
+            .listStyle(.sidebar)
+        }
+        .padding(.horizontal, 10)
     }
 }
 

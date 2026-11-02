@@ -11,7 +11,7 @@ struct AskSheet: View {
             HStack {
                 Label("Ask Claude", systemImage: "sparkles").font(.headline)
                 Spacer()
-                Text(Claude.model).font(.caption).foregroundStyle(.secondary)
+                ModelMenu(task: .ask)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             ScrollViewReader { proxy in
@@ -130,12 +130,19 @@ struct CitedText: View {
 struct SettingsView: View {
     @AppStorage("rustAnalyzerPath") var raPath = ""
     @AppStorage("claudePath") var claudePath = ""
-    @AppStorage("claudeModel") var model = "sonnet"
     @AppStorage("fontSize") var fontSize = 13.0
     @AppStorage("autoStartRA") var autoStart = true
     @State private var detected = "…"
 
     var body: some View {
+        TabView {
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            LanguagesSettings().tabItem { Label("Languages", systemImage: "chevron.left.forwardslash.chevron.right") }
+        }
+        .frame(width: 680, height: 560)
+    }
+
+    var general: some View {
         Form {
             Section("rust-analyzer") {
                 TextField("Path (empty = auto-detect)", text: $raPath)
@@ -143,19 +150,14 @@ struct SettingsView: View {
                     .task { detected = await RustAnalyzer.resolveBinary() ?? "none" }
                 Toggle("Start automatically for Cargo workspaces", isOn: $autoStart)
             }
-            Section("Claude") {
+            ClaudeSettingsSection()
+            Section("Claude CLI") {
                 TextField("claude CLI path (empty = PATH)", text: $claudePath)
-                Picker("Model", selection: $model) {
-                    Text("Sonnet").tag("sonnet")
-                    Text("Opus").tag("opus")
-                    Text("Haiku").tag("haiku")
-                }
             }
             Section("Editor") {
                 Stepper("Font size: \(Int(fontSize))", value: $fontSize, in: 9...24)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
     }
 }

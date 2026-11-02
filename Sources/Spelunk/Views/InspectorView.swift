@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case trace = "Trace", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
+    case trace = "Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
     var id: String { rawValue }
 }
 
@@ -203,8 +203,9 @@ struct CallNodeRow: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
-                    Button("Add to Trace") {
-                        ws.traces.append(TraceStep(title: node.name, location: node.location, edge: direction == .incoming ? .caller : .callee, source: node.source))
+                    Button("Add to Code Path") {
+                        ws.traces.insert(TraceStep(title: node.name, location: node.location, edge: direction == .incoming ? .caller : .callee, source: node.source,
+                                                   snippet: ws.docs.document(node.location.path)?.lineText(node.location.line).trimmingCharacters(in: .whitespaces) ?? ""))
                     }
                     if node.callSites.count > 1 {
                         ForEach(node.callSites, id: \.self) { s in
@@ -226,87 +227,142 @@ struct CallNodeRow: View {
     }
 }
 
+/// Named, ordered code paths: each step is a location plus a note on what happens there.
 struct TracePanel: View {
     @Bindable var ws: Workspace
     @Bindable var traces: TraceStore
     @State private var question = ""
+    @State private var showGenerate = false
     @State private var renaming = false
-    @State private var editingNote: UUID?
+    @State private var newTitle = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(spacing: 6) {
+                Text("Code Paths").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if let t = traces.active { Text("\(t.steps.count) steps").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Button { ws.addCurrentToTrace() } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .disabled(ws.document == nil)
+                    .help("Add the cursor location after the current step (⇧⌘T)")
                 Menu {
-                    ForEach(traces.traces) { t in
-                        Button {
-                            traces.activeID = t.id; traces.currentStep = nil
-                        } label: {
-                            Label("\(t.title) (\(t.steps.count))", systemImage: t.origin == .claude ? "sparkles" : t.origin == .recorded ? "record.circle" : "list.number")
-                        }
-                    }
-                    Divider()
-                    Button("New empty trace") { traces.create(title: "Untitled trace", origin: .manual) }
+                    Button("New Code Path") { ws.newCodePath(fromCursor: false) }
+                    Button("New Code Path from Cursor") { ws.newCodePath(fromCursor: true) }.disabled(ws.document == nil)
+                    Button("Generate with Claude…") { showGenerate = true }
                     if let t = traces.active {
+                        Divider()
+                        Button("Rename…") { newTitle = t.title; renaming = true }
+                        Button("Duplicate") { traces.duplicateActive() }
                         Button("Copy as Markdown") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(t.markdown(), forType: .string)
                         }
-                        Button("Rename…") { renaming = true }
+                        Divider()
                         Button("Delete", role: .destructive) { traces.delete(t.id) }
                     }
-                } label: {
-                    Text(traces.active?.title ?? "No trace").lineLimit(1)
-                }
+                } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton)
-                Spacer()
-                if let t = traces.active { Text("\(t.steps.count) steps").font(.caption).foregroundStyle(.secondary) }
+                .fixedSize()
             }
             .padding(.horizontal, 10)
 
-            HStack {
-                TextField("Ask Claude to trace… e.g. how a peek reaches the replica", text: $question)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(generate)
-                Button(action: generate) { Image(systemName: "sparkles") }
-                    .disabled(question.isEmpty || ws.traceGenerating != nil)
-                    .help("Generate a trace with Claude, anchored at the cursor")
+            if !traces.traces.isEmpty {
+                Picker("", selection: Binding(get: { traces.activeID }, set: { traces.activeID = $0; traces.currentStep = nil })) {
+                    ForEach(traces.traces) { t in
+                        Text(t.title).tag(Optional(t.id))
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 10)
-            if let g = ws.traceGenerating {
-                HStack { ProgressView().controlSize(.mini); Text(g).font(.caption).foregroundStyle(.purple).lineLimit(1) }.padding(.horizontal, 10)
+
+            if showGenerate || ws.traceGenerating != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        TextField("Describe a flow, e.g. how a peek reaches the replica", text: $question)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(generate)
+                        ModelMenu(task: .trace)
+                        Button { showGenerate = false } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+                    }
+                    if let g = ws.traceGenerating {
+                        HStack { ProgressView().controlSize(.mini); Text(g).font(.caption).foregroundStyle(.purple).lineLimit(1) }
+                    } else {
+                        Text("Claude reads the code and writes the path, anchored at the cursor. Steps are matched to real symbols.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
             }
 
             if let t = traces.active {
                 if let s = t.summary, !s.isEmpty {
-                    Text(s).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10).lineLimit(4)
+                    Text(s).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10).lineLimit(3).help(s)
                 }
-                List {
-                    ForEach(Array(t.steps.enumerated()), id: \.element.id) { i, step in
-                        TraceStepRow(ws: ws, step: step, index: i, current: traces.currentStep == i, editing: editingNote == step.id,
-                                     onEdit: { editingNote = editingNote == step.id ? nil : step.id })
-                            .contentShape(Rectangle())
-                            .onTapGesture { ws.playStep(i) }
-                            .contextMenu {
-                                Button("Edit note") { editingNote = step.id }
-                                Button("Remove step", role: .destructive) { traces.removeStep(step.id) }
+                if t.steps.isEmpty {
+                    emptyPath
+                } else {
+                    ScrollViewReader { proxy in
+                        List {
+                            ForEach(Array(t.steps.enumerated()), id: \.element.id) { i, step in
+                                TraceStepRow(ws: ws, step: step, index: i, current: traces.currentStep == i)
+                                    .id(step.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { ws.playStep(i) }
+                                    .contextMenu { stepMenu(step) }
                             }
+                            .onMove { traces.moveSteps(from: $0, to: $1) }
+                        }
+                        .listStyle(.plain)
+                        .onChange(of: traces.currentStep) {
+                            if let c = traces.currentStep, c < t.steps.count { withAnimation { proxy.scrollTo(t.steps[c].id, anchor: .center) } }
+                        }
                     }
-                    .onMove { traces.moveSteps(from: $0, to: $1) }
-                    .onDelete { idx in idx.map { t.steps[$0].id }.forEach(traces.removeStep) }
                 }
-                .listStyle(.plain)
             } else {
-                Text("Record a trace with the ● button (each go-to-definition, reference or call you follow becomes a step), add locations with ⇧⌘T, or ask Claude to trace a flow.")
-                    .font(.caption).foregroundStyle(.secondary).padding(10)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("A code path is an ordered list of locations with notes: how a request flows, how a value is built, where a bug travels.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("New Code Path from Cursor") { ws.newCodePath(fromCursor: true) }.disabled(ws.document == nil)
+                    Button("Generate with Claude…") { showGenerate = true }
+                }
+                .buttonStyle(.link)
+                .padding(10)
                 Spacer()
             }
         }
-        .alert("Rename trace", isPresented: $renaming) {
-            TextField("Title", text: Binding(get: { traces.active?.title ?? "" }, set: { v in
-                if var t = traces.active { t.title = v; traces.active = t }
-            }))
-            Button("Done") {}
+        .alert("Rename code path", isPresented: $renaming) {
+            TextField("Title", text: $newTitle)
+            Button("Rename") { traces.rename(newTitle) }
+            Button("Cancel", role: .cancel) {}
         }
+    }
+
+    var emptyPath: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No steps yet. Put the cursor where the path starts and press + (⇧⌘T). Navigate with ⌘-click, callers and references, and add each place that matters.")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(10)
+    }
+
+    @ViewBuilder func stepMenu(_ step: TraceStep) -> some View {
+        Button("Edit Note") { ws.editingStepID = step.id }
+        Button("Move Up") { traces.moveStep(step.id, by: -1) }
+        Button("Move Down") { traces.moveStep(step.id, by: 1) }
+        Button("Set Location to Cursor") {
+            guard let d = ws.document, let c = ws.cursor else { return }
+            traces.updateStep(step.id) {
+                $0.location = CodeLocation(path: d.path, range: ws.selection ?? SourceRange(line: c.line, col: c.col))
+                $0.snippet = d.lineText(c.line).trimmingCharacters(in: .whitespaces)
+                $0.verified = true
+            }
+        }
+        Divider()
+        Button("Remove Step", role: .destructive) { traces.removeStep(step.id) }
     }
 
     private func generate() {
@@ -321,40 +377,67 @@ struct TraceStepRow: View {
     let step: TraceStep
     let index: Int
     let current: Bool
-    let editing: Bool
-    var onEdit: () -> Void
     @State private var draft = ""
+    @State private var titleDraft = ""
+    @FocusState private var focused: Bool
+
+    var editing: Bool { ws.editingStepID == step.id }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            ZStack {
-                Circle().fill(current ? Color.purple : Color.secondary.opacity(0.2)).frame(width: 20, height: 20)
-                Text("\(index + 1)").font(.system(size: 10, weight: .bold)).foregroundStyle(current ? .white : .primary)
-            }
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(index + 1)").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
-                    Text(step.title).font(.system(size: 12, weight: .semibold, design: .monospaced)).lineLimit(1)
+                    if editing {
+                        TextField("Title", text: $titleDraft).font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .textFieldStyle(.plain)
+                    } else {
+                        Text(step.title).font(.system(size: 13, weight: .semibold, design: .monospaced)).lineLimit(1).truncationMode(.tail)
+                    }
                     if !step.verified { Image(systemName: "questionmark.circle").foregroundStyle(.orange).help("Claude's location could not be matched to a symbol") }
-                    Spacer()
-                    Image(systemName: step.edge.glyph).font(.caption2).foregroundStyle(.secondary).help(step.edge.label)
+                    Spacer(minLength: 0)
+                    if step.edge != .start && step.edge != .manual {
+                        Image(systemName: step.edge.glyph).font(.caption2).foregroundStyle(.tertiary).help(step.edge.label)
+                    }
                 }
                 if editing {
-                    TextField("Note", text: $draft, axis: .vertical)
-                        .textFieldStyle(.roundedBorder).font(.caption)
-                        .onAppear { draft = step.note }
-                        .onSubmit { ws.traces.updateStep(step.id) { $0.note = draft }; onEdit() }
+                    TextField("What happens here, and how does it lead to the next step?", text: $draft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).font(.callout)
+                        .lineLimit(2...10)
+                        .focused($focused)
+                        .onSubmit(commit)
+                    HStack {
+                        Button("Done", action: commit).keyboardShortcut(.return, modifiers: .command)
+                        Button("Cancel") { ws.editingStepID = nil }
+                    }.controlSize(.small)
                 } else if !step.note.isEmpty {
-                    Text(step.note).font(.caption).foregroundStyle(.secondary).lineLimit(current ? nil : 3)
-                        .onTapGesture(count: 2, perform: onEdit)
-                } else if !step.snippet.isEmpty {
-                    Text(step.snippet).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(step.note).font(.callout).foregroundStyle(.primary.opacity(0.85))
+                        .onTapGesture(count: 2) { ws.editingStepID = step.id }
+                } else {
+                    Text(step.snippet.isEmpty ? "Double-click to add a note" : step.snippet)
+                        .font(step.snippet.isEmpty ? .caption : .system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary).lineLimit(1)
+                        .onTapGesture(count: 2) { ws.editingStepID = step.id }
                 }
-                Text("\(step.location.path):\(step.location.displayLine)").font(.system(size: 10, design: .monospaced))
+                Text(step.location.path).font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
+                    .help("\(step.location.path):\(step.location.displayLine)")
             }
         }
-        .padding(.vertical, 3)
-        .listRowBackground(current ? Color.purple.opacity(0.08) : Color.clear)
+        .padding(.vertical, 6).padding(.horizontal, 6)
+        .background(current ? Color.secondary.opacity(0.18) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6))
+        .onChange(of: editing, initial: true) {
+            if editing { draft = step.note; titleDraft = step.title; focused = true }
+        }
+    }
+
+    private func commit() {
+        let note = draft, title = titleDraft.trimmingCharacters(in: .whitespaces)
+        ws.traces.updateStep(step.id) { $0.note = note; if !title.isEmpty { $0.title = title } }
+        ws.editingStepID = nil
     }
 }
 

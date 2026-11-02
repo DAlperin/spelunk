@@ -179,3 +179,23 @@ final class TextTests: XCTestCase {
         XCTAssertGreaterThan(Fuzzy.score("lib", "src/lib.rs")!, Fuzzy.score("lib", "src/a/l/i/b/x.rs")!)
     }
 }
+
+final class FuzzyPaletteTests: XCTestCase {
+    func testCommandFiltering() {
+        XCTAssertNil(Fuzzy.score("revi", "go to file… "))
+        XCTAssertNotNil(Fuzzy.score("revi", "review working copy jj @- → @"))
+        XCTAssertGreaterThan(Fuzzy.score("ctrl inst", "src/compute-client/src/controller/instance.rs")!,
+                             Fuzzy.score("ctrl inst", "src/transform/src/literal_constraints.rs") ?? 0)
+    }
+}
+
+final class RepoFilterTests: XCTestCase {
+    func testFiltersChildRepositories() {
+        let repos = ["materialize", "iceberg-rust", "differential-dataflow", "timely-dataflow", "aj"].map { URL(fileURLWithPath: "/w/\($0)") }
+        XCTAssertEqual(NotARepoView.filtered(repos, "").map(\.lastPathComponent).first, "aj")
+        let dd = NotARepoView.filtered(repos, "dd").map(\.lastPathComponent)
+        XCTAssertEqual(dd.first, "differential-dataflow")
+        XCTAssertFalse(dd.contains("aj"))
+        XCTAssertEqual(NotARepoView.filtered(repos, "mz").count, 1)
+    }
+}

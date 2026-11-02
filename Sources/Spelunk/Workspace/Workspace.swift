@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 enum SidebarTab: String, CaseIterable, Identifiable {
-    case changes = "Changes", files = "Files", search = "Search"
+    case changes = "Changes", files = "Files", search = "Search", scm = "Source"
     var id: String { rawValue }
 }
 
@@ -46,6 +46,9 @@ final class Workspace {
     var name: String { root.lastPathComponent }
     var vcs = VCSInfo(kind: .none, revision: "", description: "", hasGit: false)
     var allFiles: [String] = []
+    var allFileSet: Set<String> = []
+    var loadingFiles = false
+    var childRepos: [URL] = []
     var tree = FileNode(name: "", path: "", children: [])
     var showTests = UserDefaults.standard.object(forKey: "showTests") as? Bool ?? false { didSet { UserDefaults.standard.set(showTests, forKey: "showTests"); rebuildTree() } }
     var sourceOnly = UserDefaults.standard.object(forKey: "sourceOnly") as? Bool ?? true { didSet { UserDefaults.standard.set(sourceOnly, forKey: "sourceOnly"); rebuildTree() } }
@@ -61,6 +64,15 @@ final class Workspace {
     var backStack: [CodeLocation] = []
     var forwardStack: [CodeLocation] = []
     var statusMessage: String?
+    /// How the current location was reached; becomes the edge of a step added here.
+    var arrival: (edge: TraceEdge, source: IntelSource)?
+    var editingStepID: UUID?
+    var palette: PaletteMode? { didSet { if palette != oldValue { paletteQuery = "" } } }
+    var paletteQuery = ""
+    var scmSection: SCMSection = .changes
+    var showSubmitReview = false
+    var commentDraft: PendingComment?
+    var recentFiles: [String] = []
 
     var review: ReviewSession?
     var reviewSide: ReviewSide = .after
@@ -77,6 +89,8 @@ final class Workspace {
     let intel: IntelHub
     let traces: TraceStore
     let bookmarks: BookmarkStore
+    let github: GitHubService
+    let scm: SCMService
     private var contextTask: Task<Void, Never>?
 
     init(root: URL) {
@@ -88,35 +102,62 @@ final class Workspace {
         intel = IntelHub(root: self.root, ra: ra, scip: scip, docs: docs)
         traces = TraceStore(root: self.root)
         bookmarks = BookmarkStore(root: self.root)
+        github = GitHubService(root: self.root)
+        scm = SCMService(root: self.root)
+        grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadCurrentDocument() }
+        }
+    }
+
+    @ObservationIgnored private var grammarObserver: NSObjectProtocol?
+
+    /// Re-parses open documents, e.g. after grammars change.
+    func reloadCurrentDocument() {
+        docs.invalidate()
+        guard let d = document, d.revisionLabel == nil, let fresh = docs.document(d.path) else { return }
+        document = fresh
+        revealRequest += 1
     }
 
     func start() async {
         Log.debug("start \(root.path)")
+        loadingFiles = true
         vcs = await VCS.detect(root)
-        Log.debug("vcs \(vcs.kind)")
+        Log.debug("vcs \(vcs.kind) problem=\(vcs.problem ?? "-")")
+        if vcs.kind == .none {
+            childRepos = VCS.childRepositories(root)
+        }
         allFiles = await VCS.listFiles(root, vcs: vcs.kind)
+        allFileSet = Set(allFiles)
         Log.debug("files \(allFiles.count)")
-        rebuildTree()
+        await rebuildTreeAsync()
+        loadingFiles = false
         Log.debug("tree built")
         let isRust = FileManager.default.fileExists(atPath: root.appendingPathComponent("Cargo.toml").path)
         if isRust && UserDefaults.standard.object(forKey: "autoStartRA") as? Bool ?? true { ra.start() }
-        Log.debug("ra started")
         scip.loadCached(sourceFiles: allFiles)
-        Log.debug("scip cache requested")
-        if let readme = ["README.md", "src/main.rs", "src/lib.rs"].first(where: { allFiles.contains($0) }) {
+        if let readme = ["README.md", "src/main.rs", "src/lib.rs"].first(where: { allFileSet.contains($0) }) {
             open(CodeLocation(path: readme, range: SourceRange(line: 0)), record: false)
-            Log.debug("opened \(readme)")
         }
     }
 
     func shutdown() { ra.stop(); clippy.cancel(); scip.cancel() }
 
     func rebuildTree() {
-        let filtered = allFiles.filter { p in
-            (!sourceOnly || FileClassifier.isSource(p)) && (showTests || !FileClassifier.isTest(p))
-        }
-        visibleFileCount = filtered.count
-        tree = FileNode.build(filtered)
+        Task { await rebuildTreeAsync() }
+    }
+
+    /// Filters and builds the file tree off the main actor; large repositories have 100k+ paths.
+    func rebuildTreeAsync() async {
+        let files = allFiles, sourceOnly = sourceOnly, showTests = showTests
+        let (count, node) = await Task.detached(priority: .userInitiated) {
+            let filtered = files.filter { p in
+                (!sourceOnly || FileClassifier.isSource(p)) && (showTests || !FileClassifier.isTest(p))
+            }
+            return (filtered.count, FileNode.build(filtered))
+        }.value
+        visibleFileCount = count
+        tree = node
     }
 
     // MARK: Navigation
@@ -131,6 +172,9 @@ final class Workspace {
         if record, let cur = currentLocation, cur != loc { backStack.append(cur); forwardStack.removeAll() }
         if document?.path != loc.path || document?.revisionLabel != nil {
             guard let d = docs.document(loc.path) else { statusMessage = "Could not open \(loc.path)"; return }
+            recentFiles.removeAll { $0 == loc.path }
+            recentFiles.insert(loc.path, at: 0)
+            if recentFiles.count > 30 { recentFiles.removeLast() }
             document = d
             ra.didOpen(path: d.path, text: d.text, language: d.language)
         }
@@ -138,11 +182,7 @@ final class Workspace {
         cursor = loc.range.start
         highlightRanges = []
         revealRequest += 1
-        if let edge, let d = document {
-            let name = title ?? d.word(at: loc.range.start)?.0 ?? loc.shortDescription
-            traces.record(TraceStep(title: name, location: loc, edge: edge, source: source,
-                                    snippet: d.lineText(loc.line).trimmingCharacters(in: .whitespaces)))
-        }
+        arrival = edge.map { (edge: $0, source: source) }
     }
 
     /// Shows a document that is not the working copy (review before/after).
@@ -234,11 +274,6 @@ final class Workspace {
             let (defs, src) = await intel.definitions(path: d.path, at: range.start, name: name)
             statusMessage = nil
             guard let first = defs.first else { statusMessage = "No definition found for \(name)"; return }
-            if traces.isRecording, traces.active?.steps.isEmpty ?? true {
-                traces.append(TraceStep(title: d.syntax.enclosingItem(line: p.line)?.qualifiedName ?? name,
-                                        location: CodeLocation(path: d.path, range: range), edge: .start, source: .manual,
-                                        snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces)))
-            }
             open(first, edge: .definition, title: name, source: src)
             if defs.count > 1 { statusMessage = "\(defs.count) definitions (\(src.label)); showing first" }
         }
@@ -253,12 +288,22 @@ final class Workspace {
         open(target, edge: direction == .incoming ? .caller : .callee, title: node.name, source: node.source)
     }
 
+    /// Adds the cursor location to the active code path, after the current step, and starts editing its note.
     func addCurrentToTrace() {
         guard let d = document, let p = cursor else { return }
         let item = d.syntax.enclosingItem(line: p.line)
-        let title = context?.name ?? item?.qualifiedName ?? d.path.lastPathComponent
-        traces.append(TraceStep(title: title, location: CodeLocation(path: d.path, range: selection ?? SourceRange(line: p.line, col: p.col)),
-                                edge: .manual, source: .manual, snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces)))
+        let title = item?.qualifiedName ?? context?.name ?? d.path.lastPathComponent
+        let edge: TraceEdge = (traces.active?.steps.isEmpty ?? true) ? .start : (arrival?.edge ?? .manual)
+        let step = TraceStep(title: title, location: CodeLocation(path: d.path, range: selection ?? SourceRange(line: p.line, col: p.col)),
+                             edge: edge, source: arrival?.source ?? .manual,
+                             snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces))
+        traces.insert(step)
+        editingStepID = step.id
+    }
+
+    func newCodePath(fromCursor: Bool) {
+        traces.create(title: "Untitled path", origin: .manual)
+        if fromCursor { addCurrentToTrace() }
     }
 
     func toggleBookmark() {
@@ -282,14 +327,30 @@ final class Workspace {
 
     // MARK: Review
 
-    func startReview(_ target: ReviewTarget) {
-        let r = ReviewSession(root: root, target: target)
+    func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
+        let r = ReviewSession(root: root, target: target, github: github)
         review = r
         sidebarTab = .changes
         Task {
             await r.load()
-            if let first = r.hunks(in: .critical).first ?? r.hunks(in: .behavior).first ?? r.allHunks.first { selectHunk(first) }
+            let focused = focusPath.flatMap { p in r.allHunks.first { $0.path == p } }
+            if let first = focused ?? r.hunks(in: .critical).first ?? r.hunks(in: .behavior).first ?? r.allHunks.first { selectHunk(first) }
         }
+    }
+
+    func reviewChange(_ c: SCMService.Change, focusPath: String? = nil) {
+        switch scm.kind {
+        case .jj: startReview(.jj(from: "\(c.rev)-", to: c.rev), focusPath: focusPath)
+        default: startReview(.git(base: "\(c.commitId)^", head: c.commitId), focusPath: focusPath)
+        }
+    }
+
+    /// Starts a review comment on the cursor line, on whichever side of the diff is showing.
+    func draftComment() {
+        guard let r = review, let d = document, let c = cursor else { return }
+        let side = d.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        let path = side == "LEFT" ? (r.files.first { $0.oldPath == d.path }?.oldPath ?? d.path) : d.path
+        commentDraft = PendingComment(path: path, line: c.line + 1, side: side, body: "")
     }
 
     func selectHunk(_ h: Hunk) {
@@ -309,6 +370,18 @@ final class Workspace {
     func setReviewSide(_ side: ReviewSide) {
         reviewSide = side
         if let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
+    }
+
+    /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.
+    func commentLines(for doc: SourceDocument) -> [Int: Bool] {
+        guard let r = review else { return [:] }
+        let side = doc.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        var out: [Int: Bool] = [:]
+        for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
+            if let l = t.anchorLine { out[l - 1] = (out[l - 1] ?? false) || !t.isResolved }
+        }
+        for c in r.pendingComments where c.path == doc.path && c.side == side { out[c.line - 1] = true }
+        return out
     }
 
     /// Per-line diff markers for the document currently shown, when it belongs to the review.
@@ -348,7 +421,7 @@ final class Workspace {
         if let r = review { prompt += "\n\nContext: I am reviewing \(r.title) (\(r.target.label))." }
         Task {
             do {
-                let res = try await Claude.run(prompt: prompt, system: ClaudeTasks.askSystem, cwd: root) { [weak self] ev in
+                let res = try await Claude.run(prompt: prompt, system: ClaudeTasks.askSystem, cwd: root, task: .ask) { [weak self] ev in
                     Task { @MainActor in
                         guard let self, let i = self.askEntries.firstIndex(where: { $0.id == id }) else { return }
                         switch ev {
@@ -377,7 +450,7 @@ final class Workspace {
         Task {
             do {
                 let res = try await Claude.run(prompt: ClaudeTasks.tracePrompt(question: question, anchor: anchor),
-                                               system: ClaudeTasks.traceSystem, cwd: root, schema: ClaudeTasks.traceSchema) { [weak self] ev in
+                                               system: ClaudeTasks.traceSystem, cwd: root, task: .trace, schema: ClaudeTasks.traceSchema) { [weak self] ev in
                     if case .toolUse(let n, let s) = ev { Task { @MainActor in self?.traceGenerating = "\(n) \(s)" } }
                 }
                 let resp = try Claude.decode(ClaudeTasks.TraceResponse.self, from: res)
@@ -400,7 +473,7 @@ final class Workspace {
         guard let path = parts.first else { return }
         let line = parts.count > 1 ? (Int(parts[1]) ?? 1) - 1 : 0
         var p = String(path)
-        if !allFiles.contains(p), let match = allFiles.first(where: { $0.hasSuffix("/" + p) }) { p = match }
+        if !allFileSet.contains(p), let match = allFiles.first(where: { $0.hasSuffix("/" + p) }) { p = match }
         open(CodeLocation(path: p, range: SourceRange(line: max(0, line))), edge: .manual, source: .claude)
     }
 }

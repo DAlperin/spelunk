@@ -25,15 +25,14 @@ struct SpelunkApp: App {
                 Button("Go to Definition") {
                     if let ws = model.workspace, let p = ws.cursor { ws.goToDefinition(at: p) }
                 }.keyboardShortcut("d", modifiers: [.command, .shift])
-                Button("Quick Open…") { model.workspace?.sidebarTab = .files; model.focusFilter.toggle() }.keyboardShortcut("p")
+                Button("Go to File…") { model.workspace?.palette = .files }.keyboardShortcut("k")
+                Button("Command Palette…") { model.workspace?.palette = .commands }.keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("Filter File Tree") { model.workspace?.sidebarTab = .files; model.focusFilter.toggle() }.keyboardShortcut("p")
                 Button("Find in Repository…") { model.workspace?.sidebarTab = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
             }
-            CommandMenu("Trace") {
-                Button("Add Location to Trace") { model.workspace?.addCurrentToTrace() }.keyboardShortcut("t", modifiers: [.command, .shift])
-                Button("Toggle Recording") {
-                    guard let ws = model.workspace else { return }
-                    if ws.traces.isRecording { ws.traces.isRecording = false } else { ws.traces.startRecording(from: nil) }
-                }.keyboardShortcut("r", modifiers: [.command, .shift])
+            CommandMenu("Code Paths") {
+                Button("Add Location to Code Path") { model.workspace?.addCurrentToTrace() }.keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("New Code Path") { model.workspace?.newCodePath(fromCursor: false) }
                 Divider()
                 Button("Next Step") {
                     guard let ws = model.workspace else { return }
@@ -48,7 +47,7 @@ struct SpelunkApp: App {
             }
             CommandMenu("Review") {
                 Button("Next Hunk") { model.workspace.map(ReviewNav.next) }.keyboardShortcut("j", modifiers: [.command])
-                Button("Previous Hunk") { model.workspace.map(ReviewNav.previous) }.keyboardShortcut("k", modifiers: [.command])
+                Button("Previous Hunk") { model.workspace.map(ReviewNav.previous) }.keyboardShortcut("j", modifiers: [.command, .shift])
                 Button("Mark Hunk Viewed") {
                     if let ws = model.workspace, let id = ws.selectedHunkID { ws.review?.toggleViewed(id); ReviewNav.next(ws) }
                 }.keyboardShortcut("v", modifiers: [.command, .shift])

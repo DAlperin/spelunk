@@ -73,7 +73,6 @@ final class TraceStore {
     var traces: [Trace] = []
     var activeID: UUID?
     var currentStep: Int?
-    var isRecording = false
     private let url: URL
 
     init(root: URL) {
@@ -136,21 +135,38 @@ final class TraceStore {
         currentStep = t.steps.count - 1
     }
 
-    func record(_ step: TraceStep) {
-        guard isRecording else { return }
-        append(step)
+    /// Inserts after the current step (or at the end) and makes the new step current.
+    func insert(_ step: TraceStep) {
+        if active == nil { create(title: "Untitled path", origin: .manual) }
+        guard var t = active else { return }
+        let at = currentStep.map { min($0 + 1, t.steps.count) } ?? t.steps.count
+        t.steps.insert(step, at: at)
+        active = t
+        currentStep = at
     }
 
-    func startRecording(from step: TraceStep?) {
-        let t = create(title: step.map { "Trace from \($0.title)" } ?? "Recorded trace", origin: .recorded)
-        isRecording = true
-        if var s = step {
-            s.edge = .start
-            var tt = t
-            tt.steps = [s]
-            active = tt
-            currentStep = 0
-        }
+    func rename(_ title: String) {
+        guard var t = active else { return }
+        t.title = title
+        active = t
+    }
+
+    func duplicateActive() {
+        guard var t = active else { return }
+        t.id = UUID()
+        t.title += " copy"
+        t.steps = t.steps.map { var s = $0; s.id = UUID(); return s }
+        t.created = Date()
+        add(t)
+    }
+
+    func moveStep(_ id: UUID, by delta: Int) {
+        guard var t = active, let i = t.steps.firstIndex(where: { $0.id == id }) else { return }
+        let j = i + delta
+        guard j >= 0, j < t.steps.count else { return }
+        t.steps.swapAt(i, j)
+        active = t
+        if currentStep == i { currentStep = j }
     }
 
     func updateStep(_ id: UUID, _ change: (inout TraceStep) -> Void) {

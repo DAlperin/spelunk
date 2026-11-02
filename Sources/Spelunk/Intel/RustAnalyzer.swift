@@ -307,6 +307,23 @@ final class RustAnalyzer {
         return nil
     }
 
+    struct WorkspaceSymbol {
+        var name: String
+        var kind: Int
+        var container: String?
+        var location: CodeLocation
+    }
+
+    func workspaceSymbols(_ query: String) async throws -> [WorkspaceSymbol] {
+        let r = try await call("workspace/symbol", ["query": query], timeout: 10) as? [[String: Any]] ?? []
+        return r.compactMap { s in
+            guard let name = s["name"] as? String, let loc = s["location"] as? [String: Any],
+                  let uri = loc["uri"] as? String, let range = Self.parseRange(loc["range"]) else { return nil }
+            return WorkspaceSymbol(name: name, kind: s["kind"] as? Int ?? 0, container: s["containerName"] as? String,
+                                   location: CodeLocation(path: path(fromURI: uri), range: range))
+        }
+    }
+
     func documentHighlights(path: String, at p: SourcePos) async throws -> [SourceRange] {
         let r = try await call("textDocument/documentHighlight", docPos(path, p), timeout: 5) as? [[String: Any]] ?? []
         return r.compactMap { Self.parseRange($0["range"]) }

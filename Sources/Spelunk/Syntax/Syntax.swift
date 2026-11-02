@@ -1,6 +1,6 @@
 import Foundation
 import SwiftTreeSitter
-import TreeSitterRust
+import TreeSitterRustGrammar
 
 enum TokenKind: String, Sendable {
     case keyword, type, function, macro, string, number, comment, docComment, attribute, lifetime,
@@ -13,7 +13,7 @@ struct Token: Sendable {
 }
 
 enum OutlineKind: String, Codable, Sendable {
-    case function, method, structItem, enumItem, union, trait, impl, module, macro, constant, staticItem, typeAlias
+    case function, method, structItem, enumItem, union, trait, impl, module, macro, constant, staticItem, typeAlias, classItem, interface
 
     var symbolGlyph: String {
         switch self {
@@ -26,6 +26,8 @@ enum OutlineKind: String, Codable, Sendable {
         case .macro: "!"
         case .constant, .staticItem: "C"
         case .typeAlias: "τ"
+        case .classItem: "C"
+        case .interface: "I"
         }
     }
 
@@ -43,6 +45,8 @@ enum OutlineKind: String, Codable, Sendable {
         case .constant: "Constant"
         case .staticItem: "Static"
         case .typeAlias: "Type Alias"
+        case .classItem: "Class"
+        case .interface: "Interface"
         }
     }
 }
@@ -139,6 +143,16 @@ struct SyntaxInfo: Sendable {
 }
 
 enum SyntaxAnalyzer {
+    /// Rust uses the built-in grammar; other languages use an installed grammar when one claims the
+    /// file's extension, and the regex lexer otherwise.
+    static func analyze(_ text: String, language: SourceLanguage, path: String) -> SyntaxInfo {
+        if language != .rust, let g = GrammarRegistry.shared.grammar(forPath: path),
+           let info = DynamicSyntax.analyze(text, grammar: g) {
+            return info
+        }
+        return analyze(text, language: language)
+    }
+
     static func analyze(_ text: String, language: SourceLanguage) -> SyntaxInfo {
         switch language {
         case .rust: return RustSyntax.analyze(text)

@@ -8,6 +8,8 @@ struct VCSInfo: Sendable {
     var revision: String
     var description: String
     var hasGit: Bool
+    /// Why a VCS that appears to be present could not be used.
+    var problem: String?
 }
 
 enum VCS {
@@ -15,25 +17,37 @@ enum VCS {
         let fm = FileManager.default
         let hasJJ = fm.fileExists(atPath: root.appendingPathComponent(".jj").path)
         let hasGit = fm.fileExists(atPath: root.appendingPathComponent(".git").path)
-        if hasJJ, let out = try? await Shell.output("jj", ["log", "--no-graph", "-r", "@", "-T", "commit_id.short() ++ \"\\t\" ++ description.first_line()"], cwd: root) {
-            let parts = out.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t", maxSplits: 1)
-            return VCSInfo(kind: .jj, revision: parts.first.map(String.init) ?? "", description: parts.count > 1 ? String(parts[1]) : "", hasGit: hasGit)
+        var problem: String?
+        if hasJJ {
+            let r = try? await Shell.run("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", "@", "-T", "commit_id.short() ++ \"\\t\" ++ description.first_line()"], cwd: root)
+            if let r, r.ok {
+                let parts = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t", maxSplits: 1)
+                return VCSInfo(kind: .jj, revision: parts.first.map(String.init) ?? "", description: parts.count > 1 ? String(parts[1]) : "", hasGit: hasGit)
+            }
+            let err = r?.stderr.split(separator: "\n").first.map(String.init) ?? "jj not available"
+            problem = "jj: \(err)"
         }
         if hasGit, let out = try? await Shell.output("git", ["log", "-1", "--format=%h\t%s"], cwd: root) {
             let parts = out.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t", maxSplits: 1)
-            return VCSInfo(kind: .git, revision: parts.first.map(String.init) ?? "", description: parts.count > 1 ? String(parts[1]) : "", hasGit: true)
+            return VCSInfo(kind: .git, revision: parts.first.map(String.init) ?? "", description: parts.count > 1 ? String(parts[1]) : "", hasGit: true, problem: problem)
         }
-        return VCSInfo(kind: .none, revision: "", description: "", hasGit: false)
+        return VCSInfo(kind: .none, revision: "", description: "", hasGit: false, problem: problem)
     }
 
     static func listFiles(_ root: URL, vcs: VCSKind) async -> [String] {
-        if vcs == .jj, let out = try? await Shell.output("jj", ["file", "list"], cwd: root) {
+        if vcs == .jj, let out = try? await Shell.output("jj", ["file", "list", "--ignore-working-copy"], cwd: root) {
             return out.split(separator: "\n").map(String.init)
         }
-        if vcs != .none, let out = try? await Shell.output("git", ["ls-files", "--cached", "--others", "--exclude-standard"], cwd: root) {
+        if vcs == .git, let out = try? await Shell.output("git", ["ls-files", "--cached", "--others", "--exclude-standard"], cwd: root) {
             return out.split(separator: "\n").map(String.init)
         }
-        return walk(root)
+        // Outside a usable repository: ripgrep honours .gitignore files without git and lists far
+        // faster than a FileManager walk.
+        if Shell.which("rg") != nil,
+           let out = try? await Shell.output("rg", ["--files", "--no-require-git", "--hidden", "-g", "!.git", "-g", "!.jj", "-g", "!target"], cwd: root) {
+            return out.split(separator: "\n").map(String.init).sorted()
+        }
+        return await Task.detached(priority: .userInitiated) { walk(root) }.value
     }
 
     private static func walk(_ root: URL) -> [String] {
@@ -47,6 +61,15 @@ enum VCS {
             if out.count > 200_000 { break }
         }
         return out.sorted()
+    }
+
+    /// Immediate subdirectories that are repositories, for when the opened folder is not one.
+    static func childRepositories(_ root: URL) -> [URL] {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return [] }
+        return items.filter { u in
+            fm.fileExists(atPath: u.appendingPathComponent(".git").path) || fm.fileExists(atPath: u.appendingPathComponent(".jj").path)
+        }
     }
 }
 
@@ -128,6 +151,7 @@ final class SourceDocument: Identifiable {
     let lines: LineIndex
     let language: SourceLanguage
     let syntax: SyntaxInfo
+    let languageName: String
     /// Nil when this is the on-disk working copy; otherwise a label such as "Before @-".
     let revisionLabel: String?
 
@@ -137,7 +161,8 @@ final class SourceDocument: Identifiable {
         self.ns = text as NSString
         self.lines = LineIndex(ns)
         self.language = SourceLanguage.from(path: path)
-        self.syntax = SyntaxAnalyzer.analyze(text, language: language)
+        self.syntax = SyntaxAnalyzer.analyze(text, language: language, path: path)
+        self.languageName = language == .rust ? "Rust" : (GrammarRegistry.shared.grammar(forPath: path)?.spec.displayName ?? language.displayName)
         self.revisionLabel = revisionLabel
     }
 

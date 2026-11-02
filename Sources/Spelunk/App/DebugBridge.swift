@@ -41,10 +41,10 @@ final class DebugBridge {
         case "click": ws.didClick(at: pos(arg))
         case "def": ws.goToDefinition(at: pos(arg))
         case "back": ws.goBack()
-        case "tab": ws.sidebarTab = SidebarTab(rawValue: arg.capitalized) ?? .files
         case "calls":
             if let c = ws.context { c.callDirection = arg == "out" ? .outgoing : .incoming; Task { await ws.loadCalls(c) } }
-        case "record": if arg == "off" { ws.traces.isRecording = false } else { ws.traces.startRecording(from: nil) }
+        case "addstep": ws.addCurrentToTrace()
+        case "newpath": ws.newCodePath(fromCursor: true)
         case "step": ws.playStep((Int(arg) ?? 1) - 1)
         case "review":
             let p = arg.split(separator: ":").map(String.init)
@@ -63,6 +63,18 @@ final class DebugBridge {
         case "clippy": ws.clippy.run()
         case "scip": ws.scip.generate(revision: ws.vcs.revision, sourceFiles: ws.allFiles)
         case "dump": dump(ws)
+        case "palette": ws.palette = arg == "commands" ? .commands : .files
+        case "ptype": ws.paletteQuery = arg
+        case "pclose": ws.palette = nil
+        case "tab": ws.sidebarTab = SidebarTab.allCases.first { $0.rawValue.lowercased() == arg.lowercased() } ?? .files
+        case "scmsection": ws.scmSection = arg == "prs" ? .pullRequests : .changes
+        case "scmselect":
+            if let c = ws.scm.rows.compactMap(\.change).first(where: { $0.changeId.hasPrefix(arg) || $0.commitId.hasPrefix(arg) }) {
+                Task { await ws.scm.select(c) }
+            }
+        case "comment":
+            ws.draftComment()
+        case "showsubmit": ws.showSubmitReview = true
         case "geom":
             func walk(_ v: NSView, _ depth: Int) {
                 if v is NSScrollView || v is NSClipView || v is NSTextView || v is GutterView || v.superview is NSWindow || depth < 4 {
@@ -95,6 +107,11 @@ final class DebugBridge {
         }
         for e in ws.askEntries { s += "ask: \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
         if let m = ws.statusMessage { s += "status: \(m)\n" }
+        s += "scm kind=\(ws.scm.kind) rows=\(ws.scm.rows.count) changes=\(ws.scm.rows.compactMap(\.change).count) wc=\(ws.scm.workingCopy?.changeId ?? "-") wcfiles=\(ws.scm.workingCopyFiles.count) selected=\(ws.scm.selectedID ?? "-") selfiles=\(ws.scm.selectedFiles.map(\.path).prefix(5)) err=\(ws.scm.lastError ?? "-")\n"
+        if let pr = ws.review?.pullRequest {
+            s += "pr #\(pr.number) \(pr.state) checks=\(pr.checks.count) failing=\(pr.checks.filter(\.isFailure).count) threads=\(pr.threads.count) pending=\(ws.review?.pendingComments.count ?? 0)\n"
+        }
+        if let d = ws.document { s += "doclang=\(d.languageName) tokens=\(d.syntax.tokens.count) outline=\(d.syntax.flatOutline.prefix(6).map(\.name))\n" }
         Log.debug("DUMP\n" + s)
     }
 
