@@ -10,7 +10,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 enum ContextFocus { case symbol, hunk }
 
 enum InspectorPane: String, CaseIterable, Identifiable {
-    case context = "Context", paths = "Code Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
+    case context = "Context", conversation = "Conversation", paths = "Code Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
     var id: String { rawValue }
 }
 
@@ -101,6 +101,8 @@ final class Workspace {
     var contextPinned = false
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
+    /// Show review threads under their lines in the editor.
+    var inlineThreads = true
     @ObservationIgnored var connectorCache: (key: String, value: [StepConnector])?
     /// Files tab shows only files that hold steps of the active path.
     var pathFilesOnly = false
@@ -529,6 +531,7 @@ final class Workspace {
             r = existing
         } else {
             r = ReviewSession(root: root, target: target, github: github)
+            r.onPullRequestLoaded = { [weak self] in self?.inspectorPane = .conversation }
             pinnedReviews.append(r)
             activeReviewKey = target.key
         }
@@ -616,6 +619,22 @@ final class Workspace {
         }
     }
 
+    func jump(to c: PendingComment) {
+        guard let r = review else { return }
+        Task {
+            if c.side == "LEFT" {
+                diffMode = .before
+                if let d = await r.document(c.path, side: .old) { show(d, line: c.line - 1) }
+            } else if r.afterIsWorkingCopy {
+                if diffMode == .before { diffMode = .inline }
+                open(CodeLocation(path: c.path, range: SourceRange(line: c.line - 1)))
+            } else if let d = await r.document(c.path, side: .new) {
+                if diffMode == .before { diffMode = .inline }
+                show(d, line: c.line - 1)
+            }
+        }
+    }
+
     func resolveCurrentThread() {
         guard let id = currentThreadID, let r = review, let t = r.pullRequest?.threads.first(where: { $0.id == id }) else { return }
         Task {
@@ -697,6 +716,26 @@ final class Workspace {
             }
         }
         return out
+    }
+
+    /// Embedded views to show under lines of this document: review threads, your pending comments,
+    /// and the comment composer. Each is (id, zero-based line it follows).
+    func inlineBlocks(for doc: SourceDocument) -> [(id: String, afterLine: Int)] {
+        guard let r = review, r.pullRequest != nil || commentDraft != nil else { return [] }
+        let side = doc.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        guard inlineThreads else {
+            if let d = commentDraft, d.path == doc.path, d.side == side { return [("draft", d.line - 1)] }
+            return []
+        }
+        var out: [(String, Int)] = []
+        for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
+            if let l = t.anchorLine { out.append(("thread:" + t.id, l - 1)) }
+        }
+        for c in r.pendingComments where c.path == doc.path && c.side == side { out.append(("pending:" + c.id.uuidString, c.line - 1)) }
+        if let d = commentDraft, d.path == doc.path, d.side == side { out.append(("draft", d.line - 1)) }
+        // On one line: existing threads, then your pending comments, then the composer.
+        func rank(_ id: String) -> Int { id.hasPrefix("thread:") ? 0 : id.hasPrefix("pending:") ? 1 : 2 }
+        return out.sorted { $0.1 == $1.1 ? (rank($0.0), $0.0) < (rank($1.0), $1.0) : $0.1 < $1.1 }
     }
 
     /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.

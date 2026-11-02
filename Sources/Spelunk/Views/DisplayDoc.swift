@@ -23,6 +23,15 @@ final class DisplayDoc {
     enum Entry {
         case real(Int)
         case phantom(PhantomLine)
+        /// Blank space reserved for an embedded view (a review thread or comment composer).
+        case block(id: String, index: Int)
+    }
+
+    /// An embedded view after a real line, `lines` display lines tall.
+    struct Block: Hashable {
+        var id: String
+        var afterLine: Int
+        var lines: Int
     }
 
     let doc: SourceDocument
@@ -35,9 +44,12 @@ final class DisplayDoc {
     let hasPhantoms: Bool
     let fingerprint: Int
 
-    init(doc: SourceDocument, phantoms: [Int: [PhantomLine]]) {
+    /// Display line ranges of blocks, by id.
+    let blockLines: [String: Range<Int>]
+
+    init(doc: SourceDocument, phantoms: [Int: [PhantomLine]], blocks: [Block] = []) {
         self.doc = doc
-        hasPhantoms = !phantoms.isEmpty
+        hasPhantoms = !phantoms.isEmpty || !blocks.isEmpty
         guard hasPhantoms else {
             text = doc.text
             ns = doc.ns
@@ -45,8 +57,11 @@ final class DisplayDoc {
             entries = (0..<doc.lines.lineCount).map { .real($0) }
             realToDisplay = Array(0..<doc.lines.lineCount)
             fingerprint = 0
+            blockLines = [:]
             return
         }
+        let blocksAfter = Dictionary(grouping: blocks, by: \.afterLine)
+        var blockRanges: [String: Range<Int>] = [:]
         var out: [String] = []
         var entries: [Entry] = []
         var map: [Int] = []
@@ -60,6 +75,14 @@ final class DisplayDoc {
             map.append(entries.count)
             out.append(doc.lineText(line))
             entries.append(.real(line))
+            for b in blocksAfter[line] ?? [] {
+                let start = entries.count
+                for i in 0..<max(1, b.lines) {
+                    out.append("")
+                    entries.append(.block(id: b.id, index: i))
+                }
+                blockRanges[b.id] = start..<entries.count
+            }
         }
         text = out.joined(separator: "\n")
         ns = text as NSString
@@ -68,7 +91,9 @@ final class DisplayDoc {
         realToDisplay = map
         var h = Hasher()
         for k in phantoms.keys.sorted() { h.combine(k); h.combine(phantoms[k]!) }
+        for b in blocks.sorted(by: { $0.id < $1.id }) { h.combine(b) }
         fingerprint = h.finalize()
+        blockLines = blockRanges
     }
 
     func displayLine(_ real: Int) -> Int { realToDisplay.isEmpty ? 0 : realToDisplay[max(0, min(real, realToDisplay.count - 1))] }

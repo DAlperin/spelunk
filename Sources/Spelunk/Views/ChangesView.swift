@@ -97,12 +97,12 @@ struct ChangesView: View {
             ImportanceBar(review: review)
             HStack(spacing: 8) {
                 let p = review.progress
-                ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(width: 70)
+                ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(minWidth: 30, maxWidth: 70)
                 Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                 if let pr = review.pullRequest {
                     let open = pr.threads.filter { !$0.isResolved }.count
                     if open > 0 {
-                        Text(verbatim: "· ● \(open) unresolved").font(.caption).foregroundStyle(.orange)
+                        Text(verbatim: "● \(open) unresolved").font(.caption).foregroundStyle(.orange).lineLimit(1).fixedSize()
                     }
                 }
                 Spacer()
@@ -236,10 +236,10 @@ struct ImportanceBar: View {
             .frame(height: 5)
             HStack(spacing: 4) {
                 ForEach(counts.filter { $0.1 > 0 }, id: \.0) { t, n in
-                    Text(verbatim: "\(n) \(t.title.lowercased())").foregroundStyle(t.color)
+                    Text(verbatim: "\(n) \(t.title.lowercased())").foregroundStyle(t.color).fixedSize()
                     Text("·").foregroundStyle(.tertiary)
                 }
-                Text(verbatim: "\(low) low-signal").foregroundStyle(.secondary)
+                Text(verbatim: "\(low) low-signal").foregroundStyle(.secondary).fixedSize()
             }
             .font(.caption).lineLimit(1)
         }

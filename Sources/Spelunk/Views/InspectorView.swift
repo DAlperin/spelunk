@@ -34,6 +34,9 @@ struct InspectorView: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                case .conversation:
+                    if let r = ws.review, let pr = r.pullRequest { ConversationPane(ws: ws, review: r, pr: pr) }
+                    else { Text("Open a GitHub pull request to see its conversation.").font(.callout).foregroundStyle(.secondary).padding(12); Spacer() }
                 case .paths: TracePanel(ws: ws, traces: ws.traces)
                 case .outline: OutlinePanel(ws: ws)
                 case .bookmarks: BookmarksPanel(ws: ws)
@@ -46,7 +49,12 @@ struct InspectorView: View {
                 CollapsedRows(ws: ws)
             }
             Divider()
-            ProvenanceFooter(ws: ws, showingHunk: showingHunk)
+            if ws.inspectorPane == .conversation, let pr = ws.review?.pullRequest {
+                Text(verbatim: "PR #\(pr.number) · head \(pr.headSha.prefix(7)) · posting as \(ws.github.login ?? "you")")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+            } else {
+                ProvenanceFooter(ws: ws, showingHunk: showingHunk)
+            }
         }
     }
 
@@ -992,5 +1000,96 @@ struct ProblemsPanel: View {
                 }.buttonStyle(.plain)
             }.listStyle(.plain)
         }
+    }
+}
+
+/// Unresolved threads first, then your drafts, then resolved ones; checks and reviewers below.
+struct ConversationPane: View {
+    @Bindable var ws: Workspace
+    @Bindable var review: ReviewSession
+    let pr: GitHubService.PullRequestDetails
+    @State private var showAll = false
+
+    var body: some View {
+        let open = pr.threads.filter { !$0.isResolved }
+        let resolved = pr.threads.filter(\.isResolved)
+        VStack(spacing: 0) {
+            HStack {
+                Picker("", selection: $showAll) {
+                    Text(verbatim: "Open \(open.count + review.pendingComments.count)").tag(false)
+                    Text(verbatim: "All \(pr.threads.count + review.pendingComments.count)").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Spacer()
+                Button { Task { await review.refreshPullRequest() } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            List {
+                ForEach(open) { t in threadRow(t) }
+                ForEach(review.pendingComments) { c in
+                    Button { ws.jump(to: c) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 5) {
+                                Text("pending").font(.system(size: 9, weight: .semibold)).padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Color.blue.opacity(0.2), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.blue)
+                                Text("You").font(.caption.weight(.semibold))
+                                Text(verbatim: c.path.lastPathComponent + ":" + String(c.line)).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                            }
+                            Text(c.body).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if showAll { ForEach(resolved) { t in threadRow(t).opacity(0.6) } }
+                else if !resolved.isEmpty {
+                    Button(resolved.count == 1 ? "1 resolved thread" : "\(resolved.count) resolved threads") { showAll = true }
+                        .buttonStyle(.link).font(.caption)
+                }
+                Section {
+                    let failed = pr.checks.filter(\.isFailure), pending = pr.checks.filter(\.isPending)
+                    HStack(spacing: 6) {
+                        Circle().fill(failed.isEmpty ? (pending.isEmpty ? Color.green : .orange) : .red).frame(width: 7, height: 7)
+                        Text(verbatim: failed.isEmpty ? (pending.isEmpty ? "\(pr.checks.count) passed" : "\(pending.count) pending") : "\(failed.count) failing")
+                            .font(.caption)
+                        Text((failed.isEmpty ? pr.checks : failed).prefix(4).map(\.name).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                } header: { Text("Checks").font(.caption.weight(.semibold)) }
+                Section {
+                    let latest = Dictionary(pr.reviews.map { ($0.author, $0.state) }, uniquingKeysWith: { _, b in b })
+                    if latest.isEmpty { Text("No reviews yet").font(.caption).foregroundStyle(.tertiary) }
+                    ForEach(latest.keys.sorted(), id: \.self) { a in
+                        HStack(spacing: 6) {
+                            Avatar(login: a, color: .gray).scaleEffect(0.8)
+                            Text(a == ws.github.login ? "You" : a).font(.caption)
+                            Text(latest[a]!.replacingOccurrences(of: "_", with: " ").lowercased()).font(.caption)
+                                .foregroundStyle(latest[a] == "APPROVED" ? .green : latest[a] == "CHANGES_REQUESTED" ? .red : .secondary)
+                        }
+                    }
+                } header: { Text("Reviewers").font(.caption.weight(.semibold)) }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    func threadRow(_ t: GitHubService.ReviewThread) -> some View {
+        Button { ws.showThread(t) } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Circle().fill(t.isResolved ? Color.secondary : .orange).frame(width: 6, height: 6)
+                    Text(t.comments.first?.author ?? "").font(.caption.weight(.semibold))
+                    Text(verbatim: t.path.lastPathComponent + ":" + String(t.anchorLine ?? 0)).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(InlineThread.ago(t.comments.last?.createdAt ?? "")).font(.caption2).foregroundStyle(.tertiary)
+                }
+                Text(t.comments.first?.body ?? "").font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                if t.comments.count > 1 { Text(verbatim: "\(t.comments.count - 1) replies").font(.caption2).foregroundStyle(.tertiary) }
+            }
+            .padding(.vertical, 2)
+            .background(ws.currentThreadID == t.id ? Color.accentColor.opacity(0.1) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

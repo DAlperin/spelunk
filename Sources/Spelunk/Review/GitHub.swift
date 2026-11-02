@@ -216,6 +216,14 @@ final class GitHubService {
         try await post("repos/\(repo)/pulls/\(number)/reviews", payload)
     }
 
+    /// Posts one line comment immediately, outside any review.
+    func postComment(number: Int, commitId: String, comment c: PendingComment) async throws {
+        guard let repo = await ensureRepo() else { throw ClaudeError(message: problem ?? "No GitHub repository") }
+        var d: [String: Any] = ["commit_id": commitId, "path": c.path, "line": c.line, "side": c.side, "body": c.body]
+        if let s = c.startLine, s < c.line { d["start_line"] = s; d["start_side"] = c.side }
+        try await post("repos/\(repo)/pulls/\(number)/comments", d)
+    }
+
     func reply(number: Int, to commentId: Int, body: String) async throws {
         guard let repo = await ensureRepo() else { throw ClaudeError(message: problem ?? "No GitHub repository") }
         try await post("repos/\(repo)/pulls/\(number)/comments/\(commentId)/replies", ["body": body])

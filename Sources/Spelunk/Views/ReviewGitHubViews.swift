@@ -270,3 +270,72 @@ struct SubmitReviewSheet: View {
         }
     }
 }
+
+/// The review you are building: drafted comments as jump links, the verdict, and Submit.
+struct PendingReviewBar: View {
+    @Bindable var ws: Workspace
+    @Bindable var review: ReviewSession
+    @State private var event: GitHubService.ReviewEvent = .comment
+    @State private var summary = ""
+    @State private var confirming = false
+    @State private var posting = false
+    @State private var error: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Pending review").font(.callout.weight(.semibold))
+            Text(verbatim: review.pendingComments.count == 1 ? "1 comment" : "\(review.pendingComments.count) comments").font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(review.pendingComments) { c in
+                        Button(c.path.lastPathComponent + ":" + String(c.line)) { ws.jump(to: c) }
+                            .buttonStyle(.bordered).controlSize(.small).font(.caption.monospaced())
+                    }
+                }
+            }
+            Picker("", selection: $event) {
+                ForEach(GitHubService.ReviewEvent.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 290)
+            if posting { ProgressView().controlSize(.small) }
+            Button { confirming = true } label: { HStack(spacing: 4) { Text("Submit review…"); KeyCap("⇧⌘↩") } }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .disabled(posting || (event == .comment && review.pendingComments.isEmpty))
+        }
+        .padding(.horizontal, 12).frame(height: 38)
+        .background(Color.blue.opacity(0.06))
+        .onChange(of: ws.showSubmitReview) { if ws.showSubmitReview { confirming = true; ws.showSubmitReview = false } }
+        .popover(isPresented: $confirming, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(verbatim: "\(event.label) on #\(review.pullRequest?.number ?? 0)").font(.headline)
+                Text(verbatim: "Posts \(review.pendingComments.count) line comments as \(ws.github.login ?? "your gh account"). Everyone on the pull request will see it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                TextField("Summary (optional)", text: $summary, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...6)
+                if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { confirming = false }
+                    Button("Post \(event.label)") { submit() }.buttonStyle(.borderedProminent)
+                        .disabled(event == .comment && summary.isEmpty && review.pendingComments.isEmpty)
+                }
+            }
+            .padding(14).frame(width: 380)
+        }
+    }
+
+    private func submit() {
+        posting = true
+        Task {
+            do {
+                try await review.submit(event: event, body: summary)
+                summary = ""
+                confirming = false
+                ws.statusMessage = "Review posted"
+            } catch {
+                self.error = error.localizedDescription
+            }
+            posting = false
+        }
+    }
+}

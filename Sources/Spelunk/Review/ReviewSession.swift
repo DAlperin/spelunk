@@ -95,6 +95,7 @@ final class ReviewSession {
     var pullRequest: GitHubService.PullRequestDetails?
     var pendingComments: [PendingComment] = []
     var githubError: String?
+    @ObservationIgnored var onPullRequestLoaded: (() -> Void)?
     let github: GitHubService?
     var groupByTier = true
 
@@ -409,7 +410,9 @@ final class ReviewSession {
         let n: Int
         if let number { n = number } else if case .githubPR(let x) = target { n = x } else { return }
         do {
+            let first = pullRequest == nil
             pullRequest = try await github.details(n)
+            if first { onPullRequestLoaded?() }
             githubError = nil
         } catch {
             githubError = error.localizedDescription

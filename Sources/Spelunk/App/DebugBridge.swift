@@ -103,7 +103,7 @@ final class DebugBridge {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                               windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
-                    w.sendEvent(e)
+                    NSApp.postEvent(e, atStart: false)
                 }
             }
             if let hit = w.contentView?.superview?.hitTest(p) { Log.debug("clickat hit \(type(of: hit)) \(hit.frame)") }
@@ -127,6 +127,10 @@ final class DebugBridge {
         case "comment":
             ws.draftComment()
         case "showsubmit": ws.showSubmitReview = true
+        case "clearpending":
+            for c in ws.review?.pendingComments ?? [] { ws.review?.removePending(c.id) }
+        case "addpending":
+            if var d = ws.commentDraft { d.body = arg; ws.review?.addPending(d); ws.commentDraft = nil }
         case "geom":
             func walk(_ v: NSView, _ depth: Int) {
                 if v is NSScrollView || v is NSClipView || v is NSTextView || v is GutterView || v.superview is NSWindow || depth < 4 {

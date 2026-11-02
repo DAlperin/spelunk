@@ -68,10 +68,6 @@ struct MainView: View {
         .toolbar { MainToolbar(ws: ws, showInspector: $showInspector) }
         .navigationTitle(ws.name)
         .sheet(isPresented: $ws.showAsk) { AskSheet(ws: ws) }
-        .sheet(item: $ws.commentDraft) { d in CommentSheet(ws: ws, draft: d) }
-        .sheet(isPresented: $ws.showSubmitReview) {
-            if let r = ws.review { SubmitReviewSheet(ws: ws, review: r) }
-        }
         .onAppear {
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws] e in
@@ -279,6 +275,10 @@ struct EditorColumn: View {
             } else {
                 ContentUnavailableView("No file open", systemImage: "doc.text", description: Text("Pick a file from the sidebar, or press ⌘K."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if let r = ws.review, r.pullRequest != nil {
+                Divider()
+                PendingReviewBar(ws: ws, review: r)
             }
             Divider()
             StatusBar(ws: ws)
@@ -554,9 +554,6 @@ struct HunkStrip: View {
                     .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .help("Mark viewed and go to the next important hunk (V)")
-            }
-            if review.pullRequest != nil {
-                ScrollView { HunkConversation(ws: ws, review: review, hunk: hunk) }.frame(maxHeight: 220).fixedSize(horizontal: false, vertical: true)
             }
         }
         .buttonStyle(.plain)

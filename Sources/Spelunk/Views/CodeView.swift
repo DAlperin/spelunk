@@ -52,6 +52,7 @@ struct CodeView: NSViewRepresentable {
         let gutter = GutterView(textView: tv, coordinator: context.coordinator)
         scroll.contentInsets = NSEdgeInsets(top: 0, left: gutter.thickness, bottom: 0, right: 0)
         let host = NSView()
+        host.clipsToBounds = true
         for o in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
             host.setContentHuggingPriority(.defaultLow, for: o)
             host.setContentCompressionResistancePriority(.defaultLow, for: o)
@@ -86,7 +87,9 @@ struct CodeView: NSViewRepresentable {
         let document = secondary ? self.document : (ws.document ?? self.document)
         guard let tv = c.textView else { return }
         let phantoms = secondary ? [:] : ws.phantomLines(for: document)
-        let display = DisplayDoc(doc: document, phantoms: phantoms)
+        let specs = secondary ? [] : ws.inlineBlocks(for: document)
+        c.blockSpecs = specs
+        let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs))
         if c.documentID != document.id {
             c.documentID = document.id
             c.document = document
@@ -120,11 +123,63 @@ struct CodeView: NSViewRepresentable {
                 if let sel = ws.selection { c.reveal(sel) }
             }
         }
+        c.layoutBlocks()
         c.gutter?.needsDisplay = true
     }
 
     @MainActor
     final class Coordinator {
+        /// Embedded views (threads, composer) and the display lines reserved for each.
+        var blockSpecs: [(id: String, afterLine: Int)] = []
+        private var blockHeights: [String: Int] = [:]
+        private var hosts: [String: NSHostingController<InlineBlockView>] = [:]
+        static let blockWidth: CGFloat = 680
+
+        func blocks(for specs: [(id: String, afterLine: Int)]) -> [DisplayDoc.Block] {
+            specs.map { DisplayDoc.Block(id: $0.id, afterLine: $0.afterLine, lines: blockHeights[$0.id] ?? 3) }
+        }
+
+        private var lineHeight: CGFloat {
+            guard let tv = textView, let lm = tv.layoutManager, lm.numberOfGlyphs > 0 else { return 18 }
+            return lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+        }
+
+        /// Places a hosting view over each block's reserved lines; if a view needs a different
+        /// number of lines than reserved, reserves again and reloads (keeping the scroll position).
+        func layoutBlocks() {
+            guard let tv = textView, let lm = tv.layoutManager, let display, let doc = document else { return }
+            let ids = Set(blockSpecs.map(\.id))
+            for (id, h) in hosts where !ids.contains(id) { h.view.removeFromSuperview(); hosts[id] = nil }
+            let lh = lineHeight
+            var changed = false
+            for spec in blockSpecs {
+                let host = hosts[spec.id] ?? {
+                    let h = NSHostingController(rootView: InlineBlockView(ws: ws, id: spec.id))
+                    h.sizingOptions = []
+                    hosts[spec.id] = h
+                    tv.addSubview(h.view)
+                    return h
+                }()
+                host.rootView = InlineBlockView(ws: ws, id: spec.id)
+                let size = host.sizeThatFits(in: CGSize(width: Self.blockWidth, height: 2000))
+                let needed = max(1, Int(ceil((size.height + 8) / lh)))
+                if blockHeights[spec.id] != needed { blockHeights[spec.id] = needed; changed = true }
+                guard let range = display.blockLines[spec.id], range.lowerBound < display.lines.lineCount else { host.view.isHidden = true; continue }
+                let off = display.lines.starts[range.lowerBound]
+                let g = lm.glyphIndexForCharacter(at: min(off, max(0, display.ns.length - 1)))
+                let rect = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+                host.view.isHidden = false
+                host.view.frame = NSRect(x: tv.textContainerInset.width + 28, y: rect.minY + tv.textContainerInset.height + 3,
+                                         width: Self.blockWidth, height: CGFloat(range.count) * lh - 6)
+            }
+            if changed {
+                let rebuilt = DisplayDoc(doc: doc, phantoms: secondary ? [:] : ws.phantomLines(for: doc), blocks: blocks(for: blockSpecs))
+                self.display = rebuilt
+                load(rebuilt, into: tv, keepScroll: true)
+                DispatchQueue.main.async { [weak self] in self?.layoutBlocks() }
+            }
+        }
+
         var ws: Workspace
         weak var textView: SourceTextView?
         weak var gutter: GutterView?
@@ -505,7 +560,7 @@ final class GutterView: NSView {
                 let str = NSAttributedString(string: "\(line + 1)", attributes: line == selLine ? boldAttrs : attrs)
                 let size = str.size()
                 str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
-            case nil:
+            case .block, nil:
                 break
             }
             dline += 1
