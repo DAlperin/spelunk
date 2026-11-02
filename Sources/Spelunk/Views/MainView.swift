@@ -449,6 +449,8 @@ struct HunkStrip: View {
                 }
                 Spacer()
                 Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Toggle("Inline diff", isOn: $ws.inlineDiff).toggleStyle(.checkbox).fixedSize()
+                    .help("Show the other side's lines in place: removed lines in After, added lines in Before")
                 Button(showDiff ? "Hide diff" : "Show diff") { showDiff.toggle() }.fixedSize()
                 if review.pullRequest != nil {
                     Button("Comment") { ws.draftComment() }.fixedSize().help("Comment on the cursor line")

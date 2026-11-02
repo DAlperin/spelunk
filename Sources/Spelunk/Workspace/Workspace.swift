@@ -308,22 +308,27 @@ final class Workspace {
         cursor = p
         guard let d = document, let (name, range) = d.word(at: p) else { return }
         if context?.name == name && context?.path == d.path && context?.pos.line == p.line { return }
-        let ctx = SymbolContext(name: name, path: d.path, pos: range.start)
+        let isWorkingCopy = d.revisionLabel == nil
+        // Code intelligence answers about the files on disk. For a Before/After view, query the same
+        // symbol at its nearest occurrence in the working-copy file (falls back to name-based search
+        // when the file no longer exists there).
+        var queryPos = range.start
+        if !isWorkingCopy, let wc = docs.document(d.path),
+           let mapped = ClaudeTasks.nearestOccurrence(of: name, in: wc, near: p.line) {
+            queryPos = mapped.start
+        }
+        let ctx = SymbolContext(name: name, path: d.path, pos: queryPos)
         context = ctx
         highlightRanges = []
         contextTask?.cancel()
-        let isWorkingCopy = d.revisionLabel == nil
         contextTask = Task {
             if isWorkingCopy && ra.status.isUsable, let hl = try? await ra.documentHighlights(path: d.path, at: range.start), !hl.isEmpty {
                 if context === ctx { highlightRanges = hl }
             } else if context === ctx {
                 highlightRanges = localOccurrences(of: name, in: d)
             }
-            guard isWorkingCopy else {
-                ctx.details = SymbolDetails(name: name, kindLabel: "Symbol", source: .textSearch)
-                return
-            }
-            ctx.details = await intel.details(path: d.path, at: range.start, name: name)
+            ctx.details = await intel.details(path: d.path, at: queryPos, name: name)
+            guard context === ctx else { return }
             await loadReferences(ctx)
             await loadCalls(ctx)
             await loadImplementations(ctx)
@@ -476,6 +481,50 @@ final class Workspace {
     func setReviewSide(_ side: ReviewSide) {
         reviewSide = side
         if let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
+    }
+
+    /// Show the other side's lines inline (removed lines in the After view, added lines in Before).
+    var inlineDiff = UserDefaults.standard.object(forKey: "editor.inlineDiff") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(inlineDiff, forKey: "editor.inlineDiff") }
+    }
+
+    /// Lines from the other side of the diff to show inline, keyed by the real line they precede.
+    func phantomLines(for doc: SourceDocument) -> [Int: [PhantomLine]] {
+        guard inlineDiff, let r = review,
+              let f = r.files.first(where: { $0.newPath == doc.path || $0.oldPath == doc.path }) else { return [:] }
+        let isOld = doc.revisionLabel == "Before"
+        if f.status == (isOld ? .deleted : .added) { return [:] }
+        let other = r.cachedDocument(isOld ? f.newPath : f.oldPath, side: isOld ? .new : .old)
+        let phantomKind: DiffLineKind = isOld ? .added : .removed
+        var out: [Int: [PhantomLine]] = [:]
+        func phantom(_ l: DiffLine) -> PhantomLine {
+            let otherLine = (isOld ? l.newLine : l.oldLine) ?? 0
+            var tokens: [Token] = []
+            if let other, otherLine < other.lines.lineCount {
+                let range = other.lines.lineRange(otherLine)
+                for t in other.syntax.tokens where t.range.location < NSMaxRange(range) && NSMaxRange(t.range) > range.location {
+                    let start = max(t.range.location, range.location)
+                    let end = min(NSMaxRange(t.range), NSMaxRange(range))
+                    tokens.append(Token(range: NSRange(location: start - range.location, length: end - start), kind: t.kind))
+                }
+            }
+            return PhantomLine(kind: phantomKind, otherLine: otherLine, text: l.text, tokens: tokens)
+        }
+        for h in f.hunks {
+            var pending: [DiffLine] = []
+            for l in h.lines {
+                if l.kind == phantomKind { pending.append(l); continue }
+                if let anchor = isOld ? l.oldLine : l.newLine, !pending.isEmpty {
+                    out[anchor, default: []] += pending.map(phantom)
+                    pending = []
+                }
+            }
+            if !pending.isEmpty {
+                let anchor = isOld ? h.oldStart - 1 + h.oldCount : h.newStart - 1 + h.newCount
+                out[max(0, anchor), default: []] += pending.map(phantom)
+            }
+        }
+        return out
     }
 
     /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.

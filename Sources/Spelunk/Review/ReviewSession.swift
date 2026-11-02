@@ -271,6 +271,11 @@ final class ReviewSession {
         return doc
     }
 
+    /// A side's document if it was already loaded (classification loads both sides of every file).
+    func cachedDocument(_ path: String, side: Side) -> SourceDocument? {
+        side == .old ? oldDocs[path] : newDocs[path]
+    }
+
     /// True when the "after" side is the working copy, so the code view can use live navigation.
     var afterIsWorkingCopy: Bool { newRev == nil }
 

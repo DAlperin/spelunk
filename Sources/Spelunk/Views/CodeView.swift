@@ -81,10 +81,17 @@ struct CodeView: NSViewRepresentable {
         // workspace state (such as the reveal counter) changed.
         let document = ws.document ?? self.document
         guard let tv = c.textView else { return }
+        let phantoms = ws.phantomLines(for: document)
+        let display = DisplayDoc(doc: document, phantoms: phantoms)
         if c.documentID != document.id {
             c.documentID = document.id
             c.document = document
-            c.load(document, into: tv)
+            c.display = display
+            c.load(display, into: tv, keepScroll: false)
+        } else if c.display?.fingerprint != display.fingerprint {
+            // Same file, different inline diff (live refresh or toggled): keep the scroll position.
+            c.display = display
+            c.load(display, into: tv, keepScroll: true)
         }
         c.diffMarkers = ws.diffMarkers(for: document)
         c.diagnostics = document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
@@ -106,6 +113,7 @@ struct CodeView: NSViewRepresentable {
         weak var gutter: GutterView?
         var documentID: UUID?
         var document: SourceDocument?
+        var display: DisplayDoc?
         var revealToken = -1
         var diffMarkers: [Int: DiffLineKind] = [:]
         var diagnostics: [Diagnostic] = []
@@ -117,24 +125,36 @@ struct CodeView: NSViewRepresentable {
 
         init(ws: Workspace) { self.ws = ws }
 
-        func load(_ doc: SourceDocument, into tv: NSTextView) {
+        func load(_ display: DisplayDoc, into tv: NSTextView, keepScroll: Bool) {
+            let doc = display.doc
             let font = Theme.codeFont
+            let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
             let para = NSMutableParagraphStyle()
             para.lineHeightMultiple = 1.18
             para.tabStops = []
             para.defaultTabInterval = font.advancement(forGlyph: font.glyph(withName: "space")).width * 4
-            let attr = NSMutableAttributedString(string: doc.text, attributes: [
+            let attr = NSMutableAttributedString(string: display.text, attributes: [
                 .font: font, .foregroundColor: Theme.text, .paragraphStyle: para,
             ])
             attr.beginEditing()
             let len = attr.length
-            for t in doc.syntax.tokens where NSMaxRange(t.range) <= len {
-                attr.addAttribute(.foregroundColor, value: Theme.color(t.kind), range: t.range)
-                if t.kind == .docComment || t.kind == .comment {
-                    attr.addAttribute(.font, value: NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask), range: t.range)
-                }
+            func paint(_ range: NSRange, _ kind: TokenKind) {
+                guard range.length > 0, NSMaxRange(range) <= len else { return }
+                attr.addAttribute(.foregroundColor, value: Theme.color(kind), range: range)
+                if kind == .docComment || kind == .comment { attr.addAttribute(.font, value: italic, range: range) }
+            }
+            for t in doc.syntax.tokens {
+                let a = display.displayOffset(realOffset: t.range.location)
+                let b = display.displayOffset(realOffset: NSMaxRange(t.range))
+                paint(NSRange(location: a, length: b - a), t.kind)
+            }
+            for (i, e) in display.entries.enumerated() {
+                guard case .phantom(let p) = e else { continue }
+                let start = display.lines.starts[i]
+                for t in p.tokens { paint(NSRange(location: start + t.range.location, length: t.range.length), t.kind) }
             }
             attr.endEditing()
+            let origin = tv.enclosingScrollView?.contentView.bounds.origin
             tv.textStorage?.setAttributedString(attr)
             if let lm = tv.layoutManager, let tc = tv.textContainer {
                 lm.ensureLayout(for: tc)
@@ -143,45 +163,55 @@ struct CodeView: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: 0, length: 0))
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
-            tv.scroll(.zero)
+            if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
+                clip.setBoundsOrigin(origin)
+                tv.enclosingScrollView?.reflectScrolledClipView(clip)
+            } else {
+                tv.scroll(.zero)
+            }
         }
 
         func applyBackgrounds(selection: SourceRange?, highlights: [SourceRange]) {
-            guard let tv = textView, let lm = tv.layoutManager, let doc = document else { return }
-            let key = "\(documentID?.uuidString ?? "")|\(String(describing: selection))|\(highlights.count)|\(highlights.first.map { "\($0)" } ?? "")|\(diffMarkers.count)|\(traceLines.sorted())"
+            guard let tv = textView, let lm = tv.layoutManager, let doc = document, let display else { return }
+            let key = "\(documentID?.uuidString ?? "")|\(display.fingerprint)|\(String(describing: selection))|\(highlights.count)|\(highlights.first.map { "\($0)" } ?? "")|\(diffMarkers.count)|\(traceLines.sorted())"
             if key == lastBackgroundKey { return }
             lastBackgroundKey = key
             let full = NSRange(location: 0, length: tv.textStorage?.length ?? 0)
             lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
-            func lineRange(_ l: Int) -> NSRange {
-                let r = doc.lines.lineRange(l)
+            func displayLineRange(_ dl: Int) -> NSRange {
+                let r = display.lines.lineRange(dl)
                 return NSRange(location: r.location, length: min(r.length + 1, full.length - r.location))
             }
+            func lineRange(_ real: Int) -> NSRange { displayLineRange(display.displayLine(real)) }
             for r in doc.syntax.testLineRanges {
-                let a = doc.lines.lineRange(r.lowerBound).location
-                let b = NSMaxRange(doc.lines.lineRange(r.upperBound))
-                lm.addTemporaryAttribute(.backgroundColor, value: Theme.testRegion, forCharacterRange: NSRange(location: a, length: b - a))
+                let a = lineRange(r.lowerBound).location
+                let b = NSMaxRange(display.lines.lineRange(display.displayLine(r.upperBound)))
+                lm.addTemporaryAttribute(.backgroundColor, value: Theme.testRegion, forCharacterRange: NSRange(location: a, length: max(0, b - a)))
             }
             for (line, kind) in diffMarkers where line < doc.lines.lineCount {
                 lm.addTemporaryAttribute(.backgroundColor, value: kind == .added ? Theme.added : Theme.removed, forCharacterRange: lineRange(line))
+            }
+            for (i, e) in display.entries.enumerated() {
+                guard case .phantom(let p) = e else { continue }
+                lm.addTemporaryAttribute(.backgroundColor, value: p.kind == .added ? Theme.added : Theme.removed, forCharacterRange: displayLineRange(i))
             }
             for line in traceLines where line < doc.lines.lineCount && diffMarkers[line] == nil {
                 lm.addTemporaryAttribute(.backgroundColor, value: Theme.traceLine, forCharacterRange: lineRange(line))
             }
             for h in highlights {
-                let r = doc.lines.nsRange(h)
+                let r = display.displayRange(h)
                 if NSMaxRange(r) <= full.length { lm.addTemporaryAttribute(.backgroundColor, value: Theme.occurrence, forCharacterRange: r) }
             }
             if let sel = selection {
                 lm.addTemporaryAttribute(.backgroundColor, value: Theme.currentLine, forCharacterRange: lineRange(sel.start.line))
-                let r = doc.lines.nsRange(sel)
+                let r = display.displayRange(sel)
                 if r.length > 0, NSMaxRange(r) <= full.length { lm.addTemporaryAttribute(.backgroundColor, value: Theme.target, forCharacterRange: r) }
             }
         }
 
         func reveal(_ range: SourceRange) {
-            guard let doc = document else { return }
-            let r = doc.lines.nsRange(range)
+            guard let display else { return }
+            let r = display.displayRange(range)
             // Defer one turn so a freshly loaded document has a laid-out frame to scroll within.
             DispatchQueue.main.async { [weak self] in
                 guard let self, let tv = self.textView, let lm = tv.layoutManager, let tc = tv.textContainer,
@@ -201,11 +231,12 @@ struct CodeView: NSViewRepresentable {
             }
         }
 
+        /// Real document position under a point; nil over a phantom (other-side) line.
         func position(at point: NSPoint) -> SourcePos? {
-            guard let tv = textView, let doc = document else { return nil }
+            guard let tv = textView, let display else { return nil }
             let idx = tv.characterIndexForInsertion(at: point)
-            guard idx <= doc.ns.length else { return nil }
-            return doc.lines.position(of: idx)
+            guard idx <= display.ns.length else { return nil }
+            return display.realPos(display.lines.position(of: idx))
         }
 
         func click(at p: SourcePos, command: Bool) {
@@ -311,11 +342,11 @@ final class GutterView: NSView {
         Theme.gutter.setFill()
         bounds.fill()
         guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
-        let (diff, diags, trace, marks, doc, selLine, comments) = MainActor.assumeIsolated {
+        let (diff, diags, trace, marks, display, selLine, comments) = MainActor.assumeIsolated {
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
-             coordinator?.bookmarkedLines ?? [], coordinator?.document, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
+             coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         }
-        guard let doc, doc.ns.length > 0 else { return }
+        guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
         let glyphRange = lm.glyphRange(forBoundingRect: visible, in: tc)
         let charRange = lm.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
@@ -323,41 +354,54 @@ final class GutterView: NSView {
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.gutterText]
         let boldAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: .bold), .foregroundColor: Theme.text]
         let diagLines = Dictionary(grouping: diags, by: { $0.location.line })
-        var line = doc.lines.position(of: charRange.location).line
+        var dline = display.lines.position(of: charRange.location).line
         let inset = tv.textContainerInset.height
-        while line < doc.lines.lineCount {
-            let start = doc.lines.starts[line]
+        while dline < display.lines.lineCount {
+            let start = display.lines.starts[dline]
             if start > NSMaxRange(charRange) { break }
-            let g = lm.glyphIndexForCharacter(at: min(start, doc.ns.length - 1))
+            let g = lm.glyphIndexForCharacter(at: min(start, display.ns.length - 1))
             var lineRect = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil, withoutAdditionalLayout: true)
-            if start >= doc.ns.length { lineRect = lm.extraLineFragmentRect }
+            if start >= display.ns.length { lineRect = lm.extraLineFragmentRect }
             let y = convert(NSPoint(x: 0, y: lineRect.minY + inset), from: tv).y
             let h = lineRect.height
-            if let k = diff[line] {
-                (k == .added ? Theme.addedMarker : Theme.removedMarker).setFill()
+            switch display.entry(dline) {
+            case .phantom(let p):
+                // Other-side line: its own line number, tinted, with a +/- sign.
+                let color = p.kind == .added ? Theme.addedMarker : Theme.removedMarker
+                color.setFill()
                 NSRect(x: thickness - 3, y: y, width: 3, height: h).fill()
+                let str = NSAttributedString(string: "\(p.kind == .added ? "+" : "−")\(p.otherLine + 1)", attributes: [.font: font, .foregroundColor: color])
+                let size = str.size()
+                str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
+            case .real(let line):
+                if let k = diff[line] {
+                    (k == .added ? Theme.addedMarker : Theme.removedMarker).setFill()
+                    NSRect(x: thickness - 3, y: y, width: 3, height: h).fill()
+                }
+                if let open = comments[line] {
+                    let img = NSImage(systemSymbolName: open ? "bubble.left.fill" : "bubble.left", accessibilityDescription: nil)
+                    let tinted = img?.withSymbolConfiguration(.init(paletteColors: [open ? .systemOrange : .secondaryLabelColor]))
+                    tinted?.draw(in: NSRect(x: 3, y: y + h / 2 - 5, width: 11, height: 10))
+                }
+                if let d = diagLines[line]?.first {
+                    (d.level == .error ? NSColor.systemRed : NSColor.systemYellow).setFill()
+                    NSBezierPath(ovalIn: NSRect(x: 17, y: y + h / 2 - 3, width: 6, height: 6)).fill()
+                }
+                if trace.contains(line) {
+                    NSColor.systemPurple.setFill()
+                    NSBezierPath(roundedRect: NSRect(x: 25, y: y + h / 2 - 3, width: 6, height: 6), xRadius: 1, yRadius: 1).fill()
+                }
+                if marks.contains(line) {
+                    NSColor.systemBlue.setFill()
+                    NSRect(x: 33, y: y + 2, width: 3, height: h - 4).fill()
+                }
+                let str = NSAttributedString(string: "\(line + 1)", attributes: line == selLine ? boldAttrs : attrs)
+                let size = str.size()
+                str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
+            case nil:
+                break
             }
-            if let d = diagLines[line]?.first {
-                (d.level == .error ? NSColor.systemRed : NSColor.systemYellow).setFill()
-                NSBezierPath(ovalIn: NSRect(x: 17, y: y + h / 2 - 3, width: 6, height: 6)).fill()
-            }
-            if trace.contains(line) {
-                NSColor.systemPurple.setFill()
-                NSBezierPath(roundedRect: NSRect(x: 25, y: y + h / 2 - 3, width: 6, height: 6), xRadius: 1, yRadius: 1).fill()
-            }
-            if let open = comments[line] {
-                let img = NSImage(systemSymbolName: open ? "bubble.left.fill" : "bubble.left", accessibilityDescription: nil)
-                let tinted = img?.withSymbolConfiguration(.init(paletteColors: [open ? .systemOrange : .secondaryLabelColor]))
-                tinted?.draw(in: NSRect(x: 3, y: y + h / 2 - 5, width: 11, height: 10))
-            }
-            if marks.contains(line) {
-                NSColor.systemBlue.setFill()
-                NSRect(x: 33, y: y + 2, width: 3, height: h - 4).fill()
-            }
-            let str = NSAttributedString(string: "\(line + 1)", attributes: line == selLine ? boldAttrs : attrs)
-            let size = str.size()
-            str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
-            line += 1
+            dline += 1
         }
     }
 
@@ -366,8 +410,8 @@ final class GutterView: NSView {
         let p = tv.convert(event.locationInWindow, from: nil)
         let idx = lm.characterIndex(for: NSPoint(x: 0, y: p.y - tv.textContainerInset.height), in: tc, fractionOfDistanceBetweenInsertionPoints: nil)
         MainActor.assumeIsolated {
-            guard let c = coordinator, let doc = c.document else { return }
-            let line = doc.lines.position(of: idx).line
+            guard let c = coordinator, let display = c.display,
+                  let line = display.realPos(display.lines.position(of: idx))?.line else { return }
             c.ws.cursor = SourcePos(line: line, col: 0)
             if event.clickCount == 2 { c.ws.toggleBookmark() }
             needsDisplay = true
