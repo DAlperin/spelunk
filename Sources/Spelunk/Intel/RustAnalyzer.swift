@@ -32,9 +32,22 @@ final class RustAnalyzer {
     private var client: LSPClient?
     private var versions: [String: Int] = [:]
     private var progress: [String: String] = [:]
+    private var progressTitles: [String: String] = [:]
     private var quiescent = false
 
     init(root: URL) { self.root = root }
+
+    nonisolated(unsafe) static let settings: [String: Any] = [
+        "checkOnSave": false,
+        "cachePriming": ["enable": true],
+        "procMacro": ["enable": true],
+        "cargo": ["buildScripts": ["enable": true]],
+        "lens": ["enable": false],
+        "inlayHints": ["typeHints": ["enable": false]],
+    ]
+
+    /// True once the server has finished its startup indexing.
+    var isWarm: Bool { status == .ready }
 
     nonisolated(unsafe) private static var cachedBinary: String??
 
@@ -98,14 +111,19 @@ final class RustAnalyzer {
         binaryPath = bin
         status = .starting
         let c = LSPClient(executable: bin, args: [], cwd: root)
+        if Log.enabled, let filter = ProcessInfo.processInfo.environment["SPELUNK_RA_LOG"] { c.environment["RA_LOG"] = filter }
         c.onNotification = { [weak self] method, params in
             Task { @MainActor in self?.handleNotification(method, params) }
         }
         c.onServerRequest = { method, params in
             switch method {
             case "workspace/configuration":
-                let items = ((params as? [String: Any])?["items"] as? [Any]) ?? []
-                return items.map { _ in NSNull() }
+                // Answering with null makes rust-analyzer treat its configuration as changed and
+                // reload the workspace; return the same settings it was initialized with.
+                let items = ((params as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+                return items.map { item -> Any in
+                    (item["section"] as? String) == "rust-analyzer" ? RustAnalyzer.settings : NSNull()
+                }
             default:
                 return NSNull()
             }
@@ -146,14 +164,7 @@ final class RustAnalyzer {
                         ],
                         "experimental": ["serverStatusNotification": true],
                     ] as [String: Any],
-                    "initializationOptions": [
-                        "checkOnSave": false,
-                        "cachePriming": ["enable": true],
-                        "procMacro": ["enable": true],
-                        "cargo": ["buildScripts": ["enable": true]],
-                        "lens": ["enable": false],
-                        "inlayHints": ["typeHints": ["enable": false]],
-                    ] as [String: Any],
+                    "initializationOptions": RustAnalyzer.settings,
                 ]
                 let result = try await c.request("initialize", params, timeout: 120)
                 if let info = (result as? [String: Any])?["serverInfo"] as? [String: Any] {
@@ -189,18 +200,22 @@ final class RustAnalyzer {
         case "$/progress":
             guard let token = p?["token"].map({ "\($0)" }), let value = p?["value"] as? [String: Any] else { return }
             let kind = value["kind"] as? String
-            if kind == "end" { progress.removeValue(forKey: token) } else {
-                let title = (value["title"] as? String) ?? progress[token] ?? ""
-                let msg = value["message"] as? String
-                let pct = value["percentage"] as? Int
-                var s = title
-                if let msg, !msg.isEmpty { s += " \(msg)" }
-                if let pct { s += " \(pct)%" }
-                progress[token] = kind == "begin" ? title : s
+            if kind != "report" { Log.debug("ra progress \(kind ?? "?") \(value["title"] as? String ?? progressTitles[token] ?? token) \(value["message"] as? String ?? "")") }
+            if kind == "end" {
+                progress.removeValue(forKey: token)
+                progressTitles.removeValue(forKey: token)
+            } else {
+                // Reports carry only the latest message; the title arrives once, with "begin".
+                if let t = value["title"] as? String { progressTitles[token] = t }
+                var s = progressTitles[token] ?? ""
+                if let msg = value["message"] as? String, !msg.isEmpty { s += " \(msg)" }
+                if let pct = value["percentage"] as? Int { s += " \(pct)%" }
+                progress[token] = s
             }
             refreshStatus()
         case "experimental/serverStatus":
             quiescent = (p?["quiescent"] as? Bool) ?? false
+            Log.debug("ra serverStatus quiescent=\(quiescent) health=\(p?["health"] as? String ?? "?") \(p?["message"] as? String ?? "")")
             if let health = p?["health"] as? String, health == "error", let msg = p?["message"] as? String {
                 status = .failed(msg)
                 return

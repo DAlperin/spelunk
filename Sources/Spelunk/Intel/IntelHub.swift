@@ -14,6 +14,10 @@ final class IntelHub {
         self.root = root; self.ra = ra; self.scip = scip; self.docs = docs
     }
 
+    /// While rust-analyzer is still warming up, the on-disk SCIP index answers instantly; it may
+    /// trail the working copy, so rust-analyzer takes over as soon as it is ready.
+    private var scipFirst: Bool { !ra.isWarm && scip.index != nil }
+
     // MARK: SCIP helpers
 
     private func scipPos(path: String, line: Int, col: Int) -> Int {
@@ -46,7 +50,7 @@ final class IntelHub {
 
     func details(path: String, at p: SourcePos, name: String) async -> SymbolDetails {
         var d = SymbolDetails(name: name, kindLabel: "Symbol", source: .textSearch)
-        if ra.status.isUsable {
+        if ra.status.isUsable && !(scipFirst && scipSymbol(path: path, at: p) != nil) {
             async let hover = try? ra.hover(path: path, at: p)
             async let defs = try? ra.definition(path: path, at: p)
             if let h = await hover { (d.signature, d.docs) = Self.splitHover(h); d.source = .rustAnalyzer }
@@ -117,14 +121,18 @@ final class IntelHub {
     // MARK: Definitions
 
     func definitions(path: String, at p: SourcePos, name: String) async -> ([CodeLocation], IntelSource) {
+        if scipFirst, let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
         if ra.status.isUsable, let r = try? await ra.definition(path: path, at: p), !r.isEmpty { return (r, .rustAnalyzer) }
-        if let sym = scipSymbol(path: path, at: p), let idx = scip.index {
-            let defs = idx.definitions(of: sym).map { scipLocation($0.path, $0.occ) }
-            if !defs.isEmpty { return (defs, .scip) }
-        }
+        if let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
         let syn = await syntaxDefinitions(name: name, near: path)
         if !syn.isEmpty { return (syn, .treeSitter) }
         return ([], .textSearch)
+    }
+
+    private func scipDefinitions(path: String, at p: SourcePos) -> [CodeLocation]? {
+        guard let sym = scipSymbol(path: path, at: p), let idx = scip.index else { return nil }
+        let defs = idx.definitions(of: sym).map { scipLocation($0.path, $0.occ) }
+        return defs.isEmpty ? nil : defs
     }
 
     /// Finds items named `name` by grepping for item keywords, then confirming against the parsed outline.
@@ -152,16 +160,12 @@ final class IntelHub {
     // MARK: References
 
     func references(path: String, at p: SourcePos, name: String) async -> ([ReferenceHit], IntelSource) {
+        if scipFirst, let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
         if ra.status.isUsable, let r = try? await ra.references(path: path, at: p), !r.isEmpty {
             let defs = Set((try? await ra.definition(path: path, at: p)) ?? [])
             return (r.map { hit($0, isDef: defs.contains($0), source: .rustAnalyzer) }, .rustAnalyzer)
         }
-        if let sym = scipSymbol(path: path, at: p), let idx = scip.index {
-            let occs = idx.occurrences(of: sym)
-            if !occs.isEmpty {
-                return (occs.map { hit(scipLocation($0.path, $0.occ), isDef: $0.occ.isDefinition, source: .scip) }, .scip)
-            }
-        }
+        if let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
         var opts = TextSearch.Options()
         opts.wholeWord = true
         opts.caseSensitive = true
@@ -169,6 +173,12 @@ final class IntelHub {
         opts.limit = 500
         let matches = (try? await TextSearch.search(root: root, query: name, options: opts)) ?? []
         return (matches.map { hit($0.location, isDef: false, source: .textSearch) }, .textSearch)
+    }
+
+    private func scipReferences(path: String, at p: SourcePos) -> [ReferenceHit]? {
+        guard let sym = scipSymbol(path: path, at: p), let idx = scip.index else { return nil }
+        let occs = idx.occurrences(of: sym)
+        return occs.isEmpty ? nil : occs.map { hit(scipLocation($0.path, $0.occ), isDef: $0.occ.isDefinition, source: .scip) }
     }
 
     func hit(_ loc: CodeLocation, isDef: Bool, source: IntelSource) -> ReferenceHit {
@@ -212,7 +222,7 @@ final class IntelHub {
     // MARK: Call hierarchy
 
     func callRoots(_ direction: CallDirection, path: String, at p: SourcePos, name: String) async -> [CallNode] {
-        if ra.status.isUsable, let items = try? await ra.prepareCallHierarchy(path: path, at: p), let item = items.first {
+        if ra.status.isUsable, !(scipFirst && scipSymbol(path: path, at: p) != nil), let items = try? await ra.prepareCallHierarchy(path: path, at: p), let item = items.first {
             let root = CallNode(name: item.value["name"] as? String ?? name, detail: item.value["detail"] as? String ?? "",
                                 location: CodeLocation(path: path, range: RustAnalyzer.parseRange(item.value["selectionRange"]) ?? SourceRange(line: p.line)),
                                 callSites: [], source: .rustAnalyzer, payload: item, ancestry: [])

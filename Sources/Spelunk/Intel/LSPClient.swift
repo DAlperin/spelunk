@@ -32,6 +32,11 @@ final class LSPClient: @unchecked Sendable {
         process.standardError = errPipe
     }
 
+    var environment: [String: String] {
+        get { process.environment ?? [:] }
+        set { process.environment = newValue }
+    }
+
     func start() throws {
         output.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
@@ -42,6 +47,7 @@ final class LSPClient: @unchecked Sendable {
             let d = h.availableData
             guard let self, !d.isEmpty else { return }
             self.stderrTail.append(d)
+            if Log.enabled { Log.debug("[server stderr] " + String(decoding: d, as: UTF8.self).trimmingCharacters(in: .newlines)) }
         }
         process.terminationHandler = { [weak self] p in
             guard let self else { return }
