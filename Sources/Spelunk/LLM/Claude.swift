@@ -2,18 +2,21 @@ import Foundation
 
 /// The app's Claude features; each has its own model and effort setting.
 enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
-    case ask, trace, triage
+    case ask, trace, triage, classify
 
     var id: String { rawValue }
     var modelKey: String { "claude.model.\(rawValue)" }
     var effortKey: String { "claude.effort.\(rawValue)" }
-    var defaultModel: String { "opus" }
+    /// The quick classification pass runs on every new hunk, so it defaults to a cheaper setup.
+    var defaultModel: String { self == .classify ? "sonnet" : "opus" }
+    var defaultEffort: String? { self == .classify ? "low" : nil }
 
     var label: String {
         switch self {
         case .ask: "Questions"
         case .trace: "Traces"
         case .triage: "Review triage"
+        case .classify: "Quick classification"
         }
     }
 }
@@ -58,7 +61,7 @@ enum Claude {
 
     static func effort(for task: ClaudeTask) -> String? {
         let e = UserDefaults.standard.string(forKey: task.effortKey) ?? ""
-        return e.isEmpty ? nil : e
+        return e.isEmpty ? task.defaultEffort : e
     }
 
     static var binary: String? {

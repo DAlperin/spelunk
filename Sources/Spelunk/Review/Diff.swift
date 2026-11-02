@@ -34,6 +34,13 @@ struct Hunk: Identifiable, Hashable, Sendable {
             ?? max(0, newStart - 1)
     }
 
+    /// Identity that survives edits elsewhere in the file: the path plus the changed text. Viewed
+    /// marks and triage results key on this, so a rewritten hunk comes back unreviewed.
+    var contentKey: String {
+        let body = lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }.joined(separator: "\n")
+        return path + "#" + String(UInt(bitPattern: body.stableHash), radix: 36)
+    }
+
     var anchorOldLine: Int { lines.first { $0.kind == .removed }?.oldLine ?? max(0, oldStart - 1) }
 }
 

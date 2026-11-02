@@ -132,6 +132,7 @@ struct SettingsView: View {
     @AppStorage("claudePath") var claudePath = ""
     @AppStorage("fontSize") var fontSize = 13.0
     @AppStorage("autoStartRA") var autoStart = true
+    @AppStorage("review.autoClassify") var autoClassify = true
     @State private var detected = "…"
 
     var body: some View {
@@ -149,6 +150,11 @@ struct SettingsView: View {
                 Text("Detected: \(detected)").font(.caption).foregroundStyle(.secondary)
                     .task { detected = await RustAnalyzer.resolveBinary() ?? "none" }
                 Toggle("Start automatically for Cargo workspaces", isOn: $autoStart)
+            }
+            Section("Review") {
+                Toggle("Classify new hunks with Claude automatically", isOn: $autoClassify)
+                Text("Runs the quick classification model on hunks the static rules cannot settle. Results are cached by hunk content.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ClaudeSettingsSection()
             Section("Claude CLI") {

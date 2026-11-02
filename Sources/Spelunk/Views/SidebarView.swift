@@ -13,7 +13,7 @@ struct SidebarView: View {
             .padding(8)
             switch ws.sidebarTab {
             case .changes:
-                if let r = ws.review { ChangesView(ws: ws, review: r) } else { NoReviewView(ws: ws) }
+                ReviewTabsView(ws: ws)
             case .files: FileTreeView(ws: ws)
             case .search: SearchView(ws: ws)
             case .scm: SCMView(ws: ws)

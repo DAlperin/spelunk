@@ -1,5 +1,95 @@
 import SwiftUI
 
+/// The working-copy review plus any pinned reviews, as tabs.
+struct ReviewTabsView: View {
+    @Bindable var ws: Workspace
+    @State private var showPicker = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    chip(title: "Working copy", subtitle: ws.workingReview.map { workingSubtitle($0) }, icon: "pencil.and.outline",
+                         active: ws.activeReviewKey == nil, closable: false) { ws.showWorkingReview() }
+                    ForEach(ws.pinnedReviews, id: \.target.key) { r in
+                        chip(title: r.target.label, subtitle: nil, icon: r.pullRequest != nil || { if case .githubPR = r.target { return true }; return false }() ? "arrow.triangle.pull" : "square.stack",
+                             active: ws.activeReviewKey == r.target.key, closable: true) {
+                            ws.activeReviewKey = r.target.key
+                        } onClose: {
+                            ws.closeReview(r.target.key)
+                        }
+                    }
+                    Button { showPicker = true } label: { Image(systemName: "plus") }
+                        .buttonStyle(.borderless).help("Compare something else: a PR, a range, a change")
+                        .popover(isPresented: $showPicker) { ReviewPicker(ws: ws, dismiss: { showPicker = false }) }
+                }
+                .padding(.horizontal, 8)
+            }
+            .padding(.bottom, 6)
+            if let r = ws.review {
+                ChangesView(ws: ws, review: r).id(r.target.key)
+            } else {
+                NoReviewView(ws: ws)
+            }
+        }
+    }
+
+    private func workingSubtitle(_ r: ReviewSession) -> String {
+        switch r.target {
+        case .jj(_, let to): to == "@" ? "@" : "@- (@ is empty)"
+        case .git(_, let head): head == nil ? "uncommitted" : "last commit"
+        case .githubPR: ""
+        }
+    }
+
+    @ViewBuilder
+    private func chip(title: String, subtitle: String?, icon: String, active: Bool, closable: Bool,
+                      select: @escaping () -> Void, onClose: @escaping () -> Void = {}) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.caption2)
+            Text(title).font(.caption.weight(active ? .semibold : .regular)).lineLimit(1)
+            if let subtitle, !subtitle.isEmpty { Text(subtitle).font(.caption2).foregroundStyle(.secondary) }
+            if closable {
+                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Close this review")
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(active ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.1), in: Capsule())
+        .contentShape(Capsule())
+        .onTapGesture(perform: select)
+    }
+}
+
+/// Puts a pinned review's change into the working copy, after confirmation.
+struct CheckoutMenu: View {
+    @Bindable var ws: Workspace
+    let review: ReviewSession
+    @State private var options: [ReviewSession.CheckoutOption] = []
+    @State private var pending: ReviewSession.CheckoutOption?
+
+    var body: some View {
+        Menu {
+            if options.isEmpty { Text("Nothing to check out") }
+            ForEach(options) { o in Button(o.label) { pending = o } }
+        } label: {
+            Label("Check out", systemImage: "arrow.down.to.line")
+        }
+        .fixedSize()
+        .task(id: review.target.key) { options = await review.checkoutOptions(repoVCS: ws.vcs.kind) }
+        .onChange(of: review.pullRequest?.headSha) { Task { options = await review.checkoutOptions(repoVCS: ws.vcs.kind) } }
+        .confirmationDialog(pending?.label ?? "", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
+            Button("Check Out") {
+                if let o = pending { Task { await ws.checkOut(review, o) } }
+                pending = nil
+            }
+            Button("Cancel", role: .cancel) { pending = nil }
+        } message: {
+            Text(((pending?.detail.isEmpty ?? true) ? "" : pending!.detail + "\n\n") + (pending?.steps.map { $0.joined(separator: " ") }.joined(separator: "\n") ?? ""))
+        }
+    }
+}
+
 struct ChangesView: View {
     @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
@@ -41,6 +131,13 @@ struct ChangesView: View {
                 tierChips
                 ScrollView(.horizontal, showsIndicators: false) { tierChips }
             }
+            if !review.tracksWorkingCopy {
+                HStack {
+                    CheckoutMenu(ws: ws, review: review)
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
             HStack {
                 Button {
                     Task { await review.triageWithClaude() }
@@ -55,11 +152,20 @@ struct ChangesView: View {
                 }.labelsHidden().frame(width: 120)
             }
             .controlSize(.small)
+            if let s = review.classifyState {
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkle").font(.caption2)
+                    Text(s).font(.caption).lineLimit(1)
+                    Spacer()
+                    ModelMenu(task: .classify)
+                }
+                .foregroundStyle(.secondary)
+            }
             if let s = review.triageState {
                 Text(s).font(.caption).foregroundStyle(.purple).lineLimit(2)
             }
             if let o = review.overview {
-                DisclosureGroup("Overview", isExpanded: $showOverview) {
+                DisclosureGroup(review.overviewIsStale ? "Overview (written before the latest edits)" : "Overview", isExpanded: $showOverview) {
                     ScrollView { Text(o).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                         .frame(maxHeight: 140)
                 }.font(.caption.weight(.semibold))
@@ -160,12 +266,12 @@ struct HunkRow: View {
 
     var body: some View {
         let a = review.analyses[hunk.id]
-        let viewed = review.viewed.contains(hunk.id)
+        let viewed = review.isViewed(hunk)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Image(systemName: viewed ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(viewed ? .green : .secondary).font(.caption)
-                    .onTapGesture { review.toggleViewed(hunk.id) }
+                    .onTapGesture { review.toggleViewed(hunk) }
                 Text(a?.enclosing ?? hunk.path.lastPathComponent)
                     .font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1)
                 Spacer()
@@ -176,7 +282,10 @@ struct HunkRow: View {
                         .font(.caption2).foregroundStyle(open > 0 ? .orange : .secondary).labelStyle(.titleAndIcon)
                 }
                 if !review.pending(for: hunk).isEmpty { Image(systemName: "pencil.circle.fill").font(.caption2).foregroundStyle(.blue) }
-                if review.llm[hunk.id] != nil { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.purple) }
+                if let t = review.triage(of: hunk) {
+                    Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption2).foregroundStyle(.purple)
+                        .help(t.isQuick ? "Classified by the quick pass" : "Triaged by Claude")
+                }
                 Text("+\(hunk.addedCount) −\(hunk.removedCount)").font(.caption2.monospaced()).foregroundStyle(.secondary)
             }
             if showFile {

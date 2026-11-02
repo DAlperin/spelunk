@@ -170,9 +170,9 @@ struct ReviewPicker: View {
                     Button("Review GitHub PR") { if let n = Int(pr.trimmingCharacters(in: CharacterSet(charactersIn: "# "))) { go(.githubPR(n)) } }
                 }
             }
-            if ws.review != nil {
+            if ws.activeReviewKey != nil {
                 Divider()
-                Button("Close review", role: .destructive) { ws.review = nil; ws.sidebarTab = .files; dismiss() }
+                Button("Close this review", role: .destructive) { ws.review = nil; dismiss() }
             }
         }
         .buttonStyle(.borderless)
@@ -448,12 +448,12 @@ struct HunkStrip: View {
                 if review.pullRequest != nil {
                     Button("Comment") { ws.draftComment() }.fixedSize().help("Comment on the cursor line")
                 }
-                Toggle("Viewed", isOn: Binding(get: { review.viewed.contains(hunk.id) }, set: { _ in review.toggleViewed(hunk.id) }))
+                Toggle("Viewed", isOn: Binding(get: { review.isViewed(hunk) }, set: { _ in review.toggleViewed(hunk) }))
                     .toggleStyle(.checkbox).fixedSize()
                 Button { ReviewNav.previous(ws) } label: { Image(systemName: "chevron.up") }.help("Previous hunk (⇧⌘J)")
                 Button { ReviewNav.next(ws) } label: { Image(systemName: "chevron.down") }.help("Next hunk (⌘J)")
             }
-            if let s = review.llm[hunk.id]?.summary {
+            if let s = review.triage(of: hunk)?.summary {
                 Label(s, systemImage: "sparkles").font(.caption).foregroundStyle(.purple)
             }
             if review.pullRequest != nil {

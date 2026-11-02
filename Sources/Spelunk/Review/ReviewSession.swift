@@ -26,9 +26,13 @@ enum ReviewTarget: Codable, Hashable, Sendable {
 }
 
 struct LLMTriage: Codable, Sendable {
+    enum Pass: String, Codable, Sendable { case quick, deep }
     var tier: ChangeTier
     var reason: String
     var summary: String?
+    /// Nil for results saved before passes were distinguished; treated as deep.
+    var pass: Pass?
+    var isQuick: Bool { pass == .quick }
 }
 
 @MainActor @Observable
@@ -47,6 +51,10 @@ final class ReviewSession {
     var reviewOrder: [String] = []
     var triageState: String?
     var triaging = false
+    var overviewIsStale = false
+    var lastLoaded: Date?
+    private var loading = false
+    private var reloadPending = false
     var viewed: Set<String> = []
     var notes: [String: String] = [:]
     var hideTiers: Set<ChangeTier> = [.mechanical]
@@ -82,10 +90,14 @@ final class ReviewSession {
     private var oldDocs: [String: SourceDocument] = [:]
     private var newDocs: [String: SourceDocument] = [:]
 
-    init(root: URL, target: ReviewTarget, github: GitHubService? = nil) {
+    /// True for the always-on working-copy review, which refreshes as files change.
+    let tracksWorkingCopy: Bool
+
+    init(root: URL, target: ReviewTarget, github: GitHubService? = nil, tracksWorkingCopy: Bool = false) {
         self.root = root
         self.target = target
         self.github = github
+        self.tracksWorkingCopy = tracksWorkingCopy
         loadPersisted()
     }
 
@@ -129,35 +141,48 @@ final class ReviewSession {
 
     // MARK: Loading
 
+    /// Computes the diff and classifies it. The first load shows progress; later loads (live
+    /// refreshes) swap results in place so the list does not flash.
     func load() async {
-        state = .loading("Computing diff")
+        guard !loading else { reloadPending = true; return }
+        loading = true
+        defer { loading = false }
+        let first = files.isEmpty && state != .ready
+        if first { state = .loading("Computing diff") }
         do {
             let diffText = try await fetchDiff()
-            files = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
-            // Drop stale LLM triage when the diff changed since it was produced.
-            if let fp = persistedFingerprint, fp != fingerprint {
-                llm = [:]; overview = nil; reviewOrder = []
-                viewed = viewed.intersection(Set(files.flatMap(\.hunks).map(\.id)))
+            let newFiles = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
+            oldDocs = [:]
+            newDocs = [:]
+            if case .githubPR(let n) = target, first { await refreshPullRequest(n) }
+            if first { state = .loading("Classifying \(newFiles.count) files") }
+            var newAnalyses: [String: HunkAnalysis] = [:]
+            for f in newFiles {
+                let oldDoc = f.status == .added ? nil : await document(f.oldPath, side: .old)
+                let newDoc = f.status == .deleted ? nil : await document(f.newPath, side: .new)
+                for h in f.hunks { newAnalyses[h.id] = ChangeClassifier.classify(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc) }
             }
-            if case .githubPR(let n) = target { await refreshPullRequest(n) }
-            state = .loading("Classifying \(files.count) files")
-            for f in files { await analyze(f) }
+            files = newFiles
+            analyses = newAnalyses
+            // Viewed marks and triage are keyed by hunk content, so entries for hunks that no longer
+            // exist simply stop matching. The overview describes the whole change; flag it once stale.
+            overviewIsStale = overview != nil && persistedFingerprint != nil && persistedFingerprint != fingerprint
             // Hiding a tier only helps when something else is left to read.
-            if allHunks.allSatisfy({ hideTiers.contains(tier(of: $0)) }) { hideTiers = [] }
+            if first, allHunks.allSatisfy({ hideTiers.contains(tier(of: $0)) }) { hideTiers = [] }
+            lastLoaded = Date()
             state = .ready
             save()
+            if Self.autoClassify { Task { await quickClassify() } }
         } catch {
             state = .failed(error.localizedDescription)
         }
-    }
-
-    private func analyze(_ f: FileDiff) async {
-        let oldDoc = f.status == .added ? nil : await document(f.oldPath, side: .old)
-        let newDoc = f.status == .deleted ? nil : await document(f.newPath, side: .new)
-        for h in f.hunks {
-            analyses[h.id] = ChangeClassifier.classify(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc)
+        if reloadPending {
+            reloadPending = false
+            loading = false
+            await load()
         }
     }
+
 
     private func fetchDiff() async throws -> String {
         let fm = FileManager.default
@@ -249,10 +274,14 @@ final class ReviewSession {
 
     // MARK: Derived
 
-    func tier(of h: Hunk) -> ChangeTier { llm[h.id]?.tier ?? analyses[h.id]?.tier ?? .behavior }
+    func tier(of h: Hunk) -> ChangeTier { llm[h.contentKey]?.tier ?? analyses[h.id]?.tier ?? .behavior }
+
+    func triage(of h: Hunk) -> LLMTriage? { llm[h.contentKey] }
+
+    func isViewed(_ h: Hunk) -> Bool { viewed.contains(h.contentKey) }
 
     func reasons(of h: Hunk) -> [String] {
-        if let l = llm[h.id] { return [l.reason] }
+        if let l = llm[h.contentKey] { return [l.reason] }
         return analyses[h.id]?.reasons ?? []
     }
 
@@ -262,7 +291,7 @@ final class ReviewSession {
         let hs = allHunks.filter { self.tier(of: $0) == tier }
         guard !reviewOrder.isEmpty else { return hs }
         return hs.sorted { a, b in
-            let ia = reviewOrder.firstIndex(of: a.id) ?? Int.max, ib = reviewOrder.firstIndex(of: b.id) ?? Int.max
+            let ia = reviewOrder.firstIndex(of: a.contentKey) ?? Int.max, ib = reviewOrder.firstIndex(of: b.contentKey) ?? Int.max
             return ia < ib
         }
     }
@@ -271,15 +300,66 @@ final class ReviewSession {
 
     var progress: (viewed: Int, total: Int) {
         let important = allHunks.filter { !tier(of: $0).isLowSignal }
-        return (important.filter { viewed.contains($0.id) }.count, important.count)
+        return (important.filter { isViewed($0) }.count, important.count)
     }
 
     func toggleViewed(_ id: String) {
-        if viewed.contains(id) { viewed.remove(id) } else { viewed.insert(id) }
+        guard let h = allHunks.first(where: { $0.id == id }) else { return }
+        toggleViewed(h)
+    }
+
+    func toggleViewed(_ h: Hunk) {
+        let k = h.contentKey
+        if viewed.contains(k) { viewed.remove(k) } else { viewed.insert(k) }
         save()
     }
 
     func file(for hunk: Hunk) -> FileDiff? { files.first { $0.hunks.contains { $0.id == hunk.id } } }
+
+    // MARK: Check out
+
+    struct CheckoutOption: Identifiable, Hashable {
+        var id: String { label }
+        var label: String
+        var detail: String
+        var steps: [[String]]
+    }
+
+    /// Ways to make this review's "after" side the working copy, as command sequences.
+    func checkoutOptions(repoVCS: VCSKind) async -> [CheckoutOption] {
+        switch target {
+        case .jj(_, let to):
+            return [
+                CheckoutOption(label: "New change on top (jj new \(to))", detail: "Leaves \(to) untouched; edits go into a new change above it.",
+                               steps: [["jj", "new", to]]),
+                CheckoutOption(label: "Edit it directly (jj edit \(to))", detail: "Edits amend \(to) itself; descendants are rebased automatically.",
+                               steps: [["jj", "edit", to]]),
+            ]
+        case .git(_, let head):
+            guard let head else { return [] }
+            if repoVCS == .jj { return [CheckoutOption(label: "New change on top (jj new \(head))", detail: "", steps: [["jj", "new", head]])] }
+            return [CheckoutOption(label: "Detached checkout (git switch --detach)", detail: "Requires a clean working tree.", steps: [["git", "switch", "--detach", head]])]
+        case .githubPR(let n):
+            guard let head = prHeadOid else { return [] }
+            if repoVCS == .jj {
+                let remote = await remotesForRepository().first ?? "origin"
+                return [CheckoutOption(
+                    label: "New change on top of PR #\(n) (jj new)",
+                    detail: "Fetches the PR head as \(remote)/pr/\(n), imports it, then starts a change on top.",
+                    steps: [["git", "fetch", "--quiet", "--no-tags", remote, "+pull/\(n)/head:refs/remotes/\(remote)/pr/\(n)"],
+                            ["jj", "git", "import"],
+                            ["jj", "new", head]])]
+            }
+            return [CheckoutOption(label: "Check out PR #\(n) (gh pr checkout)", detail: "Creates or updates a local branch for the PR.", steps: [["gh", "pr", "checkout", "\(n)"]])]
+        }
+    }
+
+    func runCheckout(_ option: CheckoutOption) async throws {
+        for step in option.steps {
+            let r = try await Shell.run(step[0], Array(step.dropFirst()), cwd: root)
+            guard r.ok else { throw ShellError(command: step.joined(separator: " "), result: r) }
+        }
+    }
 
     // MARK: GitHub
 
@@ -340,6 +420,68 @@ final class ReviewSession {
 
     // MARK: Claude triage
 
+    // MARK: Quick classification
+
+    static var autoClassify: Bool {
+        get { UserDefaults.standard.object(forKey: "review.autoClassify") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "review.autoClassify") }
+    }
+
+    var classifyState: String?
+    private var classifying = false
+
+    /// Hunks worth a model's opinion: not yet classified, and not settled by the rules beyond doubt.
+    private var classifyCandidates: [Hunk] {
+        allHunks.filter { h in
+            guard llm[h.contentKey] == nil else { return false }
+            let reasons = analyses[h.id]?.reasons ?? []
+            let settled = ["lockfile", "generated or snapshot", "formatting only"]
+            return !reasons.contains { settled.contains($0) }
+        }
+    }
+
+    /// Cheap per-hunk pass after the static rules: diff text only, no tools. Results are cached by
+    /// hunk content, so live refreshes only send new or changed hunks.
+    func quickClassify() async {
+        guard !classifying else { return }
+        let batch = Array(classifyCandidates.prefix(120))
+        guard !batch.isEmpty else { return }
+        classifying = true
+        defer { classifying = false }
+        let model = ClaudeModels.label(Claude.model(for: .classify))
+        classifyState = "Classifying \(batch.count) hunks with \(model)…"
+        var prompt = "Change: \(title)\n\nHunks:\n"
+        var budget = 60_000
+        var sent: [Hunk] = []
+        for h in batch {
+            let a = analyses[h.id]
+            let body = h.lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }
+            let text = body.count > 40 ? (body.prefix(40) + ["… \(body.count - 40) more lines"]).joined(separator: "\n") : body.joined(separator: "\n")
+            let chunk = "\n### \(h.id) file=\(h.path) in=\(a?.enclosing ?? "-") heuristic=\(a?.tier.rawValue ?? "?") (\(a?.reasons.joined(separator: "; ") ?? ""))\n\(text)\n"
+            if budget - chunk.utf8.count < 0 { break }
+            budget -= chunk.utf8.count
+            prompt += chunk
+            sent.append(h)
+        }
+        do {
+            let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.classifySystem, cwd: root, task: .classify,
+                                         schema: ClaudeTasks.classifySchema, tools: [])
+            let resp = try Claude.decode(ClaudeTasks.ClassifyResponse.self, from: r)
+            let byID = Dictionary(sent.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for item in resp.hunks {
+                guard let h = byID[item.id], let tier = ChangeTier(rawValue: item.tier), llm[h.contentKey] == nil else { continue }
+                llm[h.contentKey] = LLMTriage(tier: tier, reason: item.reason, pass: .quick)
+            }
+            classifyState = String(format: "Classified %d hunks with %@ ($%.3f)", resp.hunks.count, model, r.costUSD)
+            save()
+        } catch {
+            classifyState = "Quick classification failed: \(error.localizedDescription)"
+        }
+        if !classifyCandidates.isEmpty && sent.count == batch.count && batch.count == 120 {
+            Task { await quickClassify() }
+        }
+    }
+
     func triageWithClaude() async {
         triageState = "Asking Claude"
         triaging = true
@@ -370,10 +512,13 @@ final class ReviewSession {
             let resp = try Claude.decode(ClaudeTasks.TriageResponse.self, from: r)
             for item in resp.hunks {
                 guard let tier = ChangeTier(rawValue: item.tier) else { continue }
-                llm[item.id] = LLMTriage(tier: tier, reason: item.reason, summary: item.summary)
+                guard let h = allHunks.first(where: { $0.id == item.id }) else { continue }
+                llm[h.contentKey] = LLMTriage(tier: tier, reason: item.reason, summary: item.summary, pass: .deep)
             }
             overview = resp.overview
-            reviewOrder = resp.reviewOrder ?? []
+            let byID = Dictionary(allHunks.map { ($0.id, $0.contentKey) }, uniquingKeysWith: { a, _ in a })
+            reviewOrder = (resp.reviewOrder ?? []).compactMap { byID[$0] }
+            overviewIsStale = false
             triageState = String(format: "Triaged by Claude ($%.2f)", r.costUSD)
             save()
         } catch {

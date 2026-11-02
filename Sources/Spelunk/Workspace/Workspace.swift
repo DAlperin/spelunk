@@ -74,7 +74,23 @@ final class Workspace {
     var commentDraft: PendingComment?
     var recentFiles: [String] = []
 
-    var review: ReviewSession?
+    /// Always-on review of the current jj revision (or uncommitted git changes).
+    var workingReview: ReviewSession?
+    /// Reviews opened explicitly: pull requests, graph changes, custom ranges.
+    var pinnedReviews: [ReviewSession] = []
+    /// Key of the pinned review being shown; nil shows the working copy.
+    var activeReviewKey: String?
+
+    var review: ReviewSession? {
+        get {
+            if let k = activeReviewKey, let r = pinnedReviews.first(where: { $0.target.key == k }) { return r }
+            return workingReview
+        }
+        set {
+            // Clearing the review closes the pinned one being shown and falls back to the working copy.
+            if newValue == nil, let k = activeReviewKey { closeReview(k) }
+        }
+    }
     var reviewSide: ReviewSide = .after
     var selectedHunkID: String?
 
@@ -112,11 +128,12 @@ final class Workspace {
     @ObservationIgnored private var grammarObserver: NSObjectProtocol?
 
     /// Re-parses open documents, e.g. after grammars change.
-    func reloadCurrentDocument() {
+    func reloadCurrentDocument(keepPosition: Bool = false) {
         docs.invalidate()
         guard let d = document, d.revisionLabel == nil, let fresh = docs.document(d.path) else { return }
         document = fresh
-        revealRequest += 1
+        ra.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
+        if !keepPosition { revealRequest += 1 }
     }
 
     func start() async {
@@ -136,12 +153,89 @@ final class Workspace {
         let isRust = FileManager.default.fileExists(atPath: root.appendingPathComponent("Cargo.toml").path)
         if isRust && UserDefaults.standard.object(forKey: "autoStartRA") as? Bool ?? true { ra.start() }
         scip.loadCached(sourceFiles: allFiles)
+        startWatching()
+        Task { await refreshWorkingReview() }
         if let readme = ["README.md", "src/main.rs", "src/lib.rs"].first(where: { allFileSet.contains($0) }) {
             open(CodeLocation(path: readme, range: SourceRange(line: 0)), record: false)
         }
     }
 
-    func shutdown() { ra.stop(); clippy.cancel(); scip.cancel() }
+    func shutdown() { ra.stop(); clippy.cancel(); scip.cancel(); watcher?.stop() }
+
+    @ObservationIgnored private var watcher: FileWatcher?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+
+    private func startWatching() {
+        let w = FileWatcher(root: root) { [weak self] paths in
+            Task { @MainActor in self?.filesChanged(paths) }
+        }
+        w.start()
+        watcher = w
+    }
+
+    /// Debounced reaction to edits on disk (yours, Claude's, a checkout): refresh the open file,
+    /// the working-copy review, and the change graph when it is visible.
+    private func filesChanged(_ paths: [String]) {
+        if let d = document, d.revisionLabel == nil, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
+        refreshTask?.cancel()
+        refreshTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshWorkingReview()
+            if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
+        }
+    }
+
+    /// What "the current revision" means: @ when it has changes, otherwise the change below it
+    /// (right after `jj new`). For git, uncommitted changes, or the last commit when clean.
+    private func workingTarget() async -> ReviewTarget? {
+        switch vcs.kind {
+        case .jj:
+            let empty = (try? await Shell.output("jj", ["log", "--no-graph", "-r", "@", "-T", "if(empty, \"1\", \"0\")"], cwd: root))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+            return empty ? .jj(from: "@--", to: "@-") : .jj(from: "@-", to: "@")
+        case .git:
+            let dirty = !((try? await Shell.output("git", ["status", "--porcelain", "--untracked-files=no"], cwd: root)) ?? "").isEmpty
+            return dirty ? .git(base: "HEAD", head: nil) : .git(base: "HEAD~1", head: "HEAD")
+        case .none:
+            return nil
+        }
+    }
+
+    func refreshWorkingReview() async {
+        guard let target = await workingTarget() else { workingReview = nil; return }
+        if let r = workingReview, r.target == target {
+            await r.load()
+        } else {
+            let r = ReviewSession(root: root, target: target, github: github, tracksWorkingCopy: true)
+            workingReview = r
+            await r.load()
+        }
+    }
+
+    func closeReview(_ key: String) {
+        pinnedReviews.removeAll { $0.target.key == key }
+        if activeReviewKey == key { activeReviewKey = nil }
+    }
+
+    func checkOut(_ r: ReviewSession, _ option: ReviewSession.CheckoutOption) async {
+        statusMessage = "Checking out…"
+        do {
+            try await r.runCheckout(option)
+            vcs = await VCS.detect(root)
+            statusMessage = "Checked out: \(option.label)"
+        } catch {
+            statusMessage = "Check out failed: \(error.localizedDescription)"
+        }
+        await refreshWorkingReview()
+        await scm.refresh(kind: vcs.kind)
+    }
+
+    func showWorkingReview() {
+        activeReviewKey = nil
+        sidebarTab = .changes
+        if let r = workingReview, let h = r.hunks(in: .critical).first ?? r.hunks(in: .behavior).first ?? r.allHunks.first { selectHunk(h) }
+    }
 
     func rebuildTree() {
         Task { await rebuildTreeAsync() }
@@ -327,10 +421,22 @@ final class Workspace {
 
     // MARK: Review
 
+    /// Opens a review. The working copy's own target switches to the working tab; anything else is
+    /// pinned beside it (reusing an existing pin for the same target).
     func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
-        let r = ReviewSession(root: root, target: target, github: github)
-        review = r
         sidebarTab = .changes
+        let r: ReviewSession
+        if let w = workingReview, w.target == target {
+            activeReviewKey = nil
+            r = w
+        } else if let existing = pinnedReviews.first(where: { $0.target == target }) {
+            activeReviewKey = existing.target.key
+            r = existing
+        } else {
+            r = ReviewSession(root: root, target: target, github: github)
+            pinnedReviews.append(r)
+            activeReviewKey = target.key
+        }
         Task {
             await r.load()
             let focused = focusPath.flatMap { p in r.allHunks.first { $0.path == p } }

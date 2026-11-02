@@ -270,7 +270,7 @@ enum PaletteCommands {
         add("Show After", icon: "arrow.uturn.forward", when: hasReview) { ws.setReviewSide(.after) }
         add("Submit GitHub Review…", "\(ws.review?.pendingComments.count ?? 0) pending comments", icon: "paperplane",
             when: ws.review?.pullRequest != nil) { ws.showSubmitReview = true }
-        add("Close Review", icon: "xmark.circle", when: hasReview) { ws.review = nil; ws.sidebarTab = .files }
+        add("Close Review", ws.review?.target.label, icon: "xmark.circle", when: ws.activeReviewKey != nil) { ws.review = nil }
 
         // Code paths
         add("Add Location to Code Path", nil, "⇧⌘T", icon: "plus", when: ws.document != nil) { ws.addCurrentToTrace() }

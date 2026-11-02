@@ -57,6 +57,7 @@ extension ChangeTier {
         case .critical: .red
         case .behavior: .orange
         case .supporting: .blue
+        case .docs: .indigo
         case .tests: .teal
         case .mechanical: .gray
         }

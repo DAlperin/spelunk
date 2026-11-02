@@ -104,6 +104,7 @@ final class DebugBridge {
             }
             if let o = r.overview { s += "  overview: \(o)\n" }
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
+            if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
         for e in ws.askEntries { s += "ask: \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
         if let m = ws.statusMessage { s += "status: \(m)\n" }

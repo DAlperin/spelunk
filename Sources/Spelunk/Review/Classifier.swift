@@ -1,7 +1,7 @@
 import Foundation
 
 enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendable {
-    case critical, behavior, supporting, tests, mechanical
+    case critical, behavior, supporting, docs, tests, mechanical
 
     var id: String { rawValue }
     var rank: Int { ChangeTier.allCases.firstIndex(of: self)! }
@@ -12,6 +12,7 @@ enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendab
         case .critical: "Needs attention"
         case .behavior: "Behavior changes"
         case .supporting: "Supporting plumbing"
+        case .docs: "Docs & comments"
         case .tests: "Tests"
         case .mechanical: "Mechanical"
         }
@@ -22,6 +23,7 @@ enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendab
         case .critical: "Critical"
         case .behavior: "Behavior"
         case .supporting: "Plumbing"
+        case .docs: "Docs"
         case .tests: "Tests"
         case .mechanical: "Noise"
         }
@@ -107,7 +109,7 @@ enum ChangeClassifier {
             return result(.mechanical, path.hasSuffix(".lock") || path.hasSuffix("lock.json") ? "lockfile" : "generated or snapshot")
         }
         let lang = SourceLanguage.from(path: path)
-        if lang == .markdown { return result(.mechanical, "documentation") }
+        if lang == .markdown { return result(.docs, file.status == .added ? "new document" : "documentation") }
         if FileClassifier.isTest(path) { return result(.tests, "test file") }
         if path.lastPathComponent == "Cargo.toml" {
             let changed = (hunk.added + hunk.removed).map(\.text).joined(separator: "\n")
@@ -135,12 +137,20 @@ enum ChangeClassifier {
             return result(.tests, "inside #[cfg(test)] / #[test]")
         }
 
+        let addedComments = addedToks.filter(\.isComment).map(\.text)
+        let removedComments = removedToks.filter(\.isComment).map(\.text)
+        let commentWordsChanged = Self.wordDelta(addedComments, removedComments)
         if addedCode.map(\.text) == removedCode.map(\.text) {
-            if addedToks.count != removedToks.count || addedToks.map(\.text) != removedToks.map(\.text) {
-                let docOnly = addedToks.contains { $0.isComment && ($0.text.hasPrefix("///") || $0.text.hasPrefix("//!")) }
-                return result(.mechanical, docOnly ? "doc comments only" : "comments only")
+            if commentWordsChanged == 0 { return result(.mechanical, "formatting only") }
+            if (addedComments + removedComments).contains(where: Self.isInvariantComment) {
+                return result(.critical, "safety / invariant comment changed")
             }
-            return result(.mechanical, "formatting only")
+            let isDoc = (addedComments + removedComments).contains { $0.hasPrefix("///") || $0.hasPrefix("//!") || $0.hasPrefix("/**") }
+            // A few words reworded in existing comments is a typo fix; anything more is content.
+            if commentWordsChanged <= 3 && !removedComments.isEmpty && !addedComments.isEmpty {
+                return result(.mechanical, "comment wording")
+            }
+            return result(.docs, isDoc ? "doc comments" : "comments")
         }
 
         let changedLines = (hunk.added + hunk.removed).map { $0.text.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -188,6 +198,7 @@ enum ChangeClassifier {
             critical = true
             reasons.append("public API: \(name)")
         }
+        if commentWordsChanged > 3 { reasons.append("also edits comments") }
         if critical { return HunkAnalysis(tier: .critical, reasons: reasons, enclosing: enclosing) }
 
         if let rename = consistentRename(removedCode, addedCode, oldDoc: oldDoc, newDoc: newDoc) { return result(.mechanical, rename) }
@@ -209,6 +220,25 @@ enum ChangeClassifier {
         if structural { reasons.append(hunk.removedCount == 0 ? "new logic" : "control flow / logic") }
         if reasons.isEmpty { reasons.append(hunk.removedCount == 0 ? "added code" : hunk.addedCount == 0 ? "removed code" : "code change") }
         return HunkAnalysis(tier: .behavior, reasons: reasons, enclosing: enclosing)
+    }
+
+    /// Size of the multiset difference between the words of two comment sets.
+    static func wordDelta(_ a: [String], _ b: [String]) -> Int {
+        func words(_ xs: [String]) -> [String: Int] {
+            var m: [String: Int] = [:]
+            for x in xs {
+                for w in x.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" }) where !w.isEmpty { m[w.lowercased(), default: 0] += 1 }
+            }
+            return m
+        }
+        let wa = words(a), wb = words(b)
+        return Set(wa.keys).union(wb.keys).reduce(0) { $0 + abs((wa[$1] ?? 0) - (wb[$1] ?? 0)) }
+    }
+
+    /// Comments that document an obligation rather than describe code.
+    static func isInvariantComment(_ c: String) -> Bool {
+        c.range(of: #"SAFETY|INVARIANT|#\s*(Safety|Panics)|\bunsafe\b|\bmust (not|never|always|only)\b|\bnever\b.*\b(called|held|null|empty)"#,
+                options: [.regularExpression]) != nil
     }
 
     private static func count(_ pattern: String, _ toks: [RustTokens.Tok], _ text: String) -> Int {

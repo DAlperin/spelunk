@@ -101,6 +101,42 @@ enum ClaudeTasks {
     viewer can link them. Be direct and specific; prefer short paragraphs and lists over long prose.
     """
 
+    // MARK: Quick classification
+
+    static let classifySystem = """
+    You classify diff hunks so a reviewer can skip noise and focus on what matters. You see only the diff.
+    Tiers: critical (invariants, unsafe, concurrency, persistence/protocol formats, public API, error
+    handling that can now panic or swallow errors, security), behavior (logic changes), supporting (plumbing
+    that follows from a change elsewhere), docs (comment/doc content changes; safety/invariant comments are
+    critical), tests (test code and fixtures), mechanical (formatting, renames, imports, typo fixes, lockfiles,
+    generated code). Each hunk has a heuristic tier from static rules; keep it unless the diff clearly says
+    otherwise. Reasons: at most 8 words, concrete.
+    """
+
+    struct ClassifyResponse: Decodable {
+        struct Item: Decodable { var id: String; var tier: String; var reason: String }
+        var hunks: [Item]
+    }
+
+    static let classifySchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "hunks": [
+                "type": "array",
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "id": ["type": "string"],
+                        "tier": ["type": "string", "enum": ["critical", "behavior", "supporting", "docs", "tests", "mechanical"]],
+                        "reason": ["type": "string"],
+                    ],
+                    "required": ["id", "tier", "reason"],
+                ],
+            ],
+        ],
+        "required": ["hunks"],
+    ]
+
     // MARK: Review triage
 
     struct TriageResponse: Decodable {
@@ -126,7 +162,7 @@ enum ClaudeTasks {
                     "type": "object",
                     "properties": [
                         "id": ["type": "string"],
-                        "tier": ["type": "string", "enum": ["critical", "behavior", "supporting", "tests", "mechanical"]],
+                        "tier": ["type": "string", "enum": ["critical", "behavior", "supporting", "docs", "tests", "mechanical"]],
                         "reason": ["type": "string", "description": "Why this tier, at most 12 words"],
                         "summary": ["type": "string", "description": "What the hunk changes, one sentence"],
                     ],
@@ -144,8 +180,10 @@ enum ClaudeTasks {
     - behavior: ordinary logic changes that alter what the program does.
     - supporting: plumbing that follows from a behavior change elsewhere (new parameter threaded through,
       constructor updates, re-exports, config wiring) with no independent decision in it.
+    - docs: comments, doc comments and documentation whose content changed (explanations, design notes,
+      new docs). Comments that state safety or invariants belong in critical.
     - tests: test code, fixtures, snapshots.
-    - mechanical: formatting, renames, import churn, comments/docs, lockfiles, generated code, moves.
+    - mechanical: formatting, renames, import churn, typo-level comment edits, lockfiles, generated code, moves.
     Each hunk comes with a heuristic tier from static analysis; overrule it when the code says otherwise.
     You may read files in the repository to understand context. Keep reasons terse.
     """

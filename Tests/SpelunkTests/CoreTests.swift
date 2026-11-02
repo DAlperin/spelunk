@@ -106,9 +106,23 @@ final class ClassifierTests: XCTestCase {
     }
 
     func testComments() {
-        let a = tier(["// old comment", "let x = 1;"], ["// new comment", "let x = 1;"])
-        XCTAssertEqual(a.tier, .mechanical)
-        XCTAssertEqual(a.reasons, ["comments only"])
+        let typo = tier(["// old comment", "let x = 1;"], ["// new comment", "let x = 1;"])
+        XCTAssertEqual(typo.tier, .mechanical)
+        XCTAssertEqual(typo.reasons, ["comment wording"])
+
+        let rewritten = tier(["/// Returns the value.", "fn f() {}"],
+                             ["/// Returns the cached value, recomputing it when the epoch advanced past the snapshot.", "fn f() {}"])
+        XCTAssertEqual(rewritten.tier, .docs)
+        XCTAssertEqual(rewritten.reasons, ["doc comments"])
+
+        let added = tier(["let x = 1;"], ["// Readers rely on this ordering being stable across restarts.", "let x = 1;"])
+        XCTAssertEqual(added.tier, .docs)
+
+        let safety = tier(["// SAFETY: the pointer is valid for the lifetime of the guard.", "unsafe { p.read() }"],
+                          ["// SAFETY: the pointer is valid while the lock is held.", "unsafe { p.read() }"])
+        XCTAssertEqual(safety.tier, .critical)
+
+        XCTAssertEqual(tier(["let x = 1;"], ["let  x = 1;"]).tier, .mechanical)
     }
 
     func testImports() {
@@ -132,7 +146,7 @@ final class ClassifierTests: XCTestCase {
     func testFiles() {
         XCTAssertEqual(tier(["a"], ["b"], path: "Cargo.lock").tier, .mechanical)
         XCTAssertEqual(tier(["a"], ["b"], path: "crate/tests/foo.rs").tier, .tests)
-        XCTAssertEqual(tier(["x"], ["y"], path: "README.md").tier, .mechanical)
+        XCTAssertEqual(tier(["x"], ["y"], path: "README.md").tier, .docs)
     }
 
     func testBehaviorAndPlumbing() {
