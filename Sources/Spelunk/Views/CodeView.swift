@@ -99,6 +99,11 @@ struct CodeView: NSViewRepresentable {
         }
         c.diffMarkers = ws.diffMarkers(for: document)
         c.diagnostics = !secondary && document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
+        let markers = secondary ? (badges: [Int: Int](), pills: [Int: Int]()) : ws.pathMarkers(for: document)
+        c.stepBadges = markers.badges
+        c.stepPills = markers.pills
+        c.currentStepLine = ws.traces.currentStep.flatMap { i in ws.traces.active?.steps[safe: i] }.flatMap { $0.location.path == document.path ? $0.location.line : nil }
+        tv.needsDisplay = true
         c.traceLines = secondary ? [] : Set((ws.traces.active?.steps ?? []).filter { $0.location.path == document.path }.map(\.location.line))
         c.bookmarkedLines = secondary ? [] : Set(ws.bookmarks.items.filter { $0.location.path == document.path }.map(\.location.line))
         c.commentLines = secondary ? [:] : ws.commentLines(for: document)
@@ -131,6 +136,11 @@ struct CodeView: NSViewRepresentable {
         var diagnostics: [Diagnostic] = []
         var traceLines: Set<Int> = []
         var bookmarkedLines: Set<Int> = []
+        /// Line -> step number for steps of the active code path in this file.
+        var stepBadges: [Int: Int] = [:]
+        /// Line -> step number a call site on that line leads to.
+        var stepPills: [Int: Int] = [:]
+        var currentStepLine: Int?
         /// Zero-based line -> true when an unresolved thread or pending comment sits there.
         var commentLines: [Int: Bool] = [:]
         private var lastBackgroundKey = ""
@@ -352,6 +362,34 @@ final class ClosureMenuItem: NSMenuItem {
 final class SourceTextView: NSTextView {
     weak var coordinator: CodeView.Coordinator?
 
+    /// "→ step N" pills after call sites that lead to another step of the active code path.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let (pills, display) = MainActor.assumeIsolated { (coordinator?.stepPills ?? [:], coordinator?.display) }
+        guard !pills.isEmpty, let display, let lm = layoutManager, display.ns.length > 0 else { return }
+        let font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
+        for (line, step) in pills {
+            let dl = display.displayLine(line)
+            let r = display.lines.lineRange(dl)
+            let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: r.location, length: max(1, r.length)), actualCharacterRange: nil)
+            guard glyphs.location < lm.numberOfGlyphs else { continue }
+            var used = lm.lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            used.origin.y += textContainerInset.height
+            used.origin.x += textContainerInset.width
+            if r.length > 0, let tc = textContainer {
+                let end = lm.boundingRect(forGlyphRange: NSRange(location: max(glyphs.location, NSMaxRange(glyphs) - 1), length: 1), in: tc)
+                used.size.width = end.maxX
+            }
+            guard used.intersects(dirtyRect.insetBy(dx: -400, dy: -20)) else { continue }
+            let label = NSAttributedString(string: "→ step \(step)", attributes: [.font: font, .foregroundColor: NSColor.systemPurple])
+            let sz = label.size()
+            let box = NSRect(x: used.maxX + 12, y: used.midY - sz.height / 2 - 2, width: sz.width + 10, height: sz.height + 4)
+            NSColor.systemPurple.withAlphaComponent(0.16).setFill()
+            NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).fill()
+            label.draw(at: NSPoint(x: box.minX + 5, y: box.minY + 2))
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
         guard event.clickCount == 1, selectedRange().length == 0 else { return }
@@ -405,6 +443,7 @@ final class GutterView: NSView {
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
              coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         }
+        let (badges, currentStep) = MainActor.assumeIsolated { (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine) }
         guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
         let glyphRange = lm.glyphRange(forBoundingRect: visible, in: tc)
@@ -446,7 +485,16 @@ final class GutterView: NSView {
                     (d.level == .error ? NSColor.systemRed : NSColor.systemYellow).setFill()
                     NSBezierPath(ovalIn: NSRect(x: 17, y: y + h / 2 - 3, width: 6, height: 6)).fill()
                 }
-                if trace.contains(line) {
+                if let n = badges[line] {
+                    let r = NSRect(x: 17, y: y + h / 2 - 7, width: 14, height: 14)
+                    let path = NSBezierPath(ovalIn: r)
+                    if line == currentStep { NSColor.systemPurple.setFill(); path.fill() }
+                    else { NSColor.systemPurple.setStroke(); path.lineWidth = 1.2; path.stroke() }
+                    let num = NSAttributedString(string: String(n), attributes: [.font: NSFont.systemFont(ofSize: 8.5, weight: .bold),
+                                                                                 .foregroundColor: line == currentStep ? NSColor.white : NSColor.systemPurple])
+                    let sz = num.size()
+                    num.draw(at: NSPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2))
+                } else if trace.contains(line) {
                     NSColor.systemPurple.setFill()
                     NSBezierPath(roundedRect: NSRect(x: 25, y: y + h / 2 - 3, width: 6, height: 6), xRadius: 1, yRadius: 1).fill()
                 }

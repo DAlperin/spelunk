@@ -101,6 +101,9 @@ final class Workspace {
     var contextPinned = false
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
+    @ObservationIgnored var connectorCache: (key: String, value: [StepConnector])?
+    /// Files tab shows only files that hold steps of the active path.
+    var pathFilesOnly = false
 
     /// Whether the open file is part of the review being shown (diff controls apply only then).
     var documentInReview: Bool {
@@ -486,6 +489,7 @@ final class Workspace {
     }
 
     func newCodePath(fromCursor: Bool) {
+        inspectorPane = .paths
         traces.create(title: "Untitled path", origin: .manual)
         if fromCursor { addCurrentToTrace() }
     }
@@ -505,6 +509,7 @@ final class Workspace {
 
     func playStep(_ index: Int) {
         guard let t = traces.active, index >= 0, index < t.steps.count else { return }
+        inspectorPane = .paths
         traces.currentStep = index
         open(t.steps[index].location, record: true)
     }

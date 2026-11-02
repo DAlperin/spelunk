@@ -34,6 +34,14 @@ struct SpelunkApp: App {
                 Button("Add Location to Code Path") { model.workspace?.addCurrentToTrace() }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("New Code Path") { model.workspace?.newCodePath(fromCursor: false) }
                 Divider()
+                Button("Next Step ") {
+                    guard let ws = model.workspace else { return }
+                    ws.playStep((ws.traces.currentStep ?? -1) + 1)
+                }.keyboardShortcut("]", modifiers: [.option])
+                Button("Previous Step ") {
+                    guard let ws = model.workspace else { return }
+                    ws.playStep((ws.traces.currentStep ?? 1) - 1)
+                }.keyboardShortcut("[", modifiers: [.option])
                 Button("Next Step") {
                     guard let ws = model.workspace else { return }
                     ws.playStep((ws.traces.currentStep ?? -1) + 1)

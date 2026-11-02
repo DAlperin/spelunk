@@ -31,10 +31,16 @@ struct FileTreeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField(ws.childRepos.isEmpty ? "Filter files" : "Filter repositories", text: $filter)
-                .textFieldStyle(.roundedBorder)
-                .focused($filterFocused)
-                .padding(.horizontal, 8).padding(.bottom, 6)
+            HStack(spacing: 6) {
+                TextField(ws.childRepos.isEmpty ? "Filter files" : "Filter repositories", text: $filter)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($filterFocused)
+                if !pathSteps.isEmpty {
+                    Toggle("Path files", isOn: $ws.pathFilesOnly).toggleStyle(.button).controlSize(.small)
+                        .help("Show only the files that hold steps of the open code path")
+                }
+            }
+            .padding(.horizontal, 8).padding(.bottom, 6)
                 .onChange(of: model.focusFilter) { filterFocused = true }
                 .onSubmit {
                     if !ws.childRepos.isEmpty {
@@ -47,10 +53,26 @@ struct FileTreeView: View {
                 ProgressView("Listing files…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !ws.childRepos.isEmpty {
                 NotARepoView(ws: ws, filter: filter)
+            } else if ws.pathFilesOnly && !pathSteps.isEmpty && filter.isEmpty {
+                List(selection: Binding(get: { ws.document?.path }, set: { if let p = $0 { open(p) } })) {
+                    ForEach(pathSteps.keys.sorted { (pathSteps[$0]?.first ?? 0) < (pathSteps[$1]?.first ?? 0) }, id: \.self) { p in
+                        HStack(spacing: 5) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.lastPathComponent)
+                                Text(p.deletingLastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                            }
+                            Spacer()
+                            StepBadges(steps: pathSteps[p] ?? [], current: ws.traces.currentStep.map { $0 + 1 })
+                        }
+                        .tag(p)
+                    }
+                }
+                .listStyle(.sidebar)
             } else if filter.isEmpty {
                 List(selection: Binding(get: { ws.document?.path }, set: { p in if let p, !isDir(p) { open(p) } })) {
                     OutlineGroup(ws.tree.children ?? [], children: \.children) { node in
-                        FileRow(node: node, changed: changedTier(node.path))
+                        FileRow(node: node, changed: changedTier(node.path), steps: node.isDirectory ? [] : (pathSteps[node.path] ?? []),
+                                currentStep: ws.traces.currentStep.map { $0 + 1 })
                             .tag(node.path)
                     }
                 }
@@ -66,8 +88,12 @@ struct FileTreeView: View {
             }
             Divider()
             HStack {
+                if ws.pathFilesOnly && !pathSteps.isEmpty {
+                    Text(verbatim: "Showing files on the path · \(pathSteps.count) files of \(ws.allFiles.count)").font(.caption).foregroundStyle(.secondary)
+                } else {
                 Text(verbatim: "\(ws.visibleFileCount) of \(ws.allFiles.count) files · \(ws.sourceOnly ? "Source only" : "All") · \(ws.showTests ? "Tests shown" : "Tests hidden")")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
                 Spacer()
                 Menu {
                     Toggle("Source files only", isOn: $ws.sourceOnly)
@@ -80,6 +106,14 @@ struct FileTreeView: View {
     }
 
     private func isDir(_ p: String) -> Bool { !ws.allFileSet.contains(p) }
+
+    /// Step numbers (1-based) of the active code path, by file.
+    var pathSteps: [String: [Int]] {
+        guard let t = ws.traces.active else { return [:] }
+        var out: [String: [Int]] = [:]
+        for (i, s) in t.steps.enumerated() { out[s.location.path, default: []].append(i + 1) }
+        return out
+    }
 
     private func open(_ p: String) { ws.open(CodeLocation(path: p, range: SourceRange(line: 0))) }
 
@@ -201,9 +235,27 @@ struct NotARepoView: View {
     }
 }
 
+struct StepBadges: View {
+    let steps: [Int]
+    let current: Int?
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(steps.prefix(6), id: \.self) { n in
+                Text(verbatim: String(n)).font(.system(size: 8.5, weight: .bold))
+                    .frame(width: 14, height: 14)
+                    .background(Circle().fill(n == current ? Color.purple : .clear))
+                    .overlay(Circle().strokeBorder(Color.purple, lineWidth: 1))
+                    .foregroundStyle(n == current ? .white : .purple)
+            }
+        }
+    }
+}
+
 struct FileRow: View {
     let node: FileNode
     let changed: ChangeTier?
+    var steps: [Int] = []
+    var currentStep: Int?
 
     var body: some View {
         HStack(spacing: 5) {
@@ -212,6 +264,7 @@ struct FileRow: View {
                 .frame(width: 16)
             Text(node.name).lineLimit(1)
             Spacer()
+            if !steps.isEmpty { StepBadges(steps: steps, current: currentStep) }
             if let changed { Circle().fill(changed.color).frame(width: 6, height: 6) }
         }
     }

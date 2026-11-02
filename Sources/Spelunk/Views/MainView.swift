@@ -619,26 +619,48 @@ struct TraceStepBanner: View {
 
     var body: some View {
         let step = trace.steps[index]
-        HStack(alignment: .top, spacing: 8) {
-            Text(verbatim: "\(index + 1)/\(trace.steps.count)").font(.caption.monospaced().weight(.semibold))
-                .padding(.horizontal, 6).padding(.vertical, 2).background(Color.purple.opacity(0.15), in: Capsule())
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(step.title).font(.callout.monospaced().weight(.semibold))
-                    if !step.verified {
-                        Label("unverified location", systemImage: "questionmark.circle").font(.caption).foregroundStyle(.orange)
+        let connectors = ws.activeConnectors()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "point.topleft.down.to.point.bottomright.curvepath").foregroundStyle(.purple)
+                Text(trace.title).font(.callout.weight(.semibold)).lineLimit(1)
+                HStack(spacing: 3) {
+                    ForEach(Array(trace.steps.enumerated()), id: \.element.id) { i, s in
+                        if i > 0 {
+                            Rectangle().fill(connectors.indices.contains(i - 1) && connectors[i - 1].kind == .inferred ? Color.orange.opacity(0.6) : Color.secondary.opacity(0.4))
+                                .frame(width: 6, height: 1.5)
+                        }
+                        Button { ws.playStep(i) } label: {
+                            ZStack {
+                                Circle().strokeBorder(i == index ? Color.purple : Color.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1.3, dash: s.verified ? [] : [2, 2]))
+                                    .background(Circle().fill(i == index ? Color.purple : .clear))
+                                Text(verbatim: String(i + 1)).font(.system(size: 9, weight: .bold)).foregroundStyle(i == index ? .white : .secondary)
+                            }
+                            .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.plain)
+                        .help(s.title)
                     }
-                    Text(trace.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if !step.note.isEmpty { Text(step.note).font(.callout).lineLimit(4).help(step.note) }
+                Spacer()
+                Button { ws.playStep(index - 1) } label: { HStack(spacing: 3) { KeyCap("⌥["); Text("prev") } }.disabled(index == 0)
+                Button { ws.playStep(index + 1) } label: { HStack(spacing: 3) { KeyCap("⌥]"); Text("next") } }.disabled(index + 1 >= trace.steps.count)
+                Button { ws.traces.currentStep = nil } label: { Image(systemName: "xmark") }.help("Close the banner")
             }
-            Spacer()
-            Button { ws.playStep(index - 1) } label: { Image(systemName: "chevron.up") }.disabled(index == 0)
-            Button { ws.playStep(index + 1) } label: { Image(systemName: "chevron.down") }.disabled(index + 1 >= trace.steps.count)
-            Button { ws.traces.currentStep = nil } label: { Image(systemName: "xmark") }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(verbatim: String(index + 1)).font(.callout.weight(.bold)).foregroundStyle(.purple)
+                if step.note.isEmpty {
+                    Text(step.title).font(.callout.monospaced())
+                    Button("Add a note") { ws.inspectorPane = .paths; ws.editingStepID = step.id }.buttonStyle(.link).font(.caption)
+                } else {
+                    Text(step.note).font(.callout).lineLimit(3).help(step.note)
+                }
+                if !step.verified { Label("unverified location", systemImage: "questionmark.circle").font(.caption).foregroundStyle(.orange) }
+            }
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(Color.purple.opacity(0.05))
+        .buttonStyle(.plain)
+        .font(.caption)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(Color.purple.opacity(0.08))
     }
 }
