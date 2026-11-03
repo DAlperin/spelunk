@@ -30,21 +30,7 @@ final class GitHubService {
         var deletions: Int
         var reviewDecision: String?
         var url: String
-        var statusCheckRollup: [Check]?
         var id: Int { number }
-
-        var checkSummary: (passed: Int, failed: Int, pending: Int) {
-            var p = 0, f = 0, w = 0
-            for c in statusCheckRollup ?? [] {
-                let v = (c.conclusion ?? c.state ?? c.status ?? "").uppercased()
-                switch v {
-                case "SUCCESS", "NEUTRAL", "SKIPPED": p += 1
-                case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE": f += 1
-                default: w += 1
-                }
-            }
-            return (p, f, w)
-        }
     }
 
     enum PRFilter: String, CaseIterable, Identifiable {
@@ -75,12 +61,41 @@ final class GitHubService {
 
     func listPullRequests(_ filter: PRFilter, query: String) async throws -> [PullRequestSummary] {
         _ = await ensureRepo()
+        // Check runs are left out: on large repositories, fetching every run for a page of pull
+        // requests times out at GitHub. `checkStates` fetches just the rollup state afterwards.
         var args = ["pr", "list", "-L", "60", "--json",
-                    "number,title,author,updatedAt,isDraft,headRefName,additions,deletions,reviewDecision,url,statusCheckRollup"]
+                    "number,title,author,updatedAt,isDraft,headRefName,additions,deletions,reviewDecision,url"]
         let search = [filter.search, query].filter { !$0.isEmpty }.joined(separator: " ")
         if !search.isEmpty { args += ["--search", search] }
-        let out = try await Shell.output("gh", args, cwd: root)
+        let out = try await Shell.output("gh", args, cwd: root, timeout: 60)
         return try JSONDecoder().decode([PullRequestSummary].self, from: Data(out.utf8))
+    }
+
+    /// The combined check state (SUCCESS, FAILURE, PENDING, ...) of each pull request's head commit,
+    /// in one GraphQL request.
+    func checkStates(_ numbers: [Int]) async -> [Int: String] {
+        guard let repo = await ensureRepo(), !numbers.isEmpty else { return [:] }
+        let parts = repo.split(separator: "/").map(String.init)
+        guard parts.count == 2 else { return [:] }
+        let fields = numbers.map { "p\($0): pullRequest(number: \($0)) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }" }
+        let q = "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { \(fields.joined(separator: " ")) } }"
+        let out: String
+        do {
+            out = try await Shell.output("gh", ["api", "graphql", "-F", "owner=\(parts[0])", "-F", "name=\(parts[1])", "-f", "query=\(q)"],
+                                         cwd: root, timeout: 60)
+        } catch {
+            Log.debug("checkStates: \(error.localizedDescription.prefix(300))")
+            return [:]
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any],
+              let r = (obj["data"] as? [String: Any])?["repository"] as? [String: Any] else { return [:] }
+        var result: [Int: String] = [:]
+        for n in numbers {
+            let pr = r["p\(n)"] as? [String: Any]
+            let commit = (((pr?["commits"] as? [String: Any])?["nodes"] as? [[String: Any]])?.first?["commit"]) as? [String: Any]
+            if let state = (commit?["statusCheckRollup"] as? [String: Any])?["state"] as? String { result[n] = state }
+        }
+        return result
     }
 
     // MARK: Pull request details

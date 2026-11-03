@@ -81,8 +81,8 @@ enum Shell {
         return ShellResult(status: o.status, stdout: String(decoding: o.stdout, as: UTF8.self), stderr: String(decoding: o.stderr, as: UTF8.self))
     }
 
-    static func output(_ executable: String, _ args: [String], cwd: URL? = nil) async throws -> String {
-        let r = try await run(executable, args, cwd: cwd)
+    static func output(_ executable: String, _ args: [String], cwd: URL? = nil, timeout: TimeInterval? = 300) async throws -> String {
+        let r = try await run(executable, args, cwd: cwd, timeout: timeout)
         guard r.ok else { throw ShellError(command: ([executable] + args).joined(separator: " "), result: r) }
         return r.stdout
     }

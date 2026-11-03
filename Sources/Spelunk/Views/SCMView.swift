@@ -267,6 +267,7 @@ struct PullRequestListView: View {
     @State private var filter: GitHubService.PRFilter = .reviewRequested
     @State private var query = ""
     @State private var prs: [GitHubService.PullRequestSummary] = []
+    @State private var checks: [Int: String] = [:]
     @State private var loading = false
     @State private var error: String?
 
@@ -283,7 +284,7 @@ struct PullRequestListView: View {
             if loading { ProgressView().controlSize(.small) }
             if let e = error { Text(e).font(.caption).foregroundStyle(.red).padding(.horizontal, 8) }
             List(prs) { pr in
-                Button { ws.startReview(.githubPR(pr.number)) } label: { PRRow(pr: pr) }.buttonStyle(.plain)
+                Button { ws.startReview(.githubPR(pr.number)) } label: { PRRow(pr: pr, checks: checks[pr.number]) }.buttonStyle(.plain)
                     .contextMenu {
                         Button("Review in Spelunk") { ws.startReview(.githubPR(pr.number)) }
                         Button("Open on GitHub") { if let u = URL(string: pr.url) { NSWorkspace.shared.open(u) } }
@@ -306,6 +307,8 @@ struct PullRequestListView: View {
             do {
                 prs = try await ws.github.listPullRequests(filter, query: q)
                 error = nil
+                loading = false
+                checks = await ws.github.checkStates(prs.map(\.number))
             } catch {
                 self.error = error.localizedDescription
             }
@@ -316,6 +319,7 @@ struct PullRequestListView: View {
 
 struct PRRow: View {
     let pr: GitHubService.PullRequestSummary
+    var checks: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -323,10 +327,12 @@ struct PRRow: View {
                 Text(verbatim: "#\(pr.number)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 if pr.isDraft { Text("draft").font(.system(size: 9)).foregroundStyle(.secondary) }
                 Spacer()
-                let c = pr.checkSummary
-                if c.failed > 0 { Label("\(c.failed)", systemImage: "xmark.circle.fill").font(.caption2).foregroundStyle(.red) }
-                else if c.pending > 0 { Label("\(c.pending)", systemImage: "clock").font(.caption2).foregroundStyle(.orange) }
-                else if c.passed > 0 { Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green) }
+                switch checks {
+                case "SUCCESS": Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green).help("Checks passed")
+                case "FAILURE", "ERROR": Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(.red).help("Checks failing")
+                case "PENDING", "EXPECTED": Image(systemName: "clock").font(.caption2).foregroundStyle(.orange).help("Checks running")
+                default: EmptyView()
+                }
                 Text(verbatim: "+\(pr.additions) −\(pr.deletions)").font(.caption2.monospaced()).foregroundStyle(.secondary)
             }
             Text(pr.title).font(.callout).lineLimit(2)
