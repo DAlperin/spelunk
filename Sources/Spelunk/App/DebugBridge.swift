@@ -162,6 +162,15 @@ final class DebugBridge {
                     Log.debug("grammar installed: \(specs.map(\.name))")
                 } catch { Log.debug("grammar install failed: \(error.localizedDescription)") }
             }
+        case "hover":
+            // hover <line>:<col> in the main editor
+            if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let c = tv.coordinator, let d = c.display,
+               let lm = tv.layoutManager, let tc = tv.textContainer {
+                let off = d.displayOffset(pos(arg))
+                let g = lm.glyphIndexForCharacter(at: min(off, max(0, d.ns.length - 1)))
+                let r = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc)
+                c.hover.mouseMoved(at: NSPoint(x: r.midX + tv.textContainerInset.width, y: r.midY + tv.textContainerInset.height))
+            }
         case "openjobtrace":
             if let j = ws.jobs.last(where: { $0.kind == .trace && $0.traceID != nil }) { ws.openJobTrace(j.id) }
         case "rulewriter": ws.ruleWriterSeed = arg; ws.showRuleWriter = true

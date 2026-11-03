@@ -93,6 +93,7 @@ final class Workspace {
     var showRuleWriter = false
     @ObservationIgnored var navGeneration = 0
     @ObservationIgnored var phantomCache: (key: String, value: [Int: [PhantomLine]])?
+    @ObservationIgnored var hoverCache: [String: HoverInfo] = [:]
     var navReason: NavReason = .manual
     /// A description to draft a rule from as soon as the rule writer opens.
     var ruleWriterSeed: String?

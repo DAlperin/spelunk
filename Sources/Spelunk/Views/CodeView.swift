@@ -85,6 +85,7 @@ struct CodeView: NSViewRepresentable {
         NotificationCenter.default.addObserver(minimap, selector: #selector(MinimapView.redraw), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         context.coordinator.minimap = minimap
         context.coordinator.textView = tv
+        context.coordinator.hover.textView = tv
         context.coordinator.gutter = gutter
         context.coordinator.observeScrolling(scroll.contentView)
         return host
@@ -207,6 +208,7 @@ struct CodeView: NSViewRepresentable {
         weak var textView: SourceTextView?
         weak var gutter: GutterView?
         weak var minimap: MinimapView?
+        let hover = HoverController()
         var hunkRegions: [HunkRegion] = []
         var hunkRegionsKey = ""
         var minimapWidths: [LineShape] = []
@@ -502,7 +504,34 @@ final class SourceTextView: NSTextView {
         }
     }
 
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = hoverArea { removeTrackingArea(a) }
+        let a = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(a)
+        hoverArea = a
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let p = convert(event.locationInWindow, from: nil)
+        MainActor.assumeIsolated { coordinator?.hover.mouseMoved(at: p) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        MainActor.assumeIsolated { coordinator?.hover.hide() }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        MainActor.assumeIsolated { coordinator?.hover.hide() }
+        super.scrollWheel(with: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
+        MainActor.assumeIsolated { coordinator?.hover.hide() }
         super.mouseDown(with: event)
         guard event.clickCount == 1, selectedRange().length == 0 else { return }
         let p = convert(event.locationInWindow, from: nil)
