@@ -16,7 +16,60 @@ struct Attachment: Identifiable, Hashable {
     var isClaude: Bool { if case .claude = rule.action { true } else { false } }
 }
 
+/// What an attachment returns when it is structured: a Claude attachment always (through a JSON
+/// schema), a command when its stdout is this JSON. Each part becomes real UI: findings open their
+/// location, examples copy, actions draft a comment or start an ask or a trace.
+struct AttachmentPayload: Codable, Hashable {
+    struct Finding: Codable, Hashable {
+        var title: String
+        var detail: String?
+        var path: String?
+        var line: Int?
+        /// info, warn or risk.
+        var severity: String?
+    }
+    struct Example: Codable, Hashable {
+        var title: String
+        var language: String?
+        var code: String
+    }
+    struct Action: Codable, Hashable {
+        /// comment (draft a review comment on the hunk), ask, trace, or open (a path:line).
+        var kind: String
+        var label: String
+        var text: String?
+        var path: String?
+        var line: Int?
+    }
+    var summary: String?
+    var findings: [Finding]?
+    var examples: [Example]?
+    var actions: [Action]?
+
+    var isEmpty: Bool { summary == nil && (findings ?? []).isEmpty && (examples ?? []).isEmpty && (actions ?? []).isEmpty }
+
+    static let schema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "summary": ["type": "string", "description": "Two or three sentences of Markdown at most."],
+            "findings": ["type": "array", "items": ["type": "object", "properties": [
+                "title": ["type": "string"], "detail": ["type": "string"], "path": ["type": "string"],
+                "line": ["type": "integer"], "severity": ["type": "string", "enum": ["info", "warn", "risk"]],
+            ], "required": ["title"]]],
+            "examples": ["type": "array", "items": ["type": "object", "properties": [
+                "title": ["type": "string"], "language": ["type": "string"], "code": ["type": "string"],
+            ], "required": ["title", "code"]]],
+            "actions": ["type": "array", "items": ["type": "object", "properties": [
+                "kind": ["type": "string", "enum": ["comment", "ask", "trace", "open"]], "label": ["type": "string"],
+                "text": ["type": "string"], "path": ["type": "string"], "line": ["type": "integer"],
+            ], "required": ["kind", "label"]]],
+        ],
+        "required": ["summary"],
+    ]
+}
+
 struct AttachmentResult: Codable, Hashable {
+    var payload: AttachmentPayload?
     var markdown: String?
     var output: String?
     /// Files the command wrote into its output directory, as absolute paths.
@@ -207,30 +260,43 @@ extension ReviewSession {
             var result = AttachmentResult()
             switch action {
             case .run(let command):
+                let head = await self.headCheckout()
                 let quoted = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
                 let cmd = command
                     .replacingOccurrences(of: "{file}", with: quoted(a.paths.first ?? ""))
                     .replacingOccurrences(of: "{files}", with: a.paths.map(quoted).joined(separator: " "))
                     .replacingOccurrences(of: "{out}", with: quoted(out.path))
                     .replacingOccurrences(of: "{name}", with: quoted(name))
-                let env = ["SPELUNK_FILE=\(a.paths.first ?? "")", "SPELUNK_FILES=\(a.paths.joined(separator: "\n"))",
+                    .replacingOccurrences(of: "{head}", with: quoted(head.path))
+                let env = ["SPELUNK_HEAD_DIR=\(head.path)", "SPELUNK_FILE=\(a.paths.first ?? "")", "SPELUNK_FILES=\(a.paths.joined(separator: "\n"))",
                            "SPELUNK_OUT=\(out.path)", "SPELUNK_DIFF=\(diffURL.path)", "SPELUNK_NAME=\(name)",
                            "SPELUNK_BASE=\(oldRev)", "SPELUNK_HEAD=\(newRev ?? "")"]
                 do {
                     let r = try await Shell.run("/usr/bin/env", env + ["/bin/sh", "-c", cmd], cwd: root)
                     let text = (r.stdout + (r.ok ? "" : "\n" + r.stderr)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty { result.output = String(text.prefix(40_000)) }
+                    if r.ok, text.hasPrefix("{"), let p = try? JSONDecoder().decode(AttachmentPayload.self, from: Data(text.utf8)), !p.isEmpty {
+                        result.payload = p
+                    } else if !text.isEmpty {
+                        result.output = String(text.prefix(40_000))
+                    }
                     if !r.ok { result.error = "exit \(r.status)" }
                 } catch {
                     result.error = error.localizedDescription
                 }
             case .claude(let ask):
+                let head = await self.headCheckout()
+                let diffFile = self.fullDiffFile()
                 var prompt = ask.replacingOccurrences(of: "{name}", with: name).replacingOccurrences(of: "{file}", with: a.paths.first ?? "")
-                prompt += "\n\nFiles: \(a.paths.joined(separator: ", "))\nChange: \(title)\n\nThe relevant hunks:\n\n" + String(diff.prefix(60_000))
+                prompt += "\n\nChange: \(title)\n"
+                prompt += "The working directory is the code after the whole change is applied. The full diff of the change is in \(diffFile.path) (\(files.count) files); "
+                prompt += "check it, and the code as it now is, before reporting anything as missing or still present.\n"
+                prompt += "Files changed: " + files.prefix(200).map { "\($0.path) (+\($0.addedCount) -\($0.removedCount))" }.joined(separator: ", ") + "\n"
+                prompt += "\nThis attachment is for \(a.paths.joined(separator: ", ")). Its hunks:\n\n" + String(diff.prefix(60_000))
                 do {
-                    let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.attachSystem, cwd: root, task: .attach,
-                                                 model: a.rule.model)
-                    result.markdown = r.text
+                    let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.attachSystem, cwd: head, task: .attach,
+                                                 schema: AttachmentPayload.schema, model: a.rule.model,
+                                                 readableDirs: [diffFile.deletingLastPathComponent()])
+                    if let p = try? Claude.decode(AttachmentPayload.self, from: r) { result.payload = p } else { result.markdown = r.text }
                     result.cost = r.costUSD
                 } catch {
                     if Task.isCancelled { return }

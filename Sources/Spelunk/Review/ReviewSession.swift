@@ -597,7 +597,8 @@ final class ReviewSession {
             }
         }
         do {
-            let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.triageSystem, cwd: root, task: .triage, schema: ClaudeTasks.triageSchema) { [weak self] ev in
+            let head = await headCheckout()
+            let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.triageSystem, cwd: head, task: .triage, schema: ClaudeTasks.triageSchema) { [weak self] ev in
                 if case .toolUse(let name, let s) = ev {
                     Task { @MainActor in self?.triageState = "\(name) \(s)" }
                 }

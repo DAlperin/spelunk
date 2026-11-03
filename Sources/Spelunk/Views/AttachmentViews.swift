@@ -3,23 +3,24 @@ import SwiftUI
 
 /// Attachments that rules produced for the selected hunk.
 struct AttachmentsSection: View {
+    @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
     let hunk: Hunk
-    let open: (String) -> Void
 
     var body: some View {
         let list = review.attachments(for: hunk)
         if !list.isEmpty {
             PaneSectionHeader(title: "Attachments", trailing: String(list.count))
-            ForEach(list) { a in AttachmentCard(review: review, attachment: a, open: open) }
+            ForEach(list) { a in AttachmentCard(ws: ws, review: review, hunk: hunk, attachment: a) }
         }
     }
 }
 
 struct AttachmentCard: View {
+    @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
+    let hunk: Hunk
     let attachment: Attachment
-    let open: (String) -> Void
     @State private var expanded = true
 
     var body: some View {
@@ -77,7 +78,8 @@ struct AttachmentCard: View {
     @ViewBuilder func content(_ r: AttachmentResult) -> some View {
         if let e = r.error { Text(e).font(.caption).foregroundStyle(.red) }
         ForEach(r.files, id: \.self) { f in AttachmentFileView(path: f) }
-        if let m = r.markdown, !m.isEmpty { CitedText(text: m, open: open) }
+        if let p = r.payload { PayloadView(ws: ws, review: review, hunk: hunk, payload: p) }
+        if let m = r.markdown, !m.isEmpty { CitedText(text: m) { ws.openCitation($0) } }
         if let o = r.output, !o.isEmpty {
             ScrollView {
                 Text(o).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
@@ -109,6 +111,105 @@ struct AttachmentFileView: View {
         } else {
             Button { NSWorkspace.shared.open(url) } label: { Label(url.lastPathComponent, systemImage: "arrow.up.forward.square") }
                 .buttonStyle(.link).font(.caption)
+        }
+    }
+}
+
+/// A structured attachment: summary, findings that open their location, copyable examples, and
+/// actions. A comment action only fills the draft composer; nothing is posted from here.
+struct PayloadView: View {
+    @Bindable var ws: Workspace
+    let review: ReviewSession
+    let hunk: Hunk
+    let payload: AttachmentPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let s = payload.summary, !s.isEmpty { CitedText(text: s) { ws.openCitation($0) } }
+            ForEach(Array((payload.findings ?? []).enumerated()), id: \.offset) { _, f in finding(f) }
+            ForEach(Array((payload.examples ?? []).enumerated()), id: \.offset) { _, e in example(e) }
+            let actions = payload.actions ?? []
+            if !actions.isEmpty {
+                FlowButtons(actions: actions) { perform($0) }
+            }
+        }
+    }
+
+    func finding(_ f: AttachmentPayload.Finding) -> some View {
+        let color: Color = f.severity == "risk" ? .red : f.severity == "warn" ? .orange : .secondary
+        return Button {
+            if let p = f.path { ws.openCitation(p + ":" + String(f.line ?? 1)) }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(f.title).font(.caption.weight(.medium)).foregroundStyle(.primary)
+                    if let d = f.detail, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
+                }
+                Spacer(minLength: 4)
+                if let p = f.path {
+                    Text(verbatim: (p as NSString).lastPathComponent + (f.line.map { ":\($0)" } ?? ""))
+                        .font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(f.path == nil)
+    }
+
+    func example(_ e: AttachmentPayload.Example) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(e.title).font(.caption.weight(.semibold))
+                if let l = e.language { Text(l).font(.caption2).foregroundStyle(.tertiary) }
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(e.code, forType: .string)
+                }
+                .buttonStyle(.link).font(.caption)
+            }
+            ScrollView(.horizontal) {
+                Text(e.code).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).padding(6)
+            }
+            .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
+        }
+    }
+
+    func perform(_ a: AttachmentPayload.Action) {
+        switch a.kind {
+        case "comment":
+            let line = (hunk.lines.last { $0.newLine != nil && $0.kind == .added }?.newLine ?? hunk.anchorNewLine) + 1
+            ws.commentDraft = PendingComment(path: hunk.path, line: line, side: "RIGHT", body: a.text ?? a.label)
+        case "ask": ws.ask(a.text ?? a.label, includeAnchor: true); ws.openAsk()
+        case "trace": ws.generateTrace(a.text ?? a.label, includeAnchor: true)
+        case "open": if let p = a.path { ws.openCitation(p + ":" + String(a.line ?? 1)) }
+        default: break
+        }
+    }
+}
+
+struct FlowButtons: View {
+    let actions: [AttachmentPayload.Action]
+    let perform: (AttachmentPayload.Action) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, a in
+                Button { perform(a) } label: {
+                    Label(a.label, systemImage: icon(a.kind)).lineLimit(2).multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .help(a.text ?? a.label)
+            }
+        }
+    }
+    func icon(_ k: String) -> String {
+        switch k {
+        case "comment": "text.bubble"
+        case "ask": "sparkles"
+        case "trace": "point.topleft.down.to.point.bottomright.curvepath"
+        default: "arrow.up.forward.square"
         }
     }
 }

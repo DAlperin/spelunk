@@ -552,6 +552,15 @@ final class Workspace {
         commentDraft = PendingComment(path: path, line: c.line + 1, side: side, body: "")
     }
 
+    /// Back to the selected hunk's change context after looking at a symbol.
+    func showHunkContext() {
+        guard review != nil, changeContext != nil else { return }
+        contextPinned = false
+        contextFocus = .hunk
+        inspectorPane = .context
+        showInspector = true
+    }
+
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
         if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }

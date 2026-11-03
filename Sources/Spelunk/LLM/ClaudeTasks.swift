@@ -127,9 +127,13 @@ enum ClaudeTasks {
     ]
 
     static let attachSystem = """
-    You produce a review aid that a rule attached to part of a code change. Follow the request exactly,
-    read the repository with the tools when the diff is not enough, and answer in Markdown. Cite code as
-    `path:line`. Keep it short enough to read next to the diff; no preamble.
+    You produce a review aid that a rule attached to part of a code change. Follow the request exactly and
+    read the repository with the tools when the diff is not enough. Answer in the structured form:
+    summary (two or three sentences, Markdown, cite code as `path:line`); findings, each a concrete place
+    or fact with path and line when there is one and a severity (risk only for likely bugs); examples for
+    code the reader can copy; actions the reviewer may take next: `comment` with the text of a review
+    comment worth leaving on this hunk, `ask` or `trace` with a follow-up question, `open` with a
+    path and line. Leave out any part that has nothing useful. No preamble.
     """
 
     static func ruleWriterSystem(reference: String, defaults: String) -> String {

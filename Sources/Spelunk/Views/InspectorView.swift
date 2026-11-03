@@ -63,9 +63,15 @@ struct InspectorView: View {
         HStack(spacing: 6) {
             switch ws.inspectorPane {
             case .context:
-                if showingHunk {
+                if ws.review != nil, ws.changeContext != nil, !ws.contextPinned {
+                    Picker("", selection: Binding(get: { showingHunk ? ContextFocus.hunk : .symbol }, set: { ws.contextFocus = $0 })) {
+                        Text(verbatim: ReviewNav.importantPosition(ws).map { "Hunk \($0.0)/\($0.1)" } ?? "Hunk").tag(ContextFocus.hunk)
+                        Text(verbatim: ws.context?.name ?? "Symbol").tag(ContextFocus.symbol)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Switch between the selected hunk's change context and the last clicked symbol (Esc returns to the hunk)")
+                } else if showingHunk {
                     Text("Change context").font(.callout.weight(.semibold))
-                    if let (i, n) = ReviewNav.importantPosition(ws) { Text(verbatim: "hunk \(i) of \(n)").font(.caption).foregroundStyle(.secondary) }
                 } else {
                     Text("Context").font(.callout.weight(.semibold))
                     Text(ws.contextPinned ? "pinned" : "follows cursor").font(.caption).foregroundStyle(.secondary)
@@ -75,11 +81,6 @@ struct InspectorView: View {
             }
             Spacer()
             if ws.inspectorPane == .context {
-                if showingHunk, ws.context != nil {
-                    Button("Symbol") { ws.contextFocus = .symbol }.help("Show the last clicked symbol instead")
-                } else if ws.review != nil, ws.changeContext != nil, !ws.contextPinned {
-                    Button("Hunk") { ws.contextFocus = .hunk }.help("Show the selected hunk's impact")
-                }
                 Button { ws.contextPinned.toggle() } label: {
                     Label("Pin", systemImage: ws.contextPinned ? "pin.fill" : "pin").labelStyle(.titleAndIcon)
                 }
@@ -532,7 +533,7 @@ struct ChangeContextSection: View {
                 .font(.caption.weight(.semibold)).padding(.top, 8)
             }
 
-            AttachmentsSection(review: review, hunk: hunk) { ws.openCitation($0) }
+            AttachmentsSection(ws: ws, review: review, hunk: hunk)
 
             ForEach(review.groups(containing: hunk).prefix(3)) { g in
                 RelatedGroupSection(ws: ws, review: review, group: g, current: hunk)

@@ -80,6 +80,7 @@ enum Claude {
         schema: [String: Any]? = nil,
         tools: [String] = ["Read", "Grep", "Glob"],
         model modelOverride: String? = nil,
+        readableDirs: [URL] = [],
         onEvent: @escaping @Sendable (ClaudeEvent) -> Void = { _ in }
     ) async throws -> ClaudeResult {
         guard let bin = binary else { throw ClaudeError(message: "claude CLI not found on PATH (set it in Settings)") }
@@ -91,6 +92,7 @@ enum Claude {
             "--append-system-prompt", system,
         ]
         if let effort = effort(for: task) { args += ["--effort", effort] }
+        for d in readableDirs { args += ["--add-dir", d.path] }
         if tools.isEmpty {
             args += ["--tools", ""]
         } else {

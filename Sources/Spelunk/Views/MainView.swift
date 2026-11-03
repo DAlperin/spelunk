@@ -551,6 +551,7 @@ struct HunkStrip: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: tier.glyph).font(.system(size: 9)).foregroundStyle(tier.color)
+                    .onTapGesture { ws.showHunkContext() }
                 Text(tier.title).font(.callout.weight(.semibold)).foregroundStyle(tier.color).fixedSize()
                 Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent)
                     .font(.callout.monospaced().weight(.medium)).lineLimit(1).truncationMode(.middle).layoutPriority(1)
@@ -559,6 +560,7 @@ struct HunkStrip: View {
                     Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption).foregroundStyle(.purple)
                 }
                 Text(review.summary(of: hunk)).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(ruleHelp)
+                    .onTapGesture { ws.showHunkContext() }
                 Spacer(minLength: 4)
                 if let (i, n) = ReviewNav.importantPosition(ws) {
                     Text(verbatim: "\(i) of \(n) important").font(.caption).foregroundStyle(.secondary).fixedSize()
