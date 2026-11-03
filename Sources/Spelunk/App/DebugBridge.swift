@@ -27,10 +27,15 @@ final class DebugBridge {
         let arg = parts.count > 1 ? parts[1] : ""
         switch verb {
         case "openrepo": model?.open(URL(fileURLWithPath: arg)); return
-        case "newwindow": model?.openBlankWindow?(); return
+        case "newwindow": model?.newWindow(); return
+        case "focus":
+            if let w = model?.windows[arg] { w.makeKeyAndOrderFront(nil); model?.activePath = arg }
+            return
         case "windows":
             Log.debug("windows: " + NSApp.windows.map { "\($0.title)[\(Int($0.frame.width)) visible=\($0.isVisible)]" }.joined(separator: ", ")
-                      + " workspaces=\(model?.workspaces.keys.sorted() ?? []) active=\(model?.activePath ?? "-")")
+                      + " registered=\((model?.windows ?? [:]).map { "\($0.key.lastPathComponent)#\($0.value.windowNumber)" }.sorted())"
+                      + " workspaces=\(model?.workspaces.keys.sorted() ?? []) active=\(model?.activePath ?? "-")"
+                      + " " + (model?.workspaces.map { "\($0.key.lastPathComponent): hunk=\($0.value.selectedHunkID.map { String($0.suffix(10)) } ?? "-") line=\($0.value.cursor.map { String($0.line + 1) } ?? "-")" }.sorted().joined(separator: "; ") ?? ""))
             return
         default: break
         }

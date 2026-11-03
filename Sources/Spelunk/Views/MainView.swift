@@ -2,13 +2,15 @@ import SwiftUI
 
 /// One window: a repository, or the welcome screen until one is chosen.
 struct RootView: View {
-    @SceneStorage("repoPath") private var path = ""
+    @State private var path = ""
     @Environment(AppModel.self) var model
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.controlActiveState) private var activeState
     @State private var ws: Workspace?
     @State private var window: NSWindow?
+    /// This window was asked for with New Window, so an empty one is wanted.
+    @State private var requestedBlank = false
 
     var body: some View {
         Group {
@@ -18,13 +20,16 @@ struct RootView: View {
                 WelcomeView(path: $path)
             }
         }
-        .background(WindowReader { window = $0; register() })
+        .background(WindowReader { window = $0; register(); closeIfStray() })
+        .onReceive(NotificationCenter.default.publisher(for: .spelunkWindowRegistered)) { _ in closeIfStray() }
         .onAppear {
             model.openSettings = { openSettings() }
             model.openBlankWindow = { openWindow(id: "main") }
-            // A restored window whose repository is open elsewhere, or a new window, takes a queued one.
-            if !path.isEmpty, model.isOpen(path) { path = "" }
-            if path.isEmpty, let p = model.takePendingPath() { path = p }
+            // A restored window whose repository has another window shows the welcome screen; a new
+            // window takes a queued repository.
+            if !path.isEmpty, model.hasOtherWindow(for: path, than: window) { path = "" }
+            if path.isEmpty, let p = model.pendingPath() { path = p }
+            if path.isEmpty { requestedBlank = model.takeBlankRequest() }
             attach()
         }
         .onChange(of: path) { old, _ in
@@ -32,7 +37,10 @@ struct RootView: View {
             attach()
         }
         .onChange(of: activeState) { if activeState == .key, !path.isEmpty { model.activePath = path } }
-        .onDisappear { if !path.isEmpty { model.release(path) } }
+        .onDisappear {
+            // A discarded duplicate view never registered a window; only the window's own view releases.
+            if !path.isEmpty, let window, model.windows[path] === window { model.release(path) }
+        }
     }
 
     private func attach() {
@@ -42,8 +50,15 @@ struct RootView: View {
         if activeState == .key || model.activePath == nil { model.activePath = path }
     }
 
+    /// A window macOS opened for a launch event, with nothing to show while repositories are open
+    /// elsewhere.
+    private func closeIfStray() {
+        guard path.isEmpty, !requestedBlank, let window, model.windows.values.contains(where: { $0 !== window && $0.isVisible }) else { return }
+        DispatchQueue.main.async { window.close() }
+    }
+
     private func register() {
-        if let window, !path.isEmpty { model.windows[path] = window }
+        if let window, !path.isEmpty { model.registerWindow(window, for: path) }
     }
 }
 
@@ -51,12 +66,21 @@ struct RootView: View {
 struct WindowReader: NSViewRepresentable {
     let found: (NSWindow) -> Void
     init(_ found: @escaping (NSWindow) -> Void) { self.found = found }
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        DispatchQueue.main.async { if let w = v.window { found(w) } }
-        return v
-    }
+    func makeNSView(context: Context) -> NSView { ReaderView(found: found) }
     func updateNSView(_ v: NSView, context: Context) {}
+
+    final class ReaderView: NSView {
+        let found: (NSWindow) -> Void
+        init(found: @escaping (NSWindow) -> Void) {
+            self.found = found
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let w = window { found(w) }
+        }
+    }
 }
 
 struct WelcomeView: View {
@@ -98,6 +122,8 @@ struct MainView: View {
     @Bindable var ws: Workspace
     @State private var keyMonitor: Any?
     @State private var columns = NavigationSplitViewVisibility.all
+    /// This window, so its key monitor ignores keystrokes meant for other windows.
+    @State private var host = WindowBox()
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -115,14 +141,18 @@ struct MainView: View {
         .sheet(isPresented: $ws.showRuleWriter) { RuleWriterSheet(ws: ws) }
         .onAppear {
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws] e in
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws, host] e in
                 MainActor.assumeIsolated {
-                    guard e.window?.isVisible == true, e.window?.attachedSheet == nil, e.window?.isSheet == false, !ReviewKeys.focusIsTextInput() else { return e }
+                    // Every window installs a monitor and each sees every key; only the window the
+                    // key was typed in handles it.
+                    guard let w = e.window, w === host.window, w.isVisible, w.attachedSheet == nil, !w.isSheet,
+                          !ReviewKeys.focusIsTextInput() else { return e }
                     return ReviewKeys.handle(e, ws: ws) ? nil : e
                 }
             }
         }
         .onDisappear { if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil } }
+        .background(WindowReader { host.window = $0 })
         .overlay(alignment: .top) {
             if let mode = ws.palette {
                 ZStack(alignment: .top) {
@@ -741,4 +771,10 @@ struct TraceStepBanner: View {
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(Color.purple.opacity(0.08))
     }
+}
+
+/// A weak reference to a view's window, shared with closures created before the window is known.
+@MainActor
+final class WindowBox {
+    weak var window: NSWindow?
 }

@@ -7,19 +7,21 @@ struct SpelunkApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        // One repository per window. Each window keeps its repository in scene storage, so windows
-        // come back on relaunch; opening a repository that already has a window brings it forward.
+        // One repository per window; opening a repository that already has a window brings it
+        // forward. AppModel reopens the repositories that were open at quit, so SwiftUI's own
+        // window restoration is off.
         WindowGroup("Spelunk", id: "main") {
             RootView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 640)
         }
+        .restorationBehavior(.disabled)
 
         .defaultSize(width: 1560, height: 980)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Window") { model.openBlankWindow?() }.keyboardShortcut("n")
+                Button("New Window") { model.newWindow() }.keyboardShortcut("n")
                 Button("Open Repository…") { model.openPanel() }.keyboardShortcut("o")
             }
             CommandMenu("Navigate") {
@@ -102,6 +104,21 @@ final class AppModel {
     @ObservationIgnored private var launchPath: String?
     var recent: [String] = UserDefaults.standard.stringArray(forKey: "recentRepos") ?? []
 
+    /// Windows asked for with New Window, which show the welcome screen; any other window that
+    /// ends up without a repository is one macOS opened for a launch event and closes itself.
+    @ObservationIgnored private var blankRequests = 0
+
+    func newWindow() {
+        blankRequests += 1
+        openBlankWindow?()
+    }
+
+    func takeBlankRequest() -> Bool {
+        guard blankRequests > 0 else { return false }
+        blankRequests -= 1
+        return true
+    }
+
     init() {
         // Writes to a child process that has exited must fail with EPIPE, not kill the app.
         signal(SIGPIPE, SIG_IGN)
@@ -109,8 +126,13 @@ final class AppModel {
         Log.debug("AppModel.init")
         DebugBridge.shared.install(self)
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.workspaces.values.forEach { $0.shutdown() } }
+            MainActor.assumeIsolated {
+                self?.terminating = true
+                self?.workspaces.values.forEach { $0.shutdown() }
+            }
         }
+        // Repositories open at the last quit come back, one window each.
+        pendingOpens = (UserDefaults.standard.stringArray(forKey: "openRepos") ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         // `-repo <path>` arrives through the arguments defaults domain. A bare path argument is
         // treated by AppKit as a document to open, which suppresses the first window.
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
@@ -118,12 +140,51 @@ final class AppModel {
             let url = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
             if FileManager.default.fileExists(atPath: url.path) { launchPath = url.standardizedFileURL.path }
         }
+        if let l = launchPath { pendingOpens.removeAll { $0 == l } }
     }
 
     /// A repository for a window that has none: the command-line one, then any queued by `open`.
-    func takePendingPath() -> String? {
-        if let p = launchPath { launchPath = nil; return p }
-        return pendingOpens.isEmpty ? nil : pendingOpens.removeFirst()
+    /// It stays pending until a window registers it, because SwiftUI may build a window's view more
+    /// than once and discard the first.
+    func pendingPath() -> String? {
+        if let p = launchPath, windows[p] == nil { return p }
+        return pendingOpens.first { windows[$0] == nil }
+    }
+
+    /// A window now shows `path`. Any repositories still waiting for a window get one.
+    func registerWindow(_ window: NSWindow, for path: String) {
+        windows[path] = window
+        NotificationCenter.default.post(name: .spelunkWindowRegistered, object: nil)
+        if launchPath == path { launchPath = nil }
+        if pendingOpens.contains(path) {
+            pendingOpens.removeAll { $0 == path }
+            openingWindow = false
+        }
+        saveOpenRepositories()
+        openNextPending()
+    }
+
+    /// A new window has been requested and has not yet taken its repository; one at a time, since a
+    /// window may register more than once.
+    @ObservationIgnored private var openingWindow = false
+
+    private func openNextPending() {
+        guard !pendingOpens.isEmpty, !openingWindow, let open = openBlankWindow else { return }
+        openingWindow = true
+        DispatchQueue.main.async { open() }
+    }
+
+    @ObservationIgnored private var terminating = false
+
+    private func saveOpenRepositories() {
+        guard !terminating else { return }
+        UserDefaults.standard.set(windows.keys.sorted(), forKey: "openRepos")
+    }
+
+    /// Another live window already shows `path`.
+    func hasOtherWindow(for path: String, than window: NSWindow?) -> Bool {
+        guard let w = windows[path], w.isVisible else { return false }
+        return w !== window
     }
 
     /// The workspace for a repository window, created and started on first use.
@@ -141,6 +202,7 @@ final class AppModel {
         workspaces.removeValue(forKey: path)?.shutdown()
         windows[path] = nil
         if activePath == path { activePath = nil }
+        saveOpenRepositories()
     }
 
     func isOpen(_ path: String) -> Bool { workspaces[path] != nil }
@@ -171,9 +233,15 @@ final class AppModel {
             w.makeKeyAndOrderFront(nil)
             return
         }
-        pendingOpens.append(path)
-        openBlankWindow?()
+        if launchPath == path { return }
+        if !pendingOpens.contains(path) { pendingOpens.append(path) }
+        openNextPending()
     }
+}
+
+extension Notification.Name {
+    /// A window took a repository; empty windows macOS opened for launch events can now close.
+    static let spelunkWindowRegistered = Notification.Name("spelunkWindowRegistered")
 }
 
 enum ReviewNav {
