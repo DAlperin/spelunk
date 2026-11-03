@@ -17,11 +17,13 @@ final class DebugBridge {
             let cmd = (n.object as? String) ?? ""
             MainActor.assumeIsolated { DebugBridge.shared.run(cmd) }
         }
+        StallMonitor.shared.start()
         Log.debug("debug bridge installed")
     }
 
     func run(_ command: String) {
         Log.debug("cmd: \(command)")
+        StallMonitor.shared.note(command)
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
         guard let verb = parts.first else { return }
         let arg = parts.count > 1 ? parts[1] : ""
@@ -219,6 +221,21 @@ final class DebugBridge {
                 let h = NSScreen.screens.first?.frame.height ?? 0
                 Log.debug("screenpos: \(Int(sr.midX)) \(Int(h - sr.midY))")
             }
+        case "scroll":
+            // scroll <dy> <steps>: scrolls the code view by dy points per step, drawing each step, and logs the time per step
+            let p = arg.split(separator: " ").compactMap { Double($0) }
+            guard let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let sv = tv.enclosingScrollView else { break }
+            let window = sv.window
+            var times: [Double] = []
+            for _ in 0..<Int(p.count > 1 ? p[1] : 60) {
+                let start = Date()
+                let clip = sv.contentView
+                clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: max(0, clip.bounds.origin.y + (p.first ?? 40))))
+                sv.reflectScrolledClipView(clip)
+                window?.displayIfNeeded()
+                times.append(Date().timeIntervalSince(start) * 1000)
+            }
+            Log.debug("scroll avg \(String(format: "%.1f", times.reduce(0, +) / Double(max(1, times.count))))ms max \(String(format: "%.1f", times.max() ?? 0))ms")
         case "windowpos":
             // windowpos <line>:<col>: the glyph's centre in points from the window's top-left, for clickat
             if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let c = tv.coordinator, let d = c.display,
