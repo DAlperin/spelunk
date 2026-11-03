@@ -143,6 +143,16 @@ final class DebugBridge {
         case "addpending":
             if var d = ws.commentDraft { d.body = arg; ws.review?.addPending(d); ws.commentDraft = nil }
         case "record": startRecording(arg)
+        case "installgrammar":
+            // installgrammar <url> [revision]
+            let p = arg.split(separator: " ").map(String.init)
+            guard let url = p.first else { break }
+            Task {
+                do {
+                    let specs = try await GrammarRegistry.shared.install(url: url, subdirectory: nil, revision: p.count > 1 ? p[1] : nil) { Log.debug("grammar: \($0)") }
+                    Log.debug("grammar installed: \(specs.map(\.name))")
+                } catch { Log.debug("grammar install failed: \(error.localizedDescription)") }
+            }
         case "openjobtrace":
             if let j = ws.jobs.last(where: { $0.kind == .trace && $0.traceID != nil }) { ws.openJobTrace(j.id) }
         case "rulewriter": ws.ruleWriterSeed = arg; ws.showRuleWriter = true

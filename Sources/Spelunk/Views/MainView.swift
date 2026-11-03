@@ -105,7 +105,7 @@ struct MainToolbar: ToolbarContent {
                 Text(ws.root.path)
                 if ws.vcs.kind != .none { Text(verbatim: "\(ws.vcs.kind.rawValue) \(ws.vcs.revision) \(ws.vcs.description)") }
                 Divider()
-                Button("Restart rust-analyzer") { ws.ra.restart() }
+                Button("Restart \(ws.activeServer.spec.name)") { ws.activeServer.restart() }
                 Button("Run cargo clippy") { ws.clippy.run() }
                 Button("Generate SCIP index") { ws.scip.generate(revision: ws.vcs.revision, sourceFiles: ws.allFiles) }
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([ws.root]) }
@@ -419,17 +419,18 @@ struct StatusBar: View {
     }
 
     var raLabel: String {
-        switch ws.ra.status {
-        case .ready: "rust-analyzer"
-        case .indexing(let s): s.isEmpty ? "rust-analyzer indexing" : "RA: \(s.prefix(40))"
-        case .starting: "rust-analyzer starting"
-        case .off: "rust-analyzer off"
-        case .failed: "rust-analyzer failed"
+        let s = ws.activeServer
+        switch s.status {
+        case .ready: return s.spec.name
+        case .indexing(let m): return m.isEmpty ? "\(s.spec.name) indexing" : "\(s.spec.name): \(m.prefix(40))"
+        case .starting: return "\(s.spec.name) starting"
+        case .off: return "\(s.spec.name) off"
+        case .failed: return "\(s.spec.name) failed"
         }
     }
 
     var raColor: Color {
-        switch ws.ra.status {
+        switch ws.activeServer.status {
         case .ready: .green
         case .indexing, .starting: .yellow
         case .off: .gray
@@ -448,11 +449,13 @@ struct IndexPopover: View {
             Text("Navigation asks providers in order of precision and falls back when one cannot answer. Each result in the context pane shows which provider produced it.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Divider()
-            row("rust-analyzer (LSP)", ws.ra.status.label, color: ws.ra.status == .ready ? .green : (ws.ra.status.isUsable ? .yellow : .red)) {
-                if let b = ws.ra.binaryPath { Text(b).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
-                HStack {
-                    Button(ws.ra.status == .off ? "Start" : "Restart") { ws.ra.restart() }
-                    if ws.ra.status != .off { Button("Stop") { ws.ra.stop() } }
+            ForEach(ws.servers, id: \.spec.name) { srv in
+                row("\(srv.spec.name) (LSP)", srv.status.label, color: srv.status == .ready ? .green : (srv.status.isUsable ? .yellow : (srv.status == .off ? .gray : .red))) {
+                    if let b = srv.binaryPath { Text(b).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                    HStack {
+                        Button(srv.status == .off ? "Start" : "Restart") { srv.restart() }
+                        if srv.status != .off { Button("Stop") { srv.stop() } }
+                    }
                 }
             }
             Divider()

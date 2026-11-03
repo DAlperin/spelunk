@@ -45,6 +45,23 @@ enum Shell {
         return env
     }
 
+    /// Runs a short command synchronously; for use off the main thread only.
+    static func syncOutput(_ executable: String, _ args: [String]) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: executable)
+        p.arguments = args
+        p.environment = environment
+        let out = Pipe()
+        p.standardOutput = out
+        // Unread pipes fill up and block the child; discard stderr.
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        let d = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw ShellError(command: executable, result: ShellResult(status: p.terminationStatus, stdout: "", stderr: "")) }
+        return String(decoding: d, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func which(_ name: String) -> String? {
         for dir in searchPath.split(separator: ":") {
             let p = "\(dir)/\(name)"

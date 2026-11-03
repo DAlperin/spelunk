@@ -134,9 +134,12 @@ final class GrammarRegistry: @unchecked Sendable {
         var label: String
         var url: String
         var subdirectory: String? = nil
+        /// A branch or tag; some grammars publish generated sources only on a separate branch.
+        var revision: String? = nil
     }
 
     static let presets: [Preset] = [
+        Preset(label: "Swift", url: "https://github.com/alex-pinkus/tree-sitter-swift", revision: "with-generated-files"),
         Preset(label: "Python", url: "https://github.com/tree-sitter/tree-sitter-python"),
         Preset(label: "Go", url: "https://github.com/tree-sitter/tree-sitter-go"),
         Preset(label: "JavaScript", url: "https://github.com/tree-sitter/tree-sitter-javascript"),

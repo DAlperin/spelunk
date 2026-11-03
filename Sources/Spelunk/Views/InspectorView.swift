@@ -105,7 +105,7 @@ struct InspectorView: View {
 struct WeakSourceTag: View {
     let source: IntelSource?
     var body: some View {
-        if let s = source, s != .rustAnalyzer, s != .manual {
+        if let s = source, s.precision < 5, s != .manual {
             Text(s.label).font(.system(size: 9, weight: .semibold))
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background((s == .scip ? Color.blue : Color.orange).opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
@@ -329,7 +329,7 @@ struct ContextSection: View {
             HStack(spacing: 6) {
                 Text("Mentions").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 WeakSourceTag(source: .textSearch)
-                Text("outside Rust").font(.caption).foregroundStyle(.tertiary)
+                Text(verbatim: "outside .\(ctx.path.pathExtension) files").font(.caption).foregroundStyle(.tertiary)
                 Spacer()
             }
             .padding(.top, 10).padding(.bottom, 3)
@@ -690,9 +690,9 @@ struct ProvenanceFooter: View {
 
     func color(_ s: IntelSource?) -> Color {
         switch s {
-        case .rustAnalyzer: .green
+        case .rustAnalyzer, .sourceKit: .green
         case .scip: .blue
-        case nil: ws.ra.status == .ready ? .green : .yellow
+        case nil: ws.activeServer.status == .ready ? .green : .yellow
         default: .orange
         }
     }
@@ -704,7 +704,7 @@ struct ProvenanceFooter: View {
             if !showingHunk, let e = ws.context?.elapsed { p += String(format: " in %.1fs", e) }
             parts.append(p)
         } else {
-            parts.append("rust-analyzer " + ws.ra.status.label.lowercased())
+            parts.append(ws.activeServer.spec.name + " " + ws.activeServer.status.label.lowercased())
         }
         if ws.scip.index != nil { parts.append(ws.scip.uncoveredFiles.isEmpty ? "index complete" : "index partial") }
         return parts.joined(separator: " · ")

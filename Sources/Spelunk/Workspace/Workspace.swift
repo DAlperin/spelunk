@@ -45,7 +45,7 @@ final class SymbolContext {
     var callees: [CallNode] = []
     var loadingCallers = false
     var loadingCallees = false
-    /// Text matches outside Rust files (scripts, docs, SQL tests).
+    /// Text matches in files of other languages (scripts, docs, SQL tests).
     var mentions: [TextMatch] = []
     /// "Method of Instance", from the definition's enclosing impl or trait.
     var container: String?
@@ -146,7 +146,13 @@ final class Workspace {
     var showInspector = true
 
     let docs: DocumentCache
-    let ra: RustAnalyzer
+    /// rust-analyzer; other languages' servers are in `servers`.
+    let ra: LanguageServer
+    let sourceKit: LanguageServer
+    var servers: [LanguageServer] { [ra, sourceKit] }
+    func server(for path: String) -> LanguageServer? { servers.first { $0.spec.handles(path) } }
+    /// The server for the file on screen, or rust-analyzer when the file has none.
+    var activeServer: LanguageServer { document.flatMap { server(for: $0.path) } ?? ra }
     let scip: SCIPService
     let clippy: ClippyService
     let intel: IntelHub
@@ -159,10 +165,11 @@ final class Workspace {
     init(root: URL) {
         self.root = root.standardizedFileURL
         docs = DocumentCache(root: self.root)
-        ra = RustAnalyzer(root: self.root)
+        ra = LanguageServer(root: self.root, spec: .rust)
+        sourceKit = LanguageServer(root: self.root, spec: .swift)
         scip = SCIPService(root: self.root)
         clippy = ClippyService(root: self.root)
-        intel = IntelHub(root: self.root, ra: ra, scip: scip, docs: docs)
+        intel = IntelHub(root: self.root, ra: ra, servers: [ra, sourceKit], scip: scip, docs: docs)
         traces = TraceStore(root: self.root)
         bookmarks = BookmarkStore(root: self.root)
         github = GitHubService(root: self.root)
@@ -182,7 +189,7 @@ final class Workspace {
         docs.invalidate()
         guard let d = document, d.isWorkingCopy, let fresh = docs.document(d.path) else { return }
         document = fresh
-        ra.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
+        server(for: fresh.path)?.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
         if !keepPosition { revealRequest += 1 }
     }
 
@@ -217,7 +224,8 @@ final class Workspace {
         jobTasks = [:]
         contextTask?.cancel()
         refreshTask?.cancel()
-        ra.stop(); clippy.cancel(); scip.cancel(); watcher?.stop()
+        for s in servers { s.stop() }
+        clippy.cancel(); scip.cancel(); watcher?.stop()
     }
 
     @ObservationIgnored private var watcher: FileWatcher?
@@ -234,7 +242,7 @@ final class Workspace {
     /// Debounced reaction to edits on disk (yours, Claude's, a checkout): refresh the open file,
     /// the working-copy review, and the change graph when it is visible.
     private func filesChanged(_ paths: [String]) {
-        ra.filesChanged(paths, except: document?.isWorkingCopy == true ? document?.path : nil)
+        for s in servers { s.filesChanged(paths, except: document?.isWorkingCopy == true ? document?.path : nil) }
         if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
         refreshTask?.cancel()
         refreshTask = Task {
@@ -351,7 +359,7 @@ final class Workspace {
             recentFiles.insert(loc.path, at: 0)
             if recentFiles.count > 30 { recentFiles.removeLast() }
             document = d
-            ra.didOpen(path: d.path, text: d.text, language: d.language)
+            openInServer(d)
         }
         selection = loc.range
         cursor = loc.range.start
@@ -365,7 +373,7 @@ final class Workspace {
         if let generation { guard isCurrentNavigation(generation) else { return } } else { beginNavigation(reason) }
         if let cur = currentLocation, cur.path != doc.path || document?.version != doc.version { backStack.append(cur) }
         document = doc
-        if doc.isWorkingCopy { ra.didOpen(path: doc.path, text: doc.text, language: doc.language) }
+        if doc.isWorkingCopy { openInServer(doc) }
         selection = SourceRange(line: line)
         cursor = SourcePos(line: line, col: 0)
         revealRequest += 1
@@ -402,7 +410,7 @@ final class Workspace {
         highlightRanges = []
         contextTask?.cancel()
         contextTask = Task {
-            if isWorkingCopy && ra.status.isUsable, let hl = try? await ra.documentHighlights(path: d.path, at: range.start), !hl.isEmpty {
+            if isWorkingCopy, let srv = server(for: d.path), srv.status.isUsable, let hl = try? await srv.documentHighlights(path: d.path, at: range.start), !hl.isEmpty {
                 if context === ctx { highlightRanges = hl }
             } else if context === ctx {
                 highlightRanges = localOccurrences(of: name, in: d)
@@ -462,7 +470,8 @@ final class Workspace {
         var opts = TextSearch.Options()
         opts.wholeWord = true
         opts.caseSensitive = true
-        opts.globs = ["!*.rs"]
+        let ext = ctx.path.pathExtension
+        opts.globs = ext.isEmpty ? [] : ["!*.\(ext)"]
         opts.limit = 40
         let hits = (try? await TextSearch.search(root: root, query: ctx.name, options: opts)) ?? []
         if context === ctx { ctx.mentions = hits }
@@ -601,6 +610,13 @@ final class Workspace {
         let side = d.side == .old ? "LEFT" : "RIGHT"
         let path = side == "LEFT" ? (r.files.first { $0.oldPath == d.path }?.oldPath ?? d.path) : d.path
         commentDraft = PendingComment(path: path, line: c.line + 1, side: side, body: "")
+    }
+
+    /// Sends a working-copy document to its language server, starting the server on first use.
+    func openInServer(_ d: SourceDocument) {
+        guard let srv = server(for: d.path) else { return }
+        if srv.status == .off, UserDefaults.standard.object(forKey: "autoStartRA") as? Bool ?? true { srv.start() }
+        srv.didOpen(path: d.path, text: d.text, language: d.language)
     }
 
     /// Back to the selected hunk's change context after looking at a symbol.

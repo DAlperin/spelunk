@@ -7,7 +7,7 @@ final class IntegrationTests: XCTestCase {
 
     func testSCIP() async throws {
         guard let repo else { throw XCTSkip("SPELUNK_IT_REPO not set") }
-        guard let bin = await RustAnalyzer.resolveBinary() else { throw XCTSkip("no rust-analyzer") }
+        guard let bin = await LanguageServer.resolveBinary(.rust) else { throw XCTSkip("no rust-analyzer") }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("it-\(UUID()).scip")
         let r = try await Shell.run(bin, ["scip", repo.path, "--output", out.path], cwd: repo)
         XCTAssertTrue(r.ok, r.stderr.suffix(500).description)
@@ -22,7 +22,7 @@ final class IntegrationTests: XCTestCase {
     @MainActor
     func testRustAnalyzer() async throws {
         guard let repo else { throw XCTSkip("SPELUNK_IT_REPO not set") }
-        let ra = RustAnalyzer(root: repo)
+        let ra = LanguageServer(root: repo, spec: .rust)
         ra.start()
         let deadline = Date().addingTimeInterval(240)
         while ra.status != .ready && Date() < deadline {
@@ -50,7 +50,7 @@ final class IntegrationTests: XCTestCase {
             if checked >= 3 { break }
         }
         XCTAssertGreaterThan(checked, 0)
-        let hub = IntelHub(root: repo, ra: ra, scip: SCIPService(root: repo), docs: docs)
+        let hub = IntelHub(root: repo, ra: ra, servers: [ra], scip: SCIPService(root: repo), docs: docs)
         if let f = files.first, let doc = docs.document(f), let t = doc.syntax.tokens.first(where: { $0.kind == .function }) {
             let p = doc.lines.position(of: t.range.location)
             let d = await hub.details(path: f, at: p, name: doc.ns.substring(with: t.range))

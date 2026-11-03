@@ -1,22 +1,41 @@
 import Foundation
 
 /// Answers navigation questions by asking the most precise available provider first and falling
-/// back down the chain: rust-analyzer, then SCIP, then tree-sitter, then text search. Every answer
+/// back down the chain: the file's language server, then SCIP (Rust), then tree-sitter, then text
+/// search. Every answer
 /// carries the source that produced it, so the UI can say how far to trust it.
 @MainActor
 final class IntelHub {
     let root: URL
-    let ra: RustAnalyzer
+    let ra: LanguageServer
+    let servers: [LanguageServer]
     let scip: SCIPService
     let docs: DocumentCache
 
-    init(root: URL, ra: RustAnalyzer, scip: SCIPService, docs: DocumentCache) {
-        self.root = root; self.ra = ra; self.scip = scip; self.docs = docs
+    init(root: URL, ra: LanguageServer, servers: [LanguageServer], scip: SCIPService, docs: DocumentCache) {
+        self.root = root; self.ra = ra; self.servers = servers; self.scip = scip; self.docs = docs
     }
+
+    /// The language server for a file, if one is configured for its language.
+    func server(_ path: String) -> LanguageServer? { servers.first { $0.spec.handles(path) } }
+
+    /// The server for a file when it can answer now.
+    private func usable(_ path: String) -> LanguageServer? { server(path).flatMap { $0.status.isUsable ? $0 : nil } }
 
     /// While rust-analyzer is still warming up, the on-disk SCIP index answers instantly; it may
     /// trail the working copy, so rust-analyzer takes over as soon as it is ready.
     private var scipFirst: Bool { !ra.isWarm && scip.index != nil }
+
+    /// File glob and item keywords for text-search fallbacks in a file's language.
+    private func searchProfile(_ path: String) -> (glob: String, items: String) {
+        switch SourceLanguage.from(path: path) {
+        case .swift: return ("*.swift", "func|class|struct|enum|protocol|actor|extension|typealias|var|let|case")
+        case .rust: return ("*.rs", "fn|struct|enum|trait|type|const|static|mod|union|macro_rules!")
+        default:
+            let ext = path.pathExtension
+            return (ext.isEmpty ? "*" : "*.\(ext)", "def|class|function|func|fn|struct|type|interface|const|let|var")
+        }
+    }
 
     // MARK: SCIP helpers
 
@@ -50,11 +69,11 @@ final class IntelHub {
 
     func details(path: String, at p: SourcePos, name: String) async -> SymbolDetails {
         var d = SymbolDetails(name: name, kindLabel: "Symbol", source: .textSearch)
-        if ra.status.isUsable && !(scipFirst && scipSymbol(path: path, at: p) != nil) {
-            async let hover = try? ra.hover(path: path, at: p)
-            async let defs = try? ra.definition(path: path, at: p)
-            if let h = await hover { (d.signature, d.docs) = Self.splitHover(h); d.source = .rustAnalyzer }
-            if let first = await defs?.first { d.definition = first; d.source = .rustAnalyzer }
+        if let srv = usable(path), !(scipFirst && scipSymbol(path: path, at: p) != nil) {
+            async let hover = try? srv.hover(path: path, at: p)
+            async let defs = try? srv.definition(path: path, at: p)
+            if let h = await hover { (d.signature, d.docs) = Self.splitHover(h); d.source = srv.spec.source }
+            if let first = await defs?.first { d.definition = first; d.source = srv.spec.source }
         }
         if d.definition == nil, let sym = scipSymbol(path: path, at: p), let idx = scip.index {
             if let def = idx.definitions(of: sym).first { d.definition = scipLocation(def.path, def.occ) }
@@ -122,7 +141,7 @@ final class IntelHub {
 
     func definitions(path: String, at p: SourcePos, name: String) async -> ([CodeLocation], IntelSource) {
         if scipFirst, let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
-        if ra.status.isUsable, let r = try? await ra.definition(path: path, at: p), !r.isEmpty { return (r, .rustAnalyzer) }
+        if let srv = usable(path), let r = try? await srv.definition(path: path, at: p), !r.isEmpty { return (r, srv.spec.source) }
         if Task.isCancelled { return ([], .rustAnalyzer) }
         if let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
         let syn = await syntaxDefinitions(name: name, near: path)
@@ -139,11 +158,12 @@ final class IntelHub {
     /// Finds items named `name` by grepping for item keywords, then confirming against the parsed outline.
     func syntaxDefinitions(name: String, near path: String) async -> [CodeLocation] {
         guard !name.isEmpty, name.first?.isLetter == true || name.first == "_" else { return [] }
-        let pattern = #"(fn|struct|enum|trait|type|const|static|mod|union|macro_rules!)\s+"# + NSRegularExpression.escapedPattern(for: name) + #"\b"#
+        let profile = searchProfile(path)
+        let pattern = "(" + profile.items + #")\s+"# + NSRegularExpression.escapedPattern(for: name) + #"\b"#
         var opts = TextSearch.Options()
         opts.regex = true
         opts.caseSensitive = true
-        opts.globs = ["*.rs"]
+        opts.globs = [profile.glob]
         opts.limit = 50
         let hits = (try? await TextSearch.search(root: root, query: pattern, options: opts)) ?? []
         var out: [CodeLocation] = []
@@ -164,16 +184,16 @@ final class IntelHub {
         if scipFirst, let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
         // A warm rust-analyzer that answers with no references means there are none; a cold one
         // may not know yet, so only then fall back.
-        if ra.status.isUsable, let r = try? await ra.references(path: path, at: p), !r.isEmpty || ra.isWarm {
-            let defs = Set((try? await ra.definition(path: path, at: p)) ?? [])
-            return (r.map { hit($0, isDef: defs.contains($0), source: .rustAnalyzer) }, .rustAnalyzer)
+        if let srv = usable(path), let r = try? await srv.references(path: path, at: p), !r.isEmpty || srv.isWarm {
+            let defs = Set((try? await srv.definition(path: path, at: p)) ?? [])
+            return (r.map { hit($0, isDef: defs.contains($0), source: srv.spec.source) }, srv.spec.source)
         }
         if Task.isCancelled { return ([], .rustAnalyzer) }
         if let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
         var opts = TextSearch.Options()
         opts.wholeWord = true
         opts.caseSensitive = true
-        opts.globs = ["*.rs"]
+        opts.globs = [searchProfile(path).glob]
         opts.limit = 500
         let matches = (try? await TextSearch.search(root: root, query: name, options: opts)) ?? []
         return (matches.map { hit($0.location, isDef: false, source: .textSearch) }, .textSearch)
@@ -195,8 +215,8 @@ final class IntelHub {
     // MARK: Implementations
 
     func implementations(path: String, at p: SourcePos, name: String) async -> ([ReferenceHit], IntelSource) {
-        if ra.status.isUsable, let r = try? await ra.implementations(path: path, at: p), !r.isEmpty || ra.isWarm {
-            return (r.map { implHit($0, source: .rustAnalyzer) }, .rustAnalyzer)
+        if let srv = usable(path), let r = try? await srv.implementations(path: path, at: p), !r.isEmpty || srv.isWarm {
+            return (r.map { implHit($0, source: srv.spec.source) }, srv.spec.source)
         }
         if Task.isCancelled { return ([], .rustAnalyzer) }
         if let sym = scipSymbol(path: path, at: p), let idx = scip.index, let impls = idx.implementors[sym], !impls.isEmpty {
@@ -207,7 +227,7 @@ final class IntelHub {
         var opts = TextSearch.Options()
         opts.regex = true
         opts.caseSensitive = true
-        opts.globs = ["*.rs"]
+        opts.globs = [searchProfile(path).glob]
         opts.limit = 200
         let q = #"impl(<[^>]*>)?\s+([\w:]+::)?"# + escaped + #"\b"#
         let matches = (try? await TextSearch.search(root: root, query: q, options: opts)) ?? []
@@ -227,12 +247,12 @@ final class IntelHub {
     // MARK: Call hierarchy
 
     func callRoots(_ direction: CallDirection, path: String, at p: SourcePos, name: String) async -> [CallNode] {
-        if ra.status.isUsable, !(scipFirst && scipSymbol(path: path, at: p) != nil), let items = try? await ra.prepareCallHierarchy(path: path, at: p), let item = items.first {
+        if let srv = usable(path), !(scipFirst && scipSymbol(path: path, at: p) != nil), let items = try? await srv.prepareCallHierarchy(path: path, at: p), let item = items.first {
             let root = CallNode(name: item.value["name"] as? String ?? name, detail: item.value["detail"] as? String ?? "",
-                                location: CodeLocation(path: path, range: RustAnalyzer.parseRange(item.value["selectionRange"]) ?? SourceRange(line: p.line)),
-                                callSites: [], source: .rustAnalyzer, payload: item, ancestry: [])
+                                location: CodeLocation(path: path, range: LanguageServer.parseRange(item.value["selectionRange"]) ?? SourceRange(line: p.line)),
+                                callSites: [], source: srv.spec.source, payload: item, ancestry: [])
             await expand(root, direction)
-            if let c = root.children, !c.isEmpty || ra.isWarm { return c }
+            if let c = root.children, !c.isEmpty || srv.isWarm { return c }
         }
         if Task.isCancelled { return [] }
         let def = await definitions(path: path, at: p, name: name).0.first ?? CodeLocation(path: path, range: SourceRange(line: p.line, col: p.col))
@@ -249,10 +269,10 @@ final class IntelHub {
         defer { node.isLoading = false }
         let ancestry = node.ancestry.union([node.key])
 
-        if let payload = node.payload, ra.status.isUsable, let edges = try? await ra.calls(direction, of: payload) {
+        if let payload = node.payload, let srv = usable(node.location.path), let edges = try? await srv.calls(direction, of: payload) {
             node.children = edges.map { e in
                 CallNode(name: e.name, detail: e.detail, location: e.location, callSites: e.callSites,
-                         source: .rustAnalyzer, payload: e.item, ancestry: ancestry)
+                         source: srv.spec.source, payload: e.item, ancestry: ancestry)
             }.sorted { $0.location.path == $1.location.path ? $0.location.line < $1.location.line : $0.location.path < $1.location.path }
             return
         }
@@ -286,7 +306,7 @@ final class IntelHub {
             var opts = TextSearch.Options()
             opts.regex = true
             opts.caseSensitive = true
-            opts.globs = ["*.rs"]
+            opts.globs = node.location.path.isEmpty ? ["*.rs", "*.swift"] : [searchProfile(node.location.path).glob]
             opts.limit = 400
             let q = #"\b"# + NSRegularExpression.escapedPattern(for: node.name) + #"\s*(::<[^>]*>)?\("#
             sites = ((try? await TextSearch.search(root: root, query: q, options: opts)) ?? []).map(\.location)

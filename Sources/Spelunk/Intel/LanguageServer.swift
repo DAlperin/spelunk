@@ -1,9 +1,79 @@
 import Foundation
 import Observation
 
-/// rust-analyzer over LSP. Owns the server process for one workspace root.
+/// What differs between language servers: how to find the binary, which files it serves, its
+/// settings, and how it reports being ready.
+struct LanguageServerSpec: @unchecked Sendable {
+    var name: String
+    var language: SourceLanguage
+    var languageId: String
+    var source: IntelSource
+    var fileExtensions: [String]
+    /// Changes to these files are announced to the server.
+    var watchedSuffixes: [String]
+    var settingsSection: String?
+    var settings: [String: Any]
+    var args: [String] = []
+    /// UserDefaults key holding a user-chosen binary path.
+    var pathKey: String
+    /// Candidate binaries in order of preference.
+    var candidates: @Sendable () -> [String]
+    /// Arguments that must exit 0 for a candidate to count (rustup installs proxies for missing tools).
+    var probeArgs: [String]?
+    /// The server sends rust-analyzer's experimental serverStatus; others are ready once indexing ends.
+    var reportsQuiescence: Bool
+
+    func handles(_ path: String) -> Bool { fileExtensions.contains(path.pathExtension.lowercased()) }
+
+    static let rust = LanguageServerSpec(
+        name: "rust-analyzer", language: .rust, languageId: "rust", source: .rustAnalyzer,
+        fileExtensions: ["rs"], watchedSuffixes: [".rs", "Cargo.toml"], settingsSection: "rust-analyzer",
+        settings: [
+            "checkOnSave": false,
+            "cachePriming": ["enable": true],
+            "procMacro": ["enable": true],
+            "cargo": ["buildScripts": ["enable": true]],
+            "lens": ["enable": false],
+            "inlayHints": ["typeHints": ["enable": false]],
+        ],
+        pathKey: "rustAnalyzerPath",
+        candidates: {
+            let fm = FileManager.default
+            let home = NSHomeDirectory()
+            var c: [String] = []
+            if let p = Shell.which("rust-analyzer") { c.append(p) }
+            let zed = "\(home)/Library/Application Support/Zed/languages/rust-analyzer"
+            if let items = try? fm.contentsOfDirectory(atPath: zed) {
+                for i in items.sorted(by: >) where !i.hasSuffix(".metadata") { c.append("\(zed)/\(i)") }
+            }
+            let vscode = "\(home)/.vscode/extensions"
+            if let items = try? fm.contentsOfDirectory(atPath: vscode) {
+                for i in items.sorted(by: >) where i.hasPrefix("rust-lang.rust-analyzer") { c.append("\(vscode)/\(i)/server/rust-analyzer") }
+            }
+            c.append("/opt/homebrew/bin/rust-analyzer")
+            return c
+        },
+        probeArgs: ["--version"], reportsQuiescence: true)
+
+    static let swift = LanguageServerSpec(
+        name: "sourcekit-lsp", language: .swift, languageId: "swift", source: .sourceKit,
+        fileExtensions: ["swift"], watchedSuffixes: [".swift", "Package.swift"], settingsSection: nil,
+        settings: [:],
+        pathKey: "sourceKitPath",
+        candidates: {
+            var c: [String] = []
+            if let p = try? Shell.syncOutput("/usr/bin/xcrun", ["--find", "sourcekit-lsp"]) { c.append(p) }
+            if let p = Shell.which("sourcekit-lsp") { c.append(p) }
+            c.append("/usr/bin/sourcekit-lsp")
+            return c
+        },
+        probeArgs: nil, reportsQuiescence: false)
+}
+
+/// A language server over LSP (rust-analyzer, sourcekit-lsp). Owns the server process for one
+/// workspace root.
 @MainActor @Observable
-final class RustAnalyzer {
+final class LanguageServer {
     enum Status: Equatable {
         case off, starting, indexing(String), ready, failed(String)
 
@@ -35,53 +105,40 @@ final class RustAnalyzer {
     private var progressTitles: [String: String] = [:]
     private var quiescent = false
 
-    init(root: URL) { self.root = root }
+    let spec: LanguageServerSpec
 
-    nonisolated(unsafe) static let settings: [String: Any] = [
-        "checkOnSave": false,
-        "cachePriming": ["enable": true],
-        "procMacro": ["enable": true],
-        "cargo": ["buildScripts": ["enable": true]],
-        "lens": ["enable": false],
-        "inlayHints": ["typeHints": ["enable": false]],
-    ]
+    init(root: URL, spec: LanguageServerSpec) {
+        self.root = root
+        self.spec = spec
+    }
 
     /// True once the server has finished its startup indexing.
     var isWarm: Bool { status == .ready }
 
-    nonisolated(unsafe) private static var cachedBinary: String??
+    private static let binaryLock = NSLock()
+    nonisolated(unsafe) private static var cachedBinaries: [String: String?] = [:]
 
-    /// Locates rust-analyzer off the main thread; the result is cached for the process.
-    nonisolated static func resolveBinary() async -> String? {
-        if let c = cachedBinary { return c }
-        let found = await Task.detached(priority: .userInitiated) { locateBinary() }.value
-        cachedBinary = .some(found)
+    /// Locates the server binary off the main thread; cached per server until the path setting changes.
+    nonisolated static func resolveBinary(_ spec: LanguageServerSpec) async -> String? {
+        let custom = UserDefaults.standard.string(forKey: spec.pathKey) ?? ""
+        let key = spec.name + "\u{1}" + custom
+        binaryLock.lock()
+        if let c = cachedBinaries[key] { binaryLock.unlock(); return c }
+        binaryLock.unlock()
+        let found = await Task.detached(priority: .userInitiated) { locateBinary(spec) }.value
+        binaryLock.lock(); cachedBinaries[key] = .some(found); binaryLock.unlock()
         return found
     }
 
-    nonisolated static func locateBinary() -> String? {
+    nonisolated static func locateBinary(_ spec: LanguageServerSpec) -> String? {
         let fm = FileManager.default
-        if let custom = UserDefaults.standard.string(forKey: "rustAnalyzerPath"), !custom.isEmpty,
+        if let custom = UserDefaults.standard.string(forKey: spec.pathKey), !custom.isEmpty,
            fm.isExecutableFile(atPath: custom) { return custom }
-        var candidates: [String] = []
-        let home = NSHomeDirectory()
-        if let p = Shell.which("rust-analyzer") { candidates.append(p) }
-        let zed = "\(home)/Library/Application Support/Zed/languages/rust-analyzer"
-        if let items = try? fm.contentsOfDirectory(atPath: zed) {
-            for i in items.sorted(by: >) where !i.hasSuffix(".metadata") { candidates.append("\(zed)/\(i)") }
-        }
-        let vscode = "\(home)/.vscode/extensions"
-        if let items = try? fm.contentsOfDirectory(atPath: vscode) {
-            for i in items.sorted(by: >) where i.hasPrefix("rust-lang.rust-analyzer") {
-                candidates.append("\(vscode)/\(i)/server/rust-analyzer")
-            }
-        }
-        candidates.append("/opt/homebrew/bin/rust-analyzer")
-        for c in candidates where fm.isExecutableFile(atPath: c) {
-            // The rustup proxy exists even when the component is not installed; probe it.
+        for c in spec.candidates() where fm.isExecutableFile(atPath: c) {
+            guard let probe = spec.probeArgs else { return c }
             let p = Process()
             p.executableURL = URL(fileURLWithPath: c)
-            p.arguments = ["--version"]
+            p.arguments = probe
             p.standardOutput = Pipe()
             p.standardError = Pipe()
             p.environment = Shell.environment
@@ -103,14 +160,14 @@ final class RustAnalyzer {
         guard client == nil, status != .starting else { return }
         status = .starting
         Task {
-            let bin = await Self.resolveBinary()
+            let bin = await Self.resolveBinary(self.spec)
             self.launch(bin)
         }
     }
 
     private func launch(_ bin: String?) {
         guard let bin else {
-            status = .failed("rust-analyzer not found (set a path in Settings)")
+            status = .failed("\(spec.name) not found (set a path in Settings)")
             return
         }
         binaryPath = bin
@@ -119,11 +176,12 @@ final class RustAnalyzer {
         let gen = generation
         initialized = false
         versions.removeAll()
-        let c = LSPClient(executable: bin, args: [], cwd: root)
+        let c = LSPClient(executable: bin, args: spec.args, cwd: root)
         if Log.enabled, let filter = ProcessInfo.processInfo.environment["SPELUNK_RA_LOG"] { c.environment["RA_LOG"] = filter }
         c.onNotification = { [weak self] method, params in
             Task { @MainActor in self?.handleNotification(method, params) }
         }
+        let spec = self.spec
         c.onServerRequest = { method, params in
             switch method {
             case "workspace/configuration":
@@ -131,7 +189,7 @@ final class RustAnalyzer {
                 // reload the workspace; return the same settings it was initialized with.
                 let items = ((params as? [String: Any])?["items"] as? [[String: Any]]) ?? []
                 return items.map { item -> Any in
-                    (item["section"] as? String) == "rust-analyzer" ? RustAnalyzer.settings : NSNull()
+                    spec.settingsSection != nil && (item["section"] as? String) == spec.settingsSection ? spec.settings : NSNull()
                 }
             default:
                 return NSNull()
@@ -176,7 +234,7 @@ final class RustAnalyzer {
                         ],
                         "experimental": ["serverStatusNotification": true],
                     ] as [String: Any],
-                    "initializationOptions": RustAnalyzer.settings,
+                    "initializationOptions": spec.settings,
                 ]
                 let result = try await c.request("initialize", params, timeout: 120)
                 if let info = (result as? [String: Any])?["serverInfo"] as? [String: Any] {
@@ -185,7 +243,7 @@ final class RustAnalyzer {
                 guard self.generation == gen else { return }
                 c.notify("initialized", [String: Any]())
                 self.initialized = true
-                for (path, text) in self.queuedOpens { self.didOpen(path: path, text: text, language: .rust) }
+                for (path, text) in self.queuedOpens { self.didOpen(path: path, text: text, language: self.spec.language) }
                 self.queuedOpens = [:]
                 if case .starting = self.status { self.status = .indexing("Loading workspace") }
             } catch {
@@ -247,7 +305,7 @@ final class RustAnalyzer {
         if case .failed = status { return }
         if let first = progress.values.sorted().first {
             status = .indexing(first)
-        } else if quiescent {
+        } else if quiescent || !spec.reportsQuiescence {
             status = .ready
         } else {
             status = .indexing("")
@@ -268,7 +326,7 @@ final class RustAnalyzer {
     /// Sends a file's current text. Before the server is initialized it is queued; the most recently
     /// opened files stay open, older ones are closed so the server reads them from disk again.
     func didOpen(path: String, text: String, language: SourceLanguage) {
-        guard language == .rust else { return }
+        guard language == spec.language else { return }
         guard let client, initialized else { queuedOpens[path] = text; return }
         openOrder.removeAll { $0 == path }
         openOrder.append(path)
@@ -283,7 +341,7 @@ final class RustAnalyzer {
         }
         versions[path] = 1
         client.notify("textDocument/didOpen", [
-            "textDocument": ["uri": uri(for: path), "languageId": "rust", "version": 1, "text": text],
+            "textDocument": ["uri": uri(for: path), "languageId": spec.languageId, "version": 1, "text": text],
         ])
     }
 
@@ -297,10 +355,10 @@ final class RustAnalyzer {
     /// new text from disk), and the server is told which files changed.
     func filesChanged(_ paths: [String], except: String?) {
         guard let client, initialized else { return }
-        let rust = paths.filter { $0.hasSuffix(".rs") || $0.hasSuffix("Cargo.toml") }
-        guard !rust.isEmpty else { return }
-        for p in rust where p != except && versions[p] != nil { didClose(p) }
-        client.notify("workspace/didChangeWatchedFiles", ["changes": rust.prefix(500).map { ["uri": uri(for: $0), "type": 2] }])
+        let mine = paths.filter { p in spec.watchedSuffixes.contains { p.hasSuffix($0) } }
+        guard !mine.isEmpty else { return }
+        for p in mine where p != except && versions[p] != nil { didClose(p) }
+        client.notify("workspace/didChangeWatchedFiles", ["changes": mine.prefix(500).map { ["uri": uri(for: $0), "type": 2] }])
     }
 
     private func pos(_ p: SourcePos) -> [String: Any] { ["line": p.line, "character": p.col] }
@@ -328,7 +386,7 @@ final class RustAnalyzer {
     }
 
     private func call(_ method: String, _ params: Any, timeout: TimeInterval = 30) async throws -> Any? {
-        guard let client, status.isUsable else { throw LSPError(message: "rust-analyzer is \(status.label.lowercased())") }
+        guard let client, status.isUsable else { throw LSPError(message: "\(spec.name) is \(status.label.lowercased())") }
         return try await client.request(method, params, timeout: timeout)
     }
 

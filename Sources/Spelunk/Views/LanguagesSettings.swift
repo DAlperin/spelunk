@@ -53,7 +53,7 @@ struct LanguagesSettings: View {
                     TextField("Git URL", text: $url, prompt: Text("https://github.com/tree-sitter/tree-sitter-python"))
                     Menu("Presets") {
                         ForEach(GrammarRegistry.presets) { p in
-                            Button(p.label) { url = p.url; subdirectory = p.subdirectory ?? "" }
+                            Button(p.label) { url = p.url; subdirectory = p.subdirectory ?? ""; revision = p.revision ?? "" }
                         }
                     }.fixedSize()
                 }

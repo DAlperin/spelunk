@@ -318,7 +318,7 @@ final class SCIPService {
     func generate(revision: String, sourceFiles: [String]) {
         state = .generating("Locating rust-analyzer")
         Task {
-            let bin = await RustAnalyzer.resolveBinary()
+            let bin = await LanguageServer.resolveBinary(.rust)
             self.runGenerator(bin, revision: revision, sourceFiles: sourceFiles)
         }
     }

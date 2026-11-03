@@ -330,7 +330,7 @@ enum PaletteCommands {
         // Tools
         add("Run cargo clippy", ws.clippy.scope, icon: "stethoscope") { ws.clippy.run() }
         add("Generate SCIP Index", "rust-analyzer scip", icon: "archivebox") { ws.scip.generate(revision: ws.vcs.revision, sourceFiles: ws.allFiles) }
-        add("Restart rust-analyzer", ws.ra.status.label, icon: "arrow.clockwise") { ws.ra.restart() }
+        add("Restart \(ws.activeServer.spec.name)", ws.activeServer.status.label, icon: "arrow.clockwise") { ws.activeServer.restart() }
         add(ws.showTests ? "Hide Tests in File Tree" : "Show Tests in File Tree", icon: "testtube.2") { ws.showTests.toggle() }
         add(ws.sourceOnly ? "Show All Files in Tree" : "Show Source Files Only", icon: "line.3.horizontal.decrease.circle") { ws.sourceOnly.toggle() }
 
