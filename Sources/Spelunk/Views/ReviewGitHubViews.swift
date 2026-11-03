@@ -46,7 +46,7 @@ struct PullRequestHeader: View {
                 Button {
                     ws.showSubmitReview = true
                 } label: {
-                    Label(review.pendingComments.isEmpty ? "Review…" : "Submit review (\(review.pendingComments.count))", systemImage: "paperplane")
+                    Label(review.pendingForCurrentPR.isEmpty ? "Review…" : "Submit review (\(review.pendingForCurrentPR.count))", systemImage: "paperplane")
                 }
                 .controlSize(.small)
                 Text("Add comments from the editor's context menu").font(.caption2).foregroundStyle(.tertiary)
@@ -224,10 +224,10 @@ struct SubmitReviewSheet: View {
             }.pickerStyle(.segmented).labelsHidden()
             TextEditor(text: $body_).frame(minHeight: 90)
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.3)))
-            Text(verbatim: "\(review.pendingComments.count) line comments").font(.caption.weight(.semibold))
+            Text(verbatim: "\(review.pendingForCurrentPR.count) line comments").font(.caption.weight(.semibold))
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(review.pendingComments) { c in
+                    ForEach(review.pendingForCurrentPR) { c in
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(verbatim: "\(c.path):\(c.line) \(c.side == "LEFT" ? "(old)" : "")").font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -244,7 +244,7 @@ struct SubmitReviewSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(posting ? "Posting…" : "Submit…") { confirming = true }
-                    .disabled(posting || (event == .comment && body_.isEmpty && review.pendingComments.isEmpty))
+                    .disabled(posting || (event == .comment && body_.isEmpty && review.pendingForCurrentPR.isEmpty))
             }
         }
         .padding(16)
@@ -253,7 +253,7 @@ struct SubmitReviewSheet: View {
             Button("Post \(event.label)") { post() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(verbatim: "\(event.label) with \(review.pendingComments.count) line comments will be visible on the pull request.")
+            Text(verbatim: "\(event.label) with \(review.pendingForCurrentPR.count) line comments will be visible on the pull request.")
         }
     }
 
@@ -284,10 +284,10 @@ struct PendingReviewBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("Pending review").font(.callout.weight(.semibold))
-            Text(verbatim: review.pendingComments.count == 1 ? "1 comment" : "\(review.pendingComments.count) comments").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: review.pendingForCurrentPR.count == 1 ? "1 comment" : "\(review.pendingForCurrentPR.count) comments").font(.caption).foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(review.pendingComments) { c in
+                    ForEach(review.pendingForCurrentPR) { c in
                         Button(c.path.lastPathComponent + ":" + String(c.line)) { ws.jump(to: c) }
                             .buttonStyle(.bordered).controlSize(.small).font(.caption.monospaced())
                     }
@@ -301,7 +301,7 @@ struct PendingReviewBar: View {
             Button { confirming = true } label: { HStack(spacing: 4) { Text("Submit review…"); KeyCap("⇧⌘↩") } }
                 .buttonStyle(.borderedProminent).controlSize(.small)
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(posting || (event == .comment && review.pendingComments.isEmpty))
+                .disabled(posting || (event == .comment && review.pendingForCurrentPR.isEmpty))
         }
         .padding(.horizontal, 12).frame(height: 38)
         .background(Color.blue.opacity(0.06))
@@ -309,7 +309,7 @@ struct PendingReviewBar: View {
         .popover(isPresented: $confirming, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(verbatim: "\(event.label) on #\(review.pullRequest?.number ?? 0)").font(.headline)
-                Text(verbatim: "Posts \(review.pendingComments.count) line comments as \(ws.github.login ?? "your gh account"). Everyone on the pull request will see it.")
+                Text(verbatim: "Posts \(review.pendingForCurrentPR.count) line comments as \(ws.github.login ?? "your gh account"). Everyone on the pull request will see it.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 TextField("Summary (optional)", text: $summary, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...6)
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -317,7 +317,7 @@ struct PendingReviewBar: View {
                     Spacer()
                     Button("Cancel") { confirming = false }
                     Button("Post \(event.label)") { submit() }.buttonStyle(.borderedProminent)
-                        .disabled(event == .comment && summary.isEmpty && review.pendingComments.isEmpty)
+                        .disabled(event == .comment && summary.isEmpty && review.pendingForCurrentPR.isEmpty)
                 }
             }
             .padding(14).frame(width: 380)

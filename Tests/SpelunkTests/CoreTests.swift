@@ -260,3 +260,70 @@ final class GroupingDiffTests: XCTestCase {
         }
     }
 }
+
+final class HunkIdentityTests: XCTestCase {
+    func diff(_ firstHunkBody: String) -> String {
+        """
+        diff --git a/src/a.rs b/src/a.rs
+        --- a/src/a.rs
+        +++ b/src/a.rs
+        @@ -1,2 +1,2 @@
+         fn a() {
+        \(firstHunkBody)
+        @@ -10,2 +10,2 @@
+         fn b() {
+        -    old();
+        +    new();
+        @@ -20,2 +20,2 @@
+         fn c() {
+        -    old();
+        +    new();
+        """
+    }
+
+    /// Ids depend on content, so an edit to an earlier hunk does not move later hunks' ids, and two
+    /// identical hunks in one file stay distinct.
+    func testIdsSurviveEditsElsewhere() {
+        let a = DiffParser.parse(diff("-    x();\n+    y();"))[0].hunks
+        let b = DiffParser.parse(diff("-    x();\n+    z();"))[0].hunks
+        XCTAssertNotEqual(a[0].id, b[0].id)
+        XCTAssertEqual(a[1].id, b[1].id)
+        XCTAssertEqual(a[2].id, b[2].id)
+        XCTAssertNotEqual(a[1].id, a[2].id)
+        XCTAssertEqual(a[1].contentKey, a[2].contentKey)
+    }
+}
+
+final class ProcessRunnerTests: XCTestCase {
+    func testDrainsAllOutput() async throws {
+        let o = try await ProcessRunner.run("/bin/sh", ["-c", "head -c 3000000 /dev/zero | tr '\\\\0' x; echo done >&2"], environment: [:])
+        XCTAssertEqual(o.stdout.count, 3_000_000)
+        XCTAssertEqual(String(decoding: o.stderr, as: UTF8.self), "done\n")
+    }
+
+    func testTimeout() async {
+        let start = Date()
+        do {
+            _ = try await ProcessRunner.run("/bin/sleep", ["10"], environment: [:], timeout: 0.5)
+            XCTFail("expected a timeout")
+        } catch {
+            XCTAssertLessThan(Date().timeIntervalSince(start), 4)
+        }
+    }
+
+    func testCancellationTerminates() async {
+        let start = Date()
+        let t = Task { try await ProcessRunner.run("/bin/sleep", ["10"], environment: [:]) }
+        try? await Task.sleep(for: .milliseconds(300))
+        t.cancel()
+        let r = await t.result
+        if case .success = r { XCTFail("expected cancellation") }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 4)
+    }
+
+    func testStreamsStdinThrough() async throws {
+        let input = String(repeating: "abc\n", count: 50_000)
+        let o = try await ProcessRunner.run("/bin/cat", [], environment: [:], stdin: Data(input.utf8))
+        XCTAssertEqual(o.stdout.count, input.utf8.count)
+    }
+}

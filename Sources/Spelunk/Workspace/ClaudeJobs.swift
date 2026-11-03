@@ -68,14 +68,13 @@ extension Workspace {
         j.unseen = false
         j.started = hit.started
         jobs.append(j)
-        if j.kind == .trace { openJobTrace(j.id) }
     }
 
     /// Where a Claude session should read code: the head of the change under review when that is not
     /// the working copy, plus the change's full diff as a readable file.
-    func claudeWorkspace() async -> (cwd: URL, readable: [URL], note: String) {
+    func claudeWorkspace(_ review: ReviewSession?) async throws -> (cwd: URL, readable: [URL], note: String) {
         guard let r = review, !r.afterIsWorkingCopy else { return (root, [], "") }
-        let head = await r.headCheckout()
+        let head = try await r.headCheckout()
         let diff = r.fullDiffFile()
         let note = "\n\nThe working directory is the code after the change under review (\(r.title)) is applied; "
             + "its full diff is at \(diff.path). Line numbers refer to that version."
@@ -136,12 +135,13 @@ extension Workspace {
         job.cacheKey = key
         let id = job.id
         jobs.append(job)
+        let reviewAtStart = review
         var prompt = question
         if let anchor { prompt += "\n\nI am looking at \(anchor)." }
         if let r = review { prompt += "\n\nContext: I am reviewing \(r.title) (\(r.target.label))." }
         jobTasks[id] = Task {
             do {
-                let place = await claudeWorkspace()
+                let place = try await claudeWorkspace(reviewAtStart)
                 let res = try await Claude.run(prompt: prompt + place.note, system: ClaudeTasks.askSystem, cwd: place.cwd, task: .ask,
                                                readableDirs: place.readable) { [weak self] ev in
                     Task { @MainActor in
@@ -167,13 +167,14 @@ extension Workspace {
         let anchor = includeAnchor ? anchorDescription() : nil
         let key = jobCacheKey(.trace, question, anchor)
         if !force, let hit = cachedJob(key) { replay(hit); return }
+        let reviewAtStart = review
         var job = ClaudeJob(kind: .trace, question: question, anchor: anchor, model: ClaudeModels.label(Claude.model(for: .trace)))
         job.cacheKey = key
         let id = job.id
         jobs.append(job)
         jobTasks[id] = Task {
             do {
-                let place = await claudeWorkspace()
+                let place = try await claudeWorkspace(reviewAtStart)
                 let res = try await Claude.run(prompt: ClaudeTasks.tracePrompt(question: question, anchor: anchor) + place.note,
                                                system: ClaudeTasks.traceSystem, cwd: place.cwd, task: .trace, schema: ClaudeTasks.traceSchema,
                                                readableDirs: place.readable) { [weak self] ev in

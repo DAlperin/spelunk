@@ -54,43 +54,14 @@ enum Shell {
     }
 
     @discardableResult
-    static func run(_ executable: String, _ args: [String], cwd: URL? = nil, stdin: String? = nil) async throws -> ShellResult {
+    /// Runs to completion. Cancelling the calling task terminates the process.
+    static func run(_ executable: String, _ args: [String], cwd: URL? = nil, stdin: String? = nil, timeout: TimeInterval? = 300) async throws -> ShellResult {
         let exe: String
         if executable.hasPrefix("/") { exe = executable } else if let w = which(executable) { exe = w } else {
             throw ShellError(command: executable, result: ShellResult(status: 127, stdout: "", stderr: "\(executable) not found on PATH"))
         }
-        return try await withCheckedThrowingContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: exe)
-            p.arguments = args
-            p.environment = environment
-            if let cwd { p.currentDirectoryURL = cwd }
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            let inPipe = Pipe()
-            p.standardInput = inPipe
-            let outBuf = LockedData(), errBuf = LockedData()
-            out.fileHandleForReading.readabilityHandler = { h in outBuf.append(h.availableData) }
-            err.fileHandleForReading.readabilityHandler = { h in errBuf.append(h.availableData) }
-            p.terminationHandler = { proc in
-                out.fileHandleForReading.readabilityHandler = nil
-                err.fileHandleForReading.readabilityHandler = nil
-                outBuf.append(out.fileHandleForReading.readDataToEndOfFile())
-                errBuf.append(err.fileHandleForReading.readDataToEndOfFile())
-                cont.resume(returning: ShellResult(
-                    status: proc.terminationStatus,
-                    stdout: String(decoding: outBuf.data, as: UTF8.self),
-                    stderr: String(decoding: errBuf.data, as: UTF8.self)))
-            }
-            do {
-                try p.run()
-                if let stdin { inPipe.fileHandleForWriting.write(Data(stdin.utf8)) }
-                try? inPipe.fileHandleForWriting.close()
-            } catch {
-                cont.resume(throwing: error)
-            }
-        }
+        let o = try await ProcessRunner.run(exe, args, cwd: cwd, environment: environment, stdin: stdin.map { Data($0.utf8) }, timeout: timeout)
+        return ShellResult(status: o.status, stdout: String(decoding: o.stdout, as: UTF8.self), stderr: String(decoding: o.stderr, as: UTF8.self))
     }
 
     static func output(_ executable: String, _ args: [String], cwd: URL? = nil) async throws -> String {

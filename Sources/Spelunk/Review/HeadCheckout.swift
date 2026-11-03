@@ -4,16 +4,11 @@ extension ReviewSession {
     /// A directory where the code reads as it does after the change, for model sessions that browse
     /// the repository. The working copy when it is the change's head; otherwise a detached git
     /// worktree at the head commit, kept per commit (the three most recent) under Application Support.
-    func headCheckout() async -> URL {
-        let dir: URL
-        if afterIsWorkingCopy {
-            dir = root
-        } else if let made = await worktreeAtHead() {
-            dir = made
-        } else {
-            dir = root
-        }
-        return dir
+    /// Throws when the head cannot be checked out; callers must not quietly read another version.
+    func headCheckout() async throws -> URL {
+        if afterIsWorkingCopy { return root }
+        if let made = await worktreeAtHead() { return made }
+        throw ClaudeError(message: "Could not check out the head of \(title) (\(newRev.flatMap { $0.isEmpty ? nil : $0 } ?? "its commits are not available locally")).")
     }
 
     /// The change's full diff as a file outside the repository, for sessions given read access to it.
@@ -36,7 +31,21 @@ extension ReviewSession {
         }.joined(separator: "\n")
     }
 
+    /// One checkout per directory at a time: concurrent callers share the same in-flight work.
+    @MainActor private static var inflight: [String: Task<URL?, Never>] = [:]
+
     private func worktreeAtHead() async -> URL? {
+        guard let rev = newRev, !rev.isEmpty else { return nil }
+        let key = root.path + "\u{1}" + rev
+        if let t = Self.inflight[key] { return await t.value }
+        let t = Task { await makeWorktreeAtHead() }
+        Self.inflight[key] = t
+        let r = await t.value
+        Self.inflight[key] = nil
+        return r
+    }
+
+    private func makeWorktreeAtHead() async -> URL? {
         guard let rev = newRev, !rev.isEmpty else { return nil }
         var commit = rev
         if FileManager.default.fileExists(atPath: root.appendingPathComponent(".jj").path),

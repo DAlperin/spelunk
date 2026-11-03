@@ -70,7 +70,17 @@ enum DiffParser {
         }
         func flushFile() {
             flushHunk()
-            if let f = current { files.append(f) }
+            if var f = current {
+                // Identity is the hunk's content plus which occurrence of that content it is, so it
+                // survives edits elsewhere in the file and reloads, unlike a position.
+                var seen: [String: Int] = [:]
+                for i in f.hunks.indices {
+                    let k = f.hunks[i].contentKey
+                    f.hunks[i].id = k + "@" + String(seen[k, default: 0])
+                    seen[k, default: 0] += 1
+                }
+                files.append(f)
+            }
             current = nil
         }
         func stripPrefix(_ s: Substring) -> String {

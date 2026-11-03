@@ -113,9 +113,16 @@ extension ReviewSession {
     /// Second pass: answers semantic and `llm` conditions for hunks whose other conditions already
     /// hold, re-evaluates them, then matches attachments.
     func resolvePendingRules() async {
-        guard !resolvingRules else { return }
+        guard !resolvingRules else { rulesRerun = true; return }
         resolvingRules = true
         defer { resolvingRules = false }
+        repeat {
+            rulesRerun = false
+            await resolvePendingRulesOnce()
+        } while rulesRerun
+    }
+
+    private func resolvePendingRulesOnce() async {
         let rs = rules()
         // Attachments that need no answers show up before the slower semantic pass.
         matchAttachments(rs)
@@ -132,6 +139,7 @@ extension ReviewSession {
             if semanticWork.isEmpty && questions.isEmpty { break }
             if let provider = semanticProvider {
                 for (i, (h, needs)) in semanticWork.enumerated() {
+                    if rulesRerun { return }
                     guard let f = file(for: h) else { continue }
                     ruleState = "Semantic rules: \(i + 1) of \(semanticWork.count) hunks"
                     semantic[h.id] = (needs, await provider(h, f, needs))
@@ -279,7 +287,11 @@ extension ReviewSession {
             var result = AttachmentResult()
             switch action {
             case .run(let command):
-                let head = await self.headCheckout()
+                let head: URL
+                do { head = try await self.headCheckout() } catch {
+                    result.error = error.localizedDescription
+                    break
+                }
                 let quoted = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
                 let cmd = command
                     .replacingOccurrences(of: "{file}", with: quoted(a.paths.first ?? ""))
@@ -291,7 +303,7 @@ extension ReviewSession {
                            "SPELUNK_OUT=\(out.path)", "SPELUNK_DIFF=\(diffURL.path)", "SPELUNK_NAME=\(name)",
                            "SPELUNK_BASE=\(oldRev)", "SPELUNK_HEAD=\(newRev ?? "")"]
                 do {
-                    let r = try await Shell.run("/usr/bin/env", env + ["/bin/sh", "-c", cmd], cwd: root)
+                    let r = try await Shell.run("/usr/bin/env", env + ["/bin/sh", "-c", cmd], cwd: head, timeout: 900)
                     let text = (r.stdout + (r.ok ? "" : "\n" + r.stderr)).trimmingCharacters(in: .whitespacesAndNewlines)
                     if r.ok, text.hasPrefix("{"), let p = try? JSONDecoder().decode(AttachmentPayload.self, from: Data(text.utf8)), !p.isEmpty {
                         result.payload = p
@@ -303,7 +315,11 @@ extension ReviewSession {
                     result.error = error.localizedDescription
                 }
             case .claude(let ask):
-                let head = await self.headCheckout()
+                let head: URL
+                do { head = try await self.headCheckout() } catch {
+                    result.error = error.localizedDescription
+                    break
+                }
                 let diffFile = self.fullDiffFile()
                 var prompt = ask.replacingOccurrences(of: "{name}", with: name).replacingOccurrences(of: "{file}", with: a.paths.first ?? "")
                 prompt += "\n\nChange: \(title)\n"

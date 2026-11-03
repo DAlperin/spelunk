@@ -3,16 +3,17 @@ import Foundation
 extension Workspace {
     /// Wires a review's semantic rule conditions to this workspace's code intelligence.
     func attachSemantics(_ r: ReviewSession) {
-        r.semanticProvider = { [weak self] h, f, needs in
-            await self?.semanticFacts(for: h, file: f, needs: needs) ?? .unavailable
+        r.semanticProvider = { [weak self, weak r] h, f, needs in
+            guard let r else { return .unavailable }
+            return await self?.semanticFacts(for: h, file: f, needs: needs, in: r) ?? .unavailable
         }
     }
 
     /// Answers about the item a hunk changes, asked at that item's position in the file on disk:
     /// rust-analyzer when warm, otherwise SCIP, tree-sitter or text search, as `IntelHub` falls back.
-    func semanticFacts(for h: Hunk, file f: FileDiff, needs: SemanticNeeds) async -> SemanticFacts {
+    func semanticFacts(for h: Hunk, file f: FileDiff, needs: SemanticNeeds, in session: ReviewSession) async -> SemanticFacts {
         guard f.status != .deleted, SourceLanguage.from(path: f.newPath) == .rust, let disk = docs.document(f.newPath) else { return .unavailable }
-        let reviewDoc = review?.cachedDocument(f.newPath, side: .new) ?? disk
+        let reviewDoc = session.cachedDocument(f.newPath, side: .new) ?? disk
         guard reviewDoc.lines.lineCount > 0,
               let item = reviewDoc.syntax.enclosingItem(line: min(h.anchorNewLine, reviewDoc.lines.lineCount - 1)) else { return .unavailable }
         // The review's version can differ from the working copy; find the same item on disk by name.

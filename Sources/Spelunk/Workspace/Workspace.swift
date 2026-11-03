@@ -758,7 +758,7 @@ final class Workspace {
         for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
             if let l = t.anchorLine { out.append(("thread:" + t.id, l - 1)) }
         }
-        for c in r.pendingComments where c.path == doc.path && c.side == side { out.append(("pending:" + c.id.uuidString, c.line - 1)) }
+        for c in r.pendingForCurrentPR where c.path == doc.path && c.side == side { out.append(("pending:" + c.id.uuidString, c.line - 1)) }
         if let d = commentDraft, d.path == doc.path, d.side == side { out.append(("draft", d.line - 1)) }
         // On one line: existing threads, then your pending comments, then the composer.
         func rank(_ id: String) -> Int { id.hasPrefix("thread:") ? 0 : id.hasPrefix("pending:") ? 1 : 2 }
@@ -773,7 +773,7 @@ final class Workspace {
         for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
             if let l = t.anchorLine { out[l - 1] = (out[l - 1] ?? false) || !t.isResolved }
         }
-        for c in r.pendingComments where c.path == doc.path && c.side == side { out[c.line - 1] = true }
+        for c in r.pendingForCurrentPR where c.path == doc.path && c.side == side { out[c.line - 1] = true }
         return out
     }
 

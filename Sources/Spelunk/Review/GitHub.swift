@@ -279,4 +279,7 @@ struct PendingComment: Codable, Identifiable, Hashable, Sendable {
     /// "RIGHT" for the new version, "LEFT" for the old.
     var side: String
     var body: String
+    /// The pull request and head commit the draft was written against.
+    var prNumber: Int?
+    var commitId: String?
 }

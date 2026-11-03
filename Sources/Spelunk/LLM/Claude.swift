@@ -104,83 +104,42 @@ enum Claude {
             args += ["--json-schema", String(decoding: data, as: UTF8.self)]
         }
 
-        let resultBox = ResultBox()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ClaudeResult, Error>) in
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: bin)
-                p.arguments = args
-                p.currentDirectoryURL = cwd
-                p.environment = Shell.environment
-                let out = Pipe(), err = Pipe(), inp = Pipe()
-                p.standardOutput = out
-                p.standardError = err
-                p.standardInput = inp
-                let pending = LockedData()
-                let errData = LockedData()
-                let handle: @Sendable (String) -> Void = { line in
-                    guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
-                    switch obj["type"] as? String {
-                    case "assistant":
-                        let content = ((obj["message"] as? [String: Any])?["content"] as? [[String: Any]]) ?? []
-                        for c in content {
-                            if c["type"] as? String == "tool_use" {
-                                let name = c["name"] as? String ?? "tool"
-                                let input = c["input"] as? [String: Any] ?? [:]
-                                let summary = (input["file_path"] ?? input["pattern"] ?? input["path"] ?? input["command"]).map { "\($0)" } ?? ""
-                                onEvent(.toolUse(name: name, summary: summary.replacingOccurrences(of: cwd.path + "/", with: "")))
-                            } else if c["type"] as? String == "text", let t = c["text"] as? String, !t.isEmpty {
-                                onEvent(.text(t))
-                            }
-                        }
-                    case "result":
-                        var r = ClaudeResult(text: obj["result"] as? String ?? "", structured: nil,
-                                             costUSD: obj["total_cost_usd"] as? Double ?? 0, durationMs: obj["duration_ms"] as? Int ?? 0)
-                        if let s = obj["structured_output"], !(s is NSNull) {
-                            r.structured = try? JSONSerialization.data(withJSONObject: s)
-                        }
-                        if obj["is_error"] as? Bool == true { resultBox.error = r.text.isEmpty ? "Claude returned an error" : r.text }
-                        resultBox.result = r
-                    default: break
+        let state = StreamState()
+        let handle: @Sendable (String) -> Void = { line in
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
+            switch obj["type"] as? String {
+            case "assistant":
+                let content = ((obj["message"] as? [String: Any])?["content"] as? [[String: Any]]) ?? []
+                for c in content {
+                    if c["type"] as? String == "tool_use" {
+                        let name = c["name"] as? String ?? "tool"
+                        let input = c["input"] as? [String: Any] ?? [:]
+                        let summary = (input["file_path"] ?? input["pattern"] ?? input["path"] ?? input["command"]).map { "\($0)" } ?? ""
+                        onEvent(.toolUse(name: name, summary: summary.replacingOccurrences(of: cwd.path + "/", with: "")))
+                    } else if c["type"] as? String == "text", let t = c["text"] as? String, !t.isEmpty {
+                        onEvent(.text(t))
                     }
                 }
-                out.fileHandleForReading.readabilityHandler = { h in
-                    let d = h.availableData
-                    guard !d.isEmpty else { return }
-                    pending.append(d)
-                    let all = pending.data
-                    guard let nl = all.lastIndex(of: 10) else { return }
-                    let lines = String(decoding: all[..<nl], as: UTF8.self).split(separator: "\n")
-                    pending.replace(Data(all[(nl + 1)...]))
-                    for l in lines { handle(String(l)) }
+            case "result":
+                var r = ClaudeResult(text: obj["result"] as? String ?? "", structured: nil,
+                                     costUSD: obj["total_cost_usd"] as? Double ?? 0, durationMs: obj["duration_ms"] as? Int ?? 0)
+                if let s = obj["structured_output"], !(s is NSNull) {
+                    r.structured = try? JSONSerialization.data(withJSONObject: s)
                 }
-                err.fileHandleForReading.readabilityHandler = { h in errData.append(h.availableData) }
-                p.terminationHandler = { proc in
-                    out.fileHandleForReading.readabilityHandler = nil
-                    err.fileHandleForReading.readabilityHandler = nil
-                    let rest = pending.data + out.fileHandleForReading.readDataToEndOfFile()
-                    for l in String(decoding: rest, as: UTF8.self).split(separator: "\n") { handle(String(l)) }
-                    if let e = resultBox.error {
-                        cont.resume(throwing: ClaudeError(message: e))
-                    } else if let r = resultBox.result {
-                        cont.resume(returning: r)
-                    } else {
-                        let stderr = String(decoding: errData.data.suffix(800), as: UTF8.self)
-                        cont.resume(throwing: ClaudeError(message: "claude exited \(proc.terminationStatus): \(stderr)"))
-                    }
-                }
-                resultBox.process = p
-                do {
-                    try p.run()
-                    inp.fileHandleForWriting.write(Data(prompt.utf8))
-                    try? inp.fileHandleForWriting.close()
-                } catch {
-                    cont.resume(throwing: error)
-                }
+                state.set(result: r, error: obj["is_error"] as? Bool == true ? (r.text.isEmpty ? "Claude returned an error" : r.text) : nil)
+            default: break
             }
-        } onCancel: {
-            resultBox.process?.terminate()
         }
+        // Chunks arrive in order from one reader thread; split them into complete lines.
+        let out = try await ProcessRunner.run(bin, args, cwd: cwd, environment: Shell.environment, stdin: Data(prompt.utf8),
+                                              timeout: 1800) { chunk in
+            for line in state.lines(appending: chunk) { handle(line) }
+        }
+        for line in state.lines(appending: Data([10])) { handle(line) }
+        let (result, error) = state.outcome
+        if let error { throw ClaudeError(message: error) }
+        if let result { return result }
+        throw ClaudeError(message: "claude exited \(out.status): \(String(decoding: out.stderr.suffix(800), as: UTF8.self))")
     }
 
     /// Decodes structured output, falling back to the first JSON object embedded in the text.
@@ -193,8 +152,28 @@ enum Claude {
     }
 }
 
-final class ResultBox: @unchecked Sendable {
-    var result: ClaudeResult?
-    var error: String?
-    var process: Process?
+/// Line splitting and the final result of one streamed Claude run.
+final class StreamState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = Data()
+    private var result: ClaudeResult?
+    private var error: String?
+
+    func lines(appending d: Data) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        pending.append(d)
+        guard let nl = pending.lastIndex(of: 10) else { return [] }
+        let lines = String(decoding: pending[..<nl], as: UTF8.self).split(separator: "\n").map(String.init)
+        pending = Data(pending[(nl + 1)...])
+        return lines
+    }
+
+    func set(result r: ClaudeResult, error e: String?) {
+        lock.lock(); result = r; error = e; lock.unlock()
+    }
+
+    var outcome: (ClaudeResult?, String?) {
+        lock.lock(); defer { lock.unlock() }
+        return (result, error)
+    }
 }

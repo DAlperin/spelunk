@@ -270,7 +270,7 @@ enum PaletteCommands {
             add("Diff: \(m.rawValue)", m == .inline ? "new version with removed lines in place" : m == .split ? "old and new side by side" : "\(m.rawValue.lowercased()) version only",
                 icon: "rectangle.split.2x1", when: hasReview && ws.diffMode != m) { ws.setDiffMode(m) }
         }
-        add("Submit GitHub Review…", "\(ws.review?.pendingComments.count ?? 0) pending comments", icon: "paperplane",
+        add("Submit GitHub Review…", "\(ws.review?.pendingForCurrentPR.count ?? 0) pending comments", icon: "paperplane",
             when: ws.review?.pullRequest != nil) { ws.showSubmitReview = true }
         add("Close Review", ws.review?.target.label, icon: "xmark.circle", when: ws.activeReviewKey != nil) { ws.review = nil }
 

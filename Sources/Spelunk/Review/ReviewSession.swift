@@ -127,6 +127,8 @@ final class ReviewSession {
     var conditionAnswers: [String: Bool] = [:]
     var ruleState: String?
     var resolvingRules = false
+    /// Set when a load lands while the second pass is running, so it starts over on the new diff.
+    @ObservationIgnored var rulesRerun = false
 
     var attachments: [Attachment] = []
     var attachmentResults: [String: AttachmentResult] = [:]
@@ -219,6 +221,9 @@ final class ReviewSession {
 
     /// The last loaded diff and its classification, so reopening a review shows it immediately.
     private struct Snapshot: Codable {
+        /// Bumped when hunk identity or analysis shape changes; other formats are ignored.
+        static let currentFormat = 2
+        var format: Int?
         var diff: String
         var analyses: [String: HunkAnalysis]
         var title: String
@@ -236,7 +241,7 @@ final class ReviewSession {
 
     private func saveSnapshot(_ diff: String) {
         guard !tracksWorkingCopy, diff.utf8.count < 20_000_000 else { return }
-        let snap = Snapshot(diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
+        let snap = Snapshot(format: Snapshot.currentFormat, diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
                             prBaseOid: prBaseOid, prHeadOid: prHeadOid, vcs: vcs == .jj ? "jj" : "git")
         Task.detached { [url = snapshotURL] in
             if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
@@ -244,7 +249,8 @@ final class ReviewSession {
     }
 
     func restoreSnapshot() -> Bool {
-        guard !tracksWorkingCopy, let d = try? Data(contentsOf: snapshotURL), let snap = try? JSONDecoder().decode(Snapshot.self, from: d) else { return false }
+        guard !tracksWorkingCopy, let d = try? Data(contentsOf: snapshotURL), let snap = try? JSONDecoder().decode(Snapshot.self, from: d),
+              snap.format == Snapshot.currentFormat else { return false }
         let restored = DiffParser.parse(snap.diff).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
         guard !restored.isEmpty else { return false }
         title = snap.title
@@ -597,7 +603,7 @@ final class ReviewSession {
 
     func pending(for h: Hunk) -> [PendingComment] {
         guard let f = file(for: h) else { return [] }
-        return pendingComments.filter { c in
+        return pendingForCurrentPR.filter { c in
             c.side == "LEFT"
                 ? c.path == f.oldPath && c.line >= h.oldStart && c.line < h.oldStart + max(1, h.oldCount)
                 : c.path == f.newPath && c.line >= h.newStart && c.line < h.newStart + max(1, h.newCount)
@@ -615,13 +621,32 @@ final class ReviewSession {
         }
     }
 
-    func addPending(_ c: PendingComment) { pendingComments.append(c); save() }
+    /// Drafts are stamped with the pull request and head they were written against, so they can only
+    /// ever be submitted there.
+    func addPending(_ c: PendingComment) {
+        var c = c
+        c.prNumber = c.prNumber ?? pullRequest?.number
+        c.commitId = c.commitId ?? pullRequest?.headSha
+        pendingComments.append(c)
+        save()
+    }
+
+    /// Drafts for the pull request currently attached to this review.
+    var pendingForCurrentPR: [PendingComment] {
+        guard let pr = pullRequest else { return [] }
+        return pendingComments.filter { $0.prNumber == nil || $0.prNumber == pr.number }
+    }
     func removePending(_ id: UUID) { pendingComments.removeAll { $0.id == id }; save() }
 
     func submit(event: GitHubService.ReviewEvent, body: String) async throws {
         guard let github, let pr = pullRequest else { throw ClaudeError(message: "Not a GitHub pull request review") }
-        try await github.submitReview(number: pr.number, commitId: pr.headSha, event: event, body: body, comments: pendingComments)
-        pendingComments = []
+        let drafts = pendingForCurrentPR
+        // Comments anchor to the commit they were written against; drafts from an older head are
+        // still posted there, which GitHub shows as outdated rather than misplaced.
+        let commit = drafts.compactMap(\.commitId).first ?? pr.headSha
+        try await github.submitReview(number: pr.number, commitId: commit, event: event, body: body, comments: drafts)
+        let sent = Set(drafts.map(\.id))
+        pendingComments.removeAll { sent.contains($0.id) }
         save()
         await refreshPullRequest(pr.number)
     }
@@ -717,7 +742,7 @@ final class ReviewSession {
             }
         }
         do {
-            let head = await headCheckout()
+            let head = try await headCheckout()
             let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.triageSystem, cwd: head, task: .triage, schema: ClaudeTasks.triageSchema) { [weak self] ev in
                 if case .toolUse(let name, let s) = ev {
                     Task { @MainActor in self?.triageState = "\(name) \(s)" }
