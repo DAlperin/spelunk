@@ -37,18 +37,34 @@ struct ClaudeJob: Identifiable, Codable {
 }
 
 extension Workspace {
-    private var jobsURL: URL { AppPaths.support(for: root).appendingPathComponent("claude-jobs.json") }
-
-    /// Finished, successful runs are kept on disk so answers survive relaunches and repeat questions
-    /// cost nothing until the code changes.
+    /// Finished, successful runs are kept in the store so answers survive relaunches and repeat
+    /// questions cost nothing until the code changes. The JSON file earlier versions used is imported once.
     func loadJobs() {
-        guard let d = try? Data(contentsOf: jobsURL), let saved = try? JSONDecoder().decode([ClaudeJob].self, from: d) else { return }
-        jobs = saved
+        let store = Store.shared(for: root)
+        let legacy = AppPaths.support(for: root).appendingPathComponent("claude-jobs.json")
+        Task {
+            if let d = try? Data(contentsOf: legacy), let old = try? JSONDecoder().decode([ClaudeJob].self, from: d) {
+                for j in old { if let e = try? JSONEncoder().encode(j) { await store.putJob(id: j.id.uuidString, value: e, created: j.started) } }
+                try? FileManager.default.moveItem(at: legacy, to: legacy.appendingPathExtension("imported"))
+            }
+            let saved = await store.jobs().compactMap { try? JSONDecoder().decode(ClaudeJob.self, from: $0) }
+            let running = jobs
+            jobs = saved.filter { s in !running.contains { $0.id == s.id } } + running
+        }
     }
 
-    func saveJobs() {
-        let keep = jobs.filter { !$0.running && !$0.cancelled && $0.error == nil && !$0.fromCache }.suffix(60)
-        if let d = try? JSONEncoder().encode(Array(keep).map { var j = $0; j.unseen = false; return j }) { try? d.write(to: jobsURL, options: .atomic) }
+    private func persistJob(_ id: UUID) {
+        guard let j = job(id), !j.running, !j.cancelled, j.error == nil, !j.fromCache else { return }
+        var copy = j
+        copy.unseen = false
+        guard let e = try? JSONEncoder().encode(copy) else { return }
+        let store = Store.shared(for: root)
+        Task { await store.putJob(id: id.uuidString, value: e, created: copy.started) }
+    }
+
+    private func forgetJobs(_ ids: [UUID]) {
+        let store = Store.shared(for: root)
+        Task { await store.deleteJobs(ids.map(\.uuidString)) }
     }
 
     func jobCacheKey(_ kind: ClaudeJob.Kind, _ question: String, _ anchor: String?) -> String {
@@ -106,7 +122,7 @@ extension Workspace {
             $0.unseen = inspectorPane != .claude
         }
         jobTasks[id] = nil
-        saveJobs()
+        persistJob(id)
     }
 
     func cancelJob(_ id: UUID) {
@@ -118,10 +134,14 @@ extension Workspace {
     func removeJob(_ id: UUID) {
         cancelJob(id)
         jobs.removeAll { $0.id == id }
-        saveJobs()
+        forgetJobs([id])
     }
 
-    func clearFinishedJobs() { jobs.removeAll { !$0.running }; saveJobs() }
+    func clearFinishedJobs() {
+        let done = jobs.filter { !$0.running }.map(\.id)
+        jobs.removeAll { !$0.running }
+        forgetJobs(done)
+    }
 
     func markJobsSeen() {
         for i in jobs.indices where jobs[i].unseen { jobs[i].unseen = false }

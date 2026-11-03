@@ -25,7 +25,7 @@ enum ReviewTarget: Codable, Hashable, Sendable {
     }
 }
 
-struct LLMTriage: Codable, Sendable {
+struct LLMTriage: Codable, Sendable, Equatable {
     /// `skipped`: sent to the quick pass but left out of its reply. Cached so it is not resent; the rules decide.
     enum Pass: String, Codable, Sendable { case quick, deep, skipped }
     var tier: ChangeTier
@@ -118,6 +118,14 @@ final class ReviewSession {
     var expandedGroups: Set<String> = []
     @ObservationIgnored var layoutCache: [TierSection]?
 
+    /// The resolved review identity that user state is stored under (see `resolveIdentity`).
+    @ObservationIgnored var identity: String?
+    @ObservationIgnored var hydratedIdentity: String?
+    @ObservationIgnored var mirror = PersistedMirror()
+    @ObservationIgnored var writeChain: Task<Void, Never>?
+    /// The diff the overview was written for; the overview is stale once the diff differs.
+    @ObservationIgnored var overviewFingerprint: String?
+
     /// Facts from the first pass, re-evaluated once semantic and `llm` answers arrive.
     @ObservationIgnored var facts: [String: HunkFacts] = [:]
     /// Answers semantic rule conditions; set by the workspace, which owns code intelligence.
@@ -171,50 +179,13 @@ final class ReviewSession {
         self.target = target
         self.github = github
         self.tracksWorkingCopy = tracksWorkingCopy
-        loadPersisted()
-        _ = restoreSnapshot()
+        if restoreSnapshot() { Task { await hydrate() } }
     }
 
     // MARK: Persistence
 
-    private struct Persisted: Codable {
-        var viewed: [String]
-        var notes: [String: String]
-        var llm: [String: LLMTriage]
-        var overview: String?
-        var reviewOrder: [String]?
-        var fingerprint: String
-        var pendingComments: [PendingComment]?
-        var claudeGroups: [HunkGroup]?
-        var conditionAnswers: [String: Bool]?
-    }
-
-    private var stateURL: URL {
-        AppPaths.support(for: root).appendingPathComponent("review-\(String(UInt(bitPattern: target.key.stableHash), radix: 36)).json")
-    }
-
-    private var fingerprint: String {
+    var fingerprint: String {
         String(UInt(bitPattern: files.flatMap(\.hunks).map { $0.id + $0.lines.map(\.text).joined() }.joined().stableHash), radix: 36)
-    }
-
-    private func loadPersisted() {
-        guard let d = try? Data(contentsOf: stateURL), let p = try? JSONDecoder().decode(Persisted.self, from: d) else { return }
-        viewed = Set(p.viewed)
-        notes = p.notes
-        llm = p.llm
-        overview = p.overview
-        reviewOrder = p.reviewOrder ?? []
-        pendingComments = p.pendingComments ?? []
-        claudeGroups = p.claudeGroups ?? []
-        conditionAnswers = p.conditionAnswers ?? [:]
-        persistedFingerprint = p.fingerprint
-    }
-
-    private var persistedFingerprint: String?
-
-    func save() {
-        let p = Persisted(viewed: Array(viewed), notes: notes, llm: llm, overview: overview, reviewOrder: reviewOrder, fingerprint: fingerprint, pendingComments: pendingComments, claudeGroups: claudeGroups, conditionAnswers: conditionAnswers)
-        if let d = try? JSONEncoder().encode(p) { try? d.write(to: stateURL, options: .atomic) }
     }
 
     // MARK: Snapshot
@@ -222,8 +193,9 @@ final class ReviewSession {
     /// The last loaded diff and its classification, so reopening a review shows it immediately.
     private struct Snapshot: Codable {
         /// Bumped when hunk identity or analysis shape changes; other formats are ignored.
-        static let currentFormat = 2
+        static let currentFormat = 3
         var format: Int?
+        var identity: String?
         var diff: String
         var analyses: [String: HunkAnalysis]
         var title: String
@@ -241,7 +213,7 @@ final class ReviewSession {
 
     private func saveSnapshot(_ diff: String) {
         guard !tracksWorkingCopy, diff.utf8.count < 20_000_000 else { return }
-        let snap = Snapshot(format: Snapshot.currentFormat, diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
+        let snap = Snapshot(format: Snapshot.currentFormat, identity: identity, diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
                             prBaseOid: prBaseOid, prHeadOid: prHeadOid, vcs: vcs == .jj ? "jj" : "git")
         Task.detached { [url = snapshotURL] in
             if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
@@ -262,6 +234,7 @@ final class ReviewSession {
         vcs = snap.vcs == "jj" ? .jj : .git
         files = restored
         analyses = snap.analyses
+        identity = snap.identity
         recomputeGroups()
         state = .ready
         return true
@@ -281,6 +254,7 @@ final class ReviewSession {
         if first { state = .loading("Computing diff") }
         do {
             let diffText = try await fetchDiff()
+            identity = await resolveIdentity()
             let newFiles = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
             oldDocs = [:]
             newDocs = [:]
@@ -328,7 +302,8 @@ final class ReviewSession {
             recomputeGroups()
             // Viewed marks and triage are keyed by hunk content, so entries for hunks that no longer
             // exist simply stop matching. The overview describes the whole change; flag it once stale.
-            overviewIsStale = overview != nil && persistedFingerprint != nil && persistedFingerprint != fingerprint
+            await hydrate()
+            overviewIsStale = overview != nil && overviewFingerprint != nil && overviewFingerprint != fingerprint
             // Hiding a tier only helps when something else is left to read.
             if first, allHunks.allSatisfy({ hideTiers.contains(tier(of: $0)) }) { hideTiers = [] }
             lastLoaded = Date()
@@ -755,6 +730,7 @@ final class ReviewSession {
                 llm[h.contentKey] = LLMTriage(tier: tier, reason: item.reason, summary: item.summary, pass: .deep)
             }
             overview = resp.overview
+            overviewFingerprint = fingerprint
             let byID = Dictionary(allHunks.map { ($0.id, $0.contentKey) }, uniquingKeysWith: { a, _ in a })
             reviewOrder = (resp.reviewOrder ?? []).compactMap { byID[$0] }
             overviewIsStale = false

@@ -190,6 +190,7 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
+        if let r = ws.review { s += "state: identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
         for a in ws.review?.attachments ?? [] { s += "attach: \(a.rule.title) [\(a.label)] result=\(ws.review?.attachmentResults[a.key] != nil)\n" }
         if let r = ws.review { for h in r.allHunks where r.analyses[h.id]?.reasons.contains(where: { $0.contains("join rendering") || $0.contains("places") }) == true { s += "semantic: \(h.id) \(r.analyses[h.id]!.reasons)\n" } }

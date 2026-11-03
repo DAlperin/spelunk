@@ -165,6 +165,8 @@ final class Workspace {
         github = GitHubService(root: self.root)
         scm = SCMService(root: self.root)
         loadJobs()
+        let store = Store.shared(for: self.root)
+        Task { await store.prune() }
         grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadCurrentDocument() }
         }

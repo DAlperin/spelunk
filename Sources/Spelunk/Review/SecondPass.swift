@@ -226,10 +226,20 @@ extension ReviewSession {
             }
         }
         attachments = out
-        for a in out where attachmentResults[a.key] == nil {
-            if let r = loadAttachmentResult(a.key) { attachmentResults[a.key] = r }
+        let missing = out.filter { attachmentResults[$0.key] == nil }
+        guard !missing.isEmpty else { return }
+        Task {
+            let stored = await store.results(task: ResultTask.attachment, keys: missing.map(\.key))
+            for a in missing {
+                if let d = stored[a.key], let r = try? JSONDecoder().decode(AttachmentResult.self, from: d) {
+                    attachmentResults[a.key] = r
+                } else if let r = legacyAttachmentResult(a.key) {
+                    attachmentResults[a.key] = r
+                    if let d = try? JSONEncoder().encode(r) { await store.putResults(task: ResultTask.attachment, [(a.key, d)]) }
+                }
+            }
+            for a in missing where a.rule.auto && attachmentResults[a.key] == nil && (!a.needsTrust || repoCommandsTrusted) { runAttachment(a) }
         }
-        for a in out where a.rule.auto && attachmentResults[a.key] == nil && (!a.needsTrust || repoCommandsTrusted) { runAttachment(a) }
     }
 
     var repoCommandsTrusted: Bool {
@@ -254,7 +264,7 @@ extension ReviewSession {
         return d
     }
 
-    private func loadAttachmentResult(_ key: String) -> AttachmentResult? {
+    private func legacyAttachmentResult(_ key: String) -> AttachmentResult? {
         let u = AppPaths.support(for: root).appendingPathComponent("attachments/\(key)/result.json")
         guard let d = try? Data(contentsOf: u) else { return nil }
         return try? JSONDecoder().decode(AttachmentResult.self, from: d)
@@ -343,7 +353,10 @@ extension ReviewSession {
             result.files = files.map(\.path).sorted()
             result.seconds = Date().timeIntervalSince(start)
             result.date = Date()
-            if result.error == nil, let d = try? JSONEncoder().encode(result) { try? d.write(to: dir.appendingPathComponent("result.json")) }
+            if result.error == nil, let d = try? JSONEncoder().encode(result) {
+                let store = self.store
+                Task { await store.putResults(task: ResultTask.attachment, [(a.key, d)], model: a.rule.model) }
+            }
             attachmentResults[a.key] = result
             attachmentsRunning.remove(a.key)
             attachmentTasks[a.key] = nil

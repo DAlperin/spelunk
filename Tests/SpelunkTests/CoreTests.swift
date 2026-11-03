@@ -327,3 +327,50 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(o.stdout.count, input.utf8.count)
     }
 }
+
+final class StoreTests: XCTestCase {
+    func temp() -> Store {
+        Store(url: FileManager.default.temporaryDirectory.appendingPathComponent("spelunk-test-\(UUID().uuidString).sqlite"))
+    }
+
+    func testResultsRoundTripAndDelete() async {
+        let s = temp()
+        await s.putResults(task: "t", [("a", Data("1".utf8)), ("b", Data("2".utf8))])
+        await s.putResults(task: "t", [("a", Data("3".utf8))])
+        let r = await s.results(task: "t", keys: ["a", "b", "c"])
+        XCTAssertEqual(r["a"], Data("3".utf8))
+        XCTAssertEqual(r["b"], Data("2".utf8))
+        XCTAssertNil(r["c"])
+        await s.deleteResults(task: "t", keys: ["a"])
+        let after = await s.results(task: "t", keys: ["a"])
+        XCTAssertNil(after["a"])
+    }
+
+    func testReviewStateIsPerIdentity() async {
+        let s = temp()
+        await s.applyReviewState("pr:1", [("viewed", "k1", "1"), ("note", "k1", "hi")])
+        await s.applyReviewState("pr:2", [("viewed", "k2", "1")])
+        await s.applyReviewState("pr:1", [("note", "k1", nil)])
+        let one = await s.reviewState("pr:1")
+        XCTAssertEqual(one.map(\.kind), ["viewed"])
+        let two = await s.reviewState("pr:2")
+        XCTAssertEqual(two.map(\.key), ["k2"])
+        let empty = await s.hasReviewState("pr:3")
+        XCTAssertFalse(empty)
+    }
+
+    func testDraftsAndJobs() async {
+        let s = temp()
+        await s.putDraft(id: "d1", review: "pr:1", pr: 1, commit: "abc", value: Data("{}".utf8))
+        await s.putDraft(id: "d2", review: "pr:2", pr: 2, commit: "def", value: Data("{}".utf8))
+        let d1 = await s.drafts("pr:1")
+        XCTAssertEqual(d1.count, 1)
+        await s.deleteDrafts(["d1"])
+        let gone = await s.drafts("pr:1")
+        XCTAssertTrue(gone.isEmpty)
+        await s.putJob(id: "j1", value: Data("{\"x\":1}".utf8), created: Date(timeIntervalSince1970: 1))
+        await s.putJob(id: "j2", value: Data("{\"x\":2}".utf8), created: Date(timeIntervalSince1970: 2))
+        let jobs = await s.jobs()
+        XCTAssertEqual(jobs.map { String(decoding: $0, as: UTF8.self) }, ["{\"x\":1}", "{\"x\":2}"])
+    }
+}
