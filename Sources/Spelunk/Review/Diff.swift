@@ -15,13 +15,34 @@ struct DiffLine: Hashable, Sendable {
 
 struct Hunk: Identifiable, Hashable, Sendable {
     var id: String
-    var path: String
+    var path: String { didSet { contentKey = Self.contentKey(path, lines) } }
     var oldStart: Int
     var oldCount: Int
     var newStart: Int
     var newCount: Int
     var header: String
-    var lines: [DiffLine]
+    var lines: [DiffLine] { didSet { contentKey = Self.contentKey(path, lines) } }
+
+    /// Identity that survives edits elsewhere in the file: the path plus the changed text. Viewed
+    /// marks and triage results key on this, so a rewritten hunk comes back unreviewed.
+    private(set) var contentKey: String
+
+    init(id: String, path: String, oldStart: Int, oldCount: Int, newStart: Int, newCount: Int, header: String, lines: [DiffLine]) {
+        self.id = id
+        self.path = path
+        self.oldStart = oldStart
+        self.oldCount = oldCount
+        self.newStart = newStart
+        self.newCount = newCount
+        self.header = header
+        self.lines = lines
+        contentKey = Self.contentKey(path, lines)
+    }
+
+    private static func contentKey(_ path: String, _ lines: [DiffLine]) -> String {
+        let body = lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }.joined(separator: "\n")
+        return path + "#" + String(UInt(bitPattern: body.stableHash), radix: 36)
+    }
 
     var added: [DiffLine] { lines.filter { $0.kind == .added } }
     var removed: [DiffLine] { lines.filter { $0.kind == .removed } }
@@ -35,13 +56,6 @@ struct Hunk: Identifiable, Hashable, Sendable {
                 lines.last { $0.newLine != nil && ($0.oldLine ?? -1) < (r.oldLine ?? 0) }?.newLine.map { $0 + 1 }
             }
             ?? max(0, newStart - 1)
-    }
-
-    /// Identity that survives edits elsewhere in the file: the path plus the changed text. Viewed
-    /// marks and triage results key on this, so a rewritten hunk comes back unreviewed.
-    var contentKey: String {
-        let body = lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }.joined(separator: "\n")
-        return path + "#" + String(UInt(bitPattern: body.stableHash), radix: 36)
     }
 
     var anchorOldLine: Int { lines.first { $0.kind == .removed }?.oldLine ?? max(0, oldStart - 1) }
@@ -65,11 +79,16 @@ enum DiffParser {
         var files: [FileDiff] = []
         var current: FileDiff?
         var hunk: Hunk?
+        var hunkLines: [DiffLine] = []
         var oldLine = 0, newLine = 0
 
         func flushHunk() {
-            if let h = hunk { current?.hunks.append(h) }
+            if var h = hunk {
+                h.lines = hunkLines
+                current?.hunks.append(h)
+            }
             hunk = nil
+            hunkLines = []
         }
         func flushFile() {
             flushHunk()
@@ -98,15 +117,15 @@ enum DiffParser {
             let line = raw.hasSuffix("\r") ? raw.dropLast() : raw
             if hunk != nil && (oldLeft > 0 || newLeft > 0) {
                 if line.hasPrefix("+") {
-                    hunk!.lines.append(DiffLine(kind: .added, text: String(line.dropFirst()), oldLine: nil, newLine: newLine))
+                    hunkLines.append(DiffLine(kind: .added, text: String(line.dropFirst()), oldLine: nil, newLine: newLine))
                     newLine += 1; newLeft -= 1
                     continue
                 } else if line.hasPrefix("-") {
-                    hunk!.lines.append(DiffLine(kind: .removed, text: String(line.dropFirst()), oldLine: oldLine, newLine: nil))
+                    hunkLines.append(DiffLine(kind: .removed, text: String(line.dropFirst()), oldLine: oldLine, newLine: nil))
                     oldLine += 1; oldLeft -= 1
                     continue
                 } else if line.hasPrefix(" ") || line.isEmpty {
-                    hunk!.lines.append(DiffLine(kind: .context, text: String(line.dropFirst()), oldLine: oldLine, newLine: newLine))
+                    hunkLines.append(DiffLine(kind: .context, text: String(line.dropFirst()), oldLine: oldLine, newLine: newLine))
                     oldLine += 1; newLine += 1; oldLeft -= 1; newLeft -= 1
                     continue
                 }
