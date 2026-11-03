@@ -119,6 +119,10 @@ final class Workspace {
     @ObservationIgnored var connectorCache: (key: String, value: [StepConnector])?
     /// Files tab shows only files that hold steps of the active path.
     var pathFilesOnly = false
+    /// Expanded folders in the Files tab.
+    var treeExpanded: Set<String> = []
+    /// Set to have the Files tab reveal the open file once, whether or not it follows it.
+    var revealInTreePending = false
 
     /// Review mode: the review being shown decorates its files with removed lines inline, hunk
     /// tiers, review folds and comments. Pinned reviews are always in it; the working copy only while

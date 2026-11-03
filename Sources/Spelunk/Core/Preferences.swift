@@ -15,6 +15,7 @@ enum Prefs {
         static let hoverDelay = "hover.delay"
         static let vim = "editor.vim"
         static let foldMode = "editor.foldMode"
+        static let followFile = "files.followOpenFile"
         // Review
         static let autoClassify = "review.autoClassify"
         static let groupRelated = "review.groupRelated"
@@ -52,6 +53,7 @@ enum Prefs {
         Key.hoverDelay: 0.6,
         Key.vim: false,
         Key.foldMode: "review",
+        Key.followFile: true,
         Key.autoClassify: true,
         Key.ignoreWhitespace: true,
         Key.groupRelated: true,

@@ -28,8 +28,10 @@ struct FileTreeView: View {
     @Bindable var ws: Workspace
     @Environment(AppModel.self) var model
     @State private var filter = ""
-    @State private var expanded: Set<String> = []
     @FocusState private var filterFocused: Bool
+    @AppStorage(Prefs.Key.followFile) private var follow = true
+    /// The file last opened from the tree, which is already in view.
+    @State private var clicked: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,6 +42,11 @@ struct FileTreeView: View {
                 if !pathSteps.isEmpty {
                     Toggle("Path files", isOn: $ws.pathFilesOnly).toggleStyle(.button).controlSize(.small)
                         .help("Show only the files that hold steps of the open code path")
+                }
+                if ws.childRepos.isEmpty {
+                    Toggle(isOn: $follow) { Image(systemName: "scope") }
+                        .toggleStyle(.button).controlSize(.small)
+                        .help(follow ? "Following the open file: the tree expands to it and selects it. Click to stop." : "Follow the open file: expand the tree to it and select it")
                 }
             }
             .padding(.horizontal, 8).padding(.bottom, 6)
@@ -71,14 +78,19 @@ struct FileTreeView: View {
                 }
                 .listStyle(.sidebar)
             } else if filter.isEmpty {
-                List(selection: Binding(get: { ws.document?.path }, set: { p in if let p, !isDir(p) { open(p) } })) {
-                    OutlineGroup(ws.tree.children ?? [], children: \.children) { node in
-                        FileRow(node: node, changed: changedTier(node.path), steps: node.isDirectory ? [] : (pathSteps[node.path] ?? []),
-                                currentStep: ws.traces.currentStep.map { $0 + 1 })
-                            .tag(node.path)
+                ScrollViewReader { proxy in
+                    List(selection: Binding(get: { ws.document?.path }, set: { p in if let p, !isDir(p) { clicked = p; open(p) } })) {
+                        FileTreeRows(nodes: ws.tree.children ?? [], expanded: $ws.treeExpanded) { node in
+                            FileRow(node: node, changed: changedTier(node.path), steps: node.isDirectory ? [] : (pathSteps[node.path] ?? []),
+                                    currentStep: ws.traces.currentStep.map { $0 + 1 })
+                        }
                     }
+                    .listStyle(.sidebar)
+                    .onAppear { if follow || ws.revealInTreePending { reveal(proxy) } }
+                    .onChange(of: ws.document?.path) { if follow { reveal(proxy) } }
+                    .onChange(of: follow) { if follow { reveal(proxy) } }
+                    .onChange(of: ws.revealInTreePending) { if ws.revealInTreePending { reveal(proxy) } }
                 }
-                .listStyle(.sidebar)
             } else {
                 List(matches, id: \.self, selection: Binding(get: { ws.document?.path }, set: { if let p = $0 { open(p) } })) { p in
                     VStack(alignment: .leading, spacing: 1) {
@@ -118,6 +130,24 @@ struct FileTreeView: View {
     }
 
     private func open(_ p: String) { ws.open(CodeLocation(path: p, range: SourceRange(line: 0))) }
+
+    /// Expands the open file's folders and scrolls it into view; a file just clicked in the tree is
+    /// already there.
+    private func reveal(_ proxy: ScrollViewProxy) {
+        ws.revealInTreePending = false
+        guard let path = ws.document?.path, ws.allFileSet.contains(path) else { return }
+        let parts = path.split(separator: "/").dropLast()
+        let folders = parts.indices.map { parts[...$0].joined(separator: "/") }
+        let missing = folders.filter { !ws.treeExpanded.contains($0) }
+        if !missing.isEmpty { ws.treeExpanded.formUnion(missing) }
+        guard path != clicked else { return }
+        clicked = nil
+        Task { @MainActor in
+            // Rows of folders just expanded exist only after the next layout.
+            if !missing.isEmpty { try? await Task.sleep(for: .milliseconds(60)) }
+            proxy.scrollTo(path, anchor: .center)
+        }
+    }
 
     private func changedTier(_ path: String) -> ChangeTier? {
         guard let r = ws.review else { return nil }
@@ -248,6 +278,30 @@ struct StepBadges: View {
                     .background(Circle().fill(n == current ? Color.purple : .clear))
                     .overlay(Circle().strokeBorder(Color.purple, lineWidth: 1))
                     .foregroundStyle(n == current ? .white : .purple)
+            }
+        }
+    }
+}
+
+/// Tree rows with folder expansion held in `expanded`, so the tree can be opened to a file.
+struct FileTreeRows<Row: View>: View {
+    let nodes: [FileNode]
+    @Binding var expanded: Set<String>
+    let row: (FileNode) -> Row
+
+    var body: some View {
+        ForEach(nodes) { node in
+            if let children = node.children {
+                DisclosureGroup(isExpanded: Binding(
+                    get: { expanded.contains(node.path) },
+                    set: { if $0 { expanded.insert(node.path) } else { expanded.remove(node.path) } }
+                )) {
+                    FileTreeRows(nodes: children, expanded: $expanded, row: row)
+                } label: {
+                    row(node).tag(node.path)
+                }
+            } else {
+                row(node).tag(node.path)
             }
         }
     }

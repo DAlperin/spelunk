@@ -47,6 +47,11 @@ Files is the repository's file tree. Type in the filter field (⌘P focuses it) 
 open the first match. The filter menu at the bottom toggles "Source files only" and "Show tests".
 While a code path is open, "Path files" limits the tree to files that hold its steps.
 
+The target button next to the filter field turns on following (it is on by default): the tree
+expands to whichever file the code view has open and scrolls it into view. Turn it off to keep the
+tree where you left it; the palette's "Reveal Open File in Files" reveals the open file once either
+way. Files added or deleted on disk appear in or leave the tree at the next refresh.
+
 Search runs ripgrep over the working copy. The buttons next to the field toggle regular expressions
 (`.*`), whole word (`W`), case sensitivity (`Aa`), Rust files only (`.rs`, on by default) and
 definitions only (`Defs`, which looks for `fn`, `struct`, `enum`, `trait` and similar followed by the
