@@ -473,6 +473,18 @@ final class ReviewRules: @unchecked Sendable {
 }
 
 /// What a rule can ask about a hunk. Computed once per hunk by `ChangeClassifier`.
+final class FactCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Int] = [:]
+
+    func value(_ key: String, _ compute: () -> Int) -> Int {
+        if let v = lock.withLock({ values[key] }) { return v }
+        let v = compute()
+        lock.withLock { values[key] = v }
+        return v
+    }
+}
+
 struct HunkFacts: @unchecked Sendable {
     var path: String
     var langs: Set<String>
@@ -493,9 +505,16 @@ struct HunkFacts: @unchecked Sendable {
     var semantic: SemanticFacts?
     /// Answers to `llm` questions about this hunk; a missing key is unknown.
     var answers: [String: Bool] = [:]
+    /// Regex and tree-sitter results against the texts above, which never change, shared by copies
+    /// so each rule pass after the first reuses them.
+    let cache = FactCache()
 
     func count(_ re: NSRegularExpression, _ s: String) -> Int {
         re.numberOfMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length))
+    }
+
+    private func count(_ re: NSRegularExpression, in field: String, _ s: String) -> Int {
+        cache.value("\(field)\u{0}\(re.options.rawValue)\u{0}\(re.pattern)") { count(re, s) }
     }
 
     /// Whether a condition holds; nil when it needs an answer the first pass does not have.
@@ -520,22 +539,22 @@ struct HunkFacts: @unchecked Sendable {
     func holds(_ c: ReviewRule.Condition) -> Bool {
         switch c {
         case .semantic, .llm: return check(c) ?? false
-        case .path(let re): return count(re, path) > 0
+        case .path(let re): return count(re, in: "path", path) > 0
         case .lang(let l): return !langs.isDisjoint(with: l)
         case .file(let k): return fileKinds.contains(k)
         case .hunk(let f): return facts.contains(f)
         case .code(let mode, let re):
-            let a = count(re, addedCode), r = count(re, removedCode)
+            let a = count(re, in: "added", addedCode), r = count(re, in: "removed", removedCode)
             switch mode {
             case "adds": return a > r
             case "removes": return r > a
             default: return a + r > 0
             }
-        case .comment(let re): return count(re, changedComments) > 0
-        case .text(let re): return count(re, changedText) > 0
+        case .comment(let re): return count(re, in: "comments", changedComments) > 0
+        case .text(let re): return count(re, in: "text", changedText) > 0
         case .commentWords(let op, let n): return compare(commentWords, op, n)
         case .lines(let op, let n): return compare(changedLines, op, n)
-        case .tsQuery(let q): return tsMatches(q)
+        case .tsQuery(let q): return cache.value("ts\u{0}\(q)") { tsMatches(q) ? 1 : 0 } == 1
         }
     }
 
