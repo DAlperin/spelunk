@@ -528,7 +528,7 @@ final class SourceTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        MainActor.assumeIsolated { coordinator?.hover.hide() }
+        MainActor.assumeIsolated { coordinator?.hover.pointerLeft() }
     }
 
     override func scrollWheel(with event: NSEvent) {

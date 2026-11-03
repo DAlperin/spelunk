@@ -14,8 +14,9 @@ extension Workspace {
         guard let (name, range) = d.word(at: p), name.first?.isLetter == true || name.first == "_" else { return nil }
         let key = "\(d.id)|\(name)|\(range.start.line)|\(range.start.col)"
         if let hit = hoverCache[key] { return hit }
-        let pos = intelPosition(in: d, name: name, range: range)
-        let details = await intel.details(path: d.path, at: pos, name: name)
+        let target = intelTarget(d, name: name, range: range)
+        var details = await target.hub.details(path: d.path, at: target.pos, name: name)
+        details.definition = details.definition.map { Self.tagged($0, target.version) }
         guard details.signature != nil || details.docs != nil || details.definition != nil else { return nil }
         let info = HoverInfo(name: name, details: details)
         if hoverCache.count > 200 { hoverCache.removeAll() }
@@ -86,37 +87,76 @@ struct HoverCard: View {
     }
 }
 
-/// Shows the hover card after the pointer rests on a symbol, and hides it when the pointer moves
-/// to another symbol, scrolls, clicks or leaves.
+/// Shows the hover card after the pointer rests on a symbol. The card stays while the pointer is on
+/// the symbol or the card, so its links can be clicked, and closes once the pointer has been away
+/// from both briefly, or on a scroll or click in the text.
 @MainActor
 final class HoverController: NSObject, NSPopoverDelegate {
     weak var textView: SourceTextView?
     private var timer: Timer?
+    private var watcher: Timer?
     private var pending: Task<Void, Never>?
     private var popover: NSPopover?
     private var shownRange: NSRange?
+    /// The symbol's rectangle in screen coordinates while its card is shown.
+    private var symbolRect: NSRect = .zero
+    private var awaySince: Date?
 
     /// Seconds the pointer must rest before the card appears.
     static var delay: TimeInterval { Prefs.hoverDelay }
     static var enabled: Bool { Prefs.hoverEnabled }
+    /// How long the pointer may be away from both the symbol and the card before the card closes.
+    static let grace: TimeInterval = 0.35
 
     func mouseMoved(at point: NSPoint) {
         guard Self.enabled, let tv = textView else { return }
+        // While a card is up, the watcher decides when it goes.
+        if popover != nil { return }
         let idx = tv.characterIndexForInsertion(at: point)
         if let shown = shownRange, NSLocationInRange(idx, shown) { return }
-        hide()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: Self.delay, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.show(at: point) }
         }
     }
 
+    /// The pointer left the text view: a pending card is cancelled, a shown one is left to the watcher.
+    func pointerLeft() {
+        if popover == nil { hide() }
+    }
+
     func hide() {
         timer?.invalidate()
+        watcher?.invalidate()
+        watcher = nil
         pending?.cancel()
         popover?.close()
         popover = nil
         shownRange = nil
+        awaySince = nil
+    }
+
+    private var pointerIsOnCardOrSymbol: Bool {
+        let m = NSEvent.mouseLocation
+        if symbolRect.insetBy(dx: -4, dy: -4).contains(m) { return true }
+        if let w = popover?.contentViewController?.view.window, w.frame.insetBy(dx: -6, dy: -14).contains(m) { return true }
+        return false
+    }
+
+    private func watch() {
+        watcher?.invalidate()
+        watcher = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.pointerIsOnCardOrSymbol {
+                    self.awaySince = nil
+                } else if let since = self.awaySince {
+                    if Date().timeIntervalSince(since) > Self.grace { self.hide() }
+                } else {
+                    self.awaySince = Date()
+                }
+            }
+        }
     }
 
     private func show(at point: NSPoint) {
@@ -127,15 +167,17 @@ final class HoverController: NSObject, NSPopoverDelegate {
         pending = Task { [weak self] in
             let info = await ws.hoverInfo(in: doc, at: pos)
             guard let info, !Task.isCancelled, let self, let tv = self.textView,
-                  let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+                  let lm = tv.layoutManager, let tc = tv.textContainer, let window = tv.window else { return }
             let r = display.displayRange(range)
             guard NSMaxRange(r) <= (tv.textStorage?.length ?? 0) else { return }
             var rect = lm.boundingRect(forGlyphRange: lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil), in: tc)
             rect.origin.x += tv.textContainerInset.width
             rect.origin.y += tv.textContainerInset.height
             guard tv.visibleRect.intersects(rect) else { return }
+            // Still on the symbol after the lookup?
+            let now = tv.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            guard rect.insetBy(dx: -4, dy: -4).contains(now) else { return }
             let p = NSPopover()
-            // The controller decides when the card goes away (pointer moves, scrolls, clicks, leaves).
             p.behavior = .applicationDefined
             p.animates = false
             p.delegate = self
@@ -152,10 +194,17 @@ final class HoverController: NSObject, NSPopoverDelegate {
             p.show(relativeTo: rect, of: tv, preferredEdge: .maxY)
             self.popover = p
             self.shownRange = r
+            self.symbolRect = window.convertToScreen(tv.convert(rect, to: nil))
+            self.watch()
         }
     }
 
     nonisolated func popoverDidClose(_ notification: Notification) {
-        MainActor.assumeIsolated { popover = nil; shownRange = nil }
+        MainActor.assumeIsolated {
+            watcher?.invalidate()
+            watcher = nil
+            popover = nil
+            shownRange = nil
+        }
     }
 }
