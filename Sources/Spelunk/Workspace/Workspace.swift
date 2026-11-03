@@ -91,6 +91,8 @@ final class Workspace {
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
     var showRuleWriter = false
+    @ObservationIgnored var navGeneration = 0
+    var navReason: NavReason = .manual
     /// A description to draft a rule from as soon as the rule writer opens.
     var ruleWriterSeed: String?
     /// Show review threads under their lines in the editor.
@@ -263,7 +265,7 @@ final class Workspace {
 
     func closeReview(_ key: String) {
         pinnedReviews.removeAll { $0.target.key == key }
-        if activeReviewKey == key { activeReviewKey = nil }
+        if activeReviewKey == key { activateReview(nil) }
     }
 
     func checkOut(_ r: ReviewSession, _ option: ReviewSession.CheckoutOption) async {
@@ -279,11 +281,7 @@ final class Workspace {
         await scm.refresh(kind: vcs.kind)
     }
 
-    func showWorkingReview() {
-        activeReviewKey = nil
-        sidebarTab = .changes
-        if let r = workingReview, let h = r.hunks(in: .critical).first ?? r.hunks(in: .behavior).first ?? r.allHunks.first { selectHunk(h) }
-    }
+    func showWorkingReview() { activateReview(nil) }
 
     func rebuildTree() {
         Task { await rebuildTreeAsync() }
@@ -310,13 +308,12 @@ final class Workspace {
     }
 
     /// Opens a location in the working copy. Records it in history, and in the active trace when recording.
-    func open(_ loc: CodeLocation, record: Bool = true, edge: TraceEdge? = nil, title: String? = nil, source: IntelSource = .manual) {
+    /// - Parameter generation: when continuing a navigation started earlier (after an await), its
+    ///   generation; the move is dropped if another navigation has started since.
+    func open(_ loc: CodeLocation, record: Bool = true, edge: TraceEdge? = nil, title: String? = nil, source: IntelSource = .manual,
+              reason: NavReason = .manual, generation: Int? = nil) {
+        if let generation { guard isCurrentNavigation(generation) else { return } } else { beginNavigation(reason) }
         if record, let cur = currentLocation, cur != loc { backStack.append(cur); forwardStack.removeAll() }
-        // Leaving the current step's place means no step is current any more.
-        if let i = traces.currentStep, let step = traces.active?.steps[safe: i],
-           step.location.path != loc.path || abs(step.location.line - loc.line) > 3 {
-            traces.currentStep = nil
-        }
         // While reviewing a change that is not the working copy, files it changes open at its head;
         // files it leaves alone are the same on both sides.
         let head = review.flatMap { r -> SourceDocument? in
@@ -341,7 +338,8 @@ final class Workspace {
     }
 
     /// Shows a document that is not the working copy (review before/after).
-    func show(_ doc: SourceDocument, line: Int) {
+    func show(_ doc: SourceDocument, line: Int, reason: NavReason = .manual, generation: Int? = nil) {
+        if let generation { guard isCurrentNavigation(generation) else { return } } else { beginNavigation(reason) }
         if let cur = currentLocation, cur.path != doc.path || document?.revisionLabel != doc.revisionLabel { backStack.append(cur) }
         document = doc
         if doc.revisionLabel == nil { ra.didOpen(path: doc.path, text: doc.text, language: doc.language) }
@@ -353,13 +351,13 @@ final class Workspace {
     func goBack() {
         guard let loc = backStack.popLast() else { return }
         if let cur = currentLocation { forwardStack.append(cur) }
-        open(loc, record: false)
+        open(loc, record: false, reason: .history)
     }
 
     func goForward() {
         guard let loc = forwardStack.popLast() else { return }
         if let cur = currentLocation { backStack.append(cur) }
-        open(loc, record: false)
+        open(loc, record: false, reason: .history)
     }
 
     // MARK: Symbol interactions
@@ -368,8 +366,8 @@ final class Workspace {
     func didClick(at p: SourcePos) {
         cursor = p
         guard let d = document, let (name, range) = d.word(at: p) else { return }
+        beginNavigation(.click)
         if contextPinned { return }
-        contextFocus = .symbol
         if context?.name == name && context?.path == d.path && context?.pos.line == p.line { return }
         let isWorkingCopy = d.revisionLabel == nil
         // Code intelligence answers about the files on disk. For a Before/After view, query the same
@@ -469,23 +467,25 @@ final class Workspace {
 
     func goToDefinition(at p: SourcePos) {
         guard let d = document, let (name, range) = d.word(at: p) else { return }
+        let gen = beginNavigation(.definition)
         Task {
             statusMessage = "Resolving \(name)…"
             let (defs, src) = await intel.definitions(path: d.path, at: range.start, name: name)
+            guard isCurrentNavigation(gen) else { return }
             statusMessage = nil
             guard let first = defs.first else { statusMessage = "No definition found for \(name)"; return }
-            open(first, edge: .definition, title: name, source: src)
+            open(first, edge: .definition, title: name, source: src, generation: gen)
             if defs.count > 1 { statusMessage = "\(defs.count) definitions (\(src.label)); showing first" }
         }
     }
 
     func followReference(_ hit: ReferenceHit) {
-        open(hit.location, edge: hit.isDefinition ? .definition : .reference, title: hit.enclosing ?? context?.name, source: hit.source)
+        open(hit.location, edge: hit.isDefinition ? .definition : .reference, title: hit.enclosing ?? context?.name, source: hit.source, reason: .reference)
     }
 
     func followCall(_ node: CallNode, direction: CallDirection) {
         let target = direction == .incoming ? (node.callSites.first ?? node.location) : node.location
-        open(target, edge: direction == .incoming ? .caller : .callee, title: node.name, source: node.source)
+        open(target, edge: direction == .incoming ? .caller : .callee, title: node.name, source: node.source, reason: .reference)
     }
 
     /// Adds the cursor location to the active code path, after the current step, and starts editing its note.
@@ -522,9 +522,9 @@ final class Workspace {
 
     func playStep(_ index: Int) {
         guard let t = traces.active, index >= 0, index < t.steps.count else { return }
-        inspectorPane = .paths
+        let gen = beginNavigation(.step)
         traces.currentStep = index
-        open(t.steps[index].location, record: true)
+        open(t.steps[index].location, record: true, generation: gen)
     }
 
     // MARK: Review
@@ -532,32 +532,31 @@ final class Workspace {
     /// Opens a review. The working copy's own target switches to the working tab; anything else is
     /// pinned beside it (reusing an existing pin for the same target).
     func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
-        sidebarTab = .changes
         let r: ReviewSession
         if let w = workingReview, w.target == target {
-            activeReviewKey = nil
             r = w
+            activateReview(nil)
         } else if let existing = pinnedReviews.first(where: { $0.target == target }) {
-            activeReviewKey = existing.target.key
             r = existing
+            activateReview(existing.target.key)
         } else {
             r = ReviewSession(root: root, target: target, github: github)
             attachSemantics(r)
-            r.onPullRequestLoaded = { [weak self] in self?.inspectorPane = .conversation }
             pinnedReviews.append(r)
-            activeReviewKey = target.key
+            activateReview(target.key)
         }
         func selectFirst() {
             let focused = focusPath.flatMap { p in r.allHunks.first { $0.path == p } }
             if let first = focused ?? r.tierSections.first?.hunks.first ?? r.allHunks.first { selectHunk(first) }
         }
-        // A restored snapshot is shown at once; the refresh keeps the selection when the hunk survives.
-        if r.state == .ready, selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
+        if let p = focusPath, r.state == .ready, r.allHunks.contains(where: { $0.path == p }) { selectFirst() }
         Task {
             await r.load()
+            guard review === r else { return }
             if selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
         }
     }
+
 
     func reviewChange(_ c: SCMService.Change, focusPath: String? = nil) {
         switch scm.kind {
@@ -585,20 +584,20 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
-        traces.currentStep = nil
-        if inspectorPane == .paths { inspectorPane = .context }
+        let gen = beginNavigation(.hunk)
         if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }
-        if !contextPinned { contextFocus = .hunk }
+        if let r = review, r.tier(of: h).isLowSignal { r.showLowSignal = true }
         if changeContext?.hunkID != h.id { loadChangeContext(for: h) }
         guard let r = review, let f = r.file(for: h) else { return }
         Task {
             let side: ReviewSession.Side = (reviewSide == .before || f.status == .deleted) ? .old : .new
             let line = side == .old ? h.anchorOldLine : h.anchorNewLine
             if side == .new && r.afterIsWorkingCopy {
-                open(CodeLocation(path: f.newPath, range: SourceRange(line: line)), record: true)
+                open(CodeLocation(path: f.newPath, range: SourceRange(line: line)), record: true, generation: gen)
             } else if let doc = await r.document(side == .old ? f.oldPath : f.newPath, side: side) {
-                show(doc, line: line)
+                show(doc, line: line, generation: gen)
             }
+            guard isCurrentNavigation(gen) else { return }
             if diffMode == .split, f.status != .added, let old = await r.document(f.oldPath, side: .old) {
                 splitDocument = old
                 splitRevealLine = h.anchorOldLine
@@ -634,32 +633,34 @@ final class Workspace {
         guard let r = review, let line = t.anchorLine else { return }
         let side: ReviewSession.Side = t.side == "LEFT" ? .old : .new
         if let h = r.allHunks.first(where: { r.threads(for: $0).contains { $0.id == t.id } }) { selectedHunkID = h.id }
+        let gen = beginNavigation(.thread)
         Task {
             if side == .old {
                 if diffMode != .before { diffMode = .before }
-                if let doc = await r.document(t.path, side: .old) { show(doc, line: line - 1) }
+                if let doc = await r.document(t.path, side: .old) { show(doc, line: line - 1, generation: gen) }
             } else if r.afterIsWorkingCopy {
                 if diffMode == .before { diffMode = .inline }
-                open(CodeLocation(path: t.path, range: SourceRange(line: line - 1)))
+                open(CodeLocation(path: t.path, range: SourceRange(line: line - 1)), generation: gen)
             } else if let doc = await r.document(t.path, side: .new) {
                 if diffMode == .before { diffMode = .inline }
-                show(doc, line: line - 1)
+                show(doc, line: line - 1, generation: gen)
             }
         }
     }
 
     func jump(to c: PendingComment) {
         guard let r = review else { return }
+        let gen = beginNavigation(.thread)
         Task {
             if c.side == "LEFT" {
                 diffMode = .before
-                if let d = await r.document(c.path, side: .old) { show(d, line: c.line - 1) }
+                if let d = await r.document(c.path, side: .old) { show(d, line: c.line - 1, generation: gen) }
             } else if r.afterIsWorkingCopy {
                 if diffMode == .before { diffMode = .inline }
-                open(CodeLocation(path: c.path, range: SourceRange(line: c.line - 1)))
+                open(CodeLocation(path: c.path, range: SourceRange(line: c.line - 1)), generation: gen)
             } else if let d = await r.document(c.path, side: .new) {
                 if diffMode == .before { diffMode = .inline }
-                show(d, line: c.line - 1)
+                show(d, line: c.line - 1, generation: gen)
             }
         }
     }
@@ -811,6 +812,6 @@ final class Workspace {
         let line = parts.count > 1 ? (Int(parts[1]) ?? 1) - 1 : 0
         var p = String(path)
         if !allFileSet.contains(p), let match = allFiles.first(where: { $0.hasSuffix("/" + p) }) { p = match }
-        open(CodeLocation(path: p, range: SourceRange(line: max(0, line))), edge: .manual, source: .claude)
+        open(CodeLocation(path: p, range: SourceRange(line: max(0, line))), edge: .manual, source: .claude, reason: .citation)
     }
 }

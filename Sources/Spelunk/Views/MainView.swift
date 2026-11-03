@@ -146,7 +146,7 @@ struct ReviewTargetMenu: View {
             ForEach(Array(all.enumerated()), id: \.element.target.key) { i, r in
                 let active = (r.tracksWorkingCopy && ws.activeReviewKey == nil) || ws.activeReviewKey == r.target.key
                 Button {
-                    if r.tracksWorkingCopy { ws.showWorkingReview() } else { ws.activeReviewKey = r.target.key; ws.sidebarTab = .changes }
+                    if r.tracksWorkingCopy { ws.activateReview(nil) } else { ws.activateReview(r.target.key) }
                 } label: {
                     if active { Label(menuTitle(r), systemImage: "checkmark") } else { Text(menuTitle(r)) }
                 }

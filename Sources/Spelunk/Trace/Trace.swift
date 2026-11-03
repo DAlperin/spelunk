@@ -72,7 +72,13 @@ struct Trace: Codable, Identifiable, Hashable, Sendable {
 final class TraceStore {
     var traces: [Trace] = []
     var activeID: UUID?
-    var currentStep: Int?
+    /// The step being shown, by identity, so reordering or switching paths cannot point it elsewhere.
+    var currentStepID: UUID?
+    /// Index of the current step in the active path; nil when it is not in that path.
+    var currentStep: Int? {
+        get { currentStepID.flatMap { id in active?.steps.firstIndex { $0.id == id } } }
+        set { currentStepID = newValue.flatMap { active?.steps[safe: $0]?.id } }
+    }
     private let url: URL
 
     init(root: URL) {

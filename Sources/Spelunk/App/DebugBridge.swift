@@ -61,9 +61,7 @@ final class DebugBridge {
             case "git": ws.startReview(.git(base: p.count > 1 ? p[1] : "HEAD", head: p.count > 2 ? p[2] : nil))
             case "pr": ws.startReview(.githubPR(Int(p.count > 1 ? p[1] : "0") ?? 0))
             case "wc":
-                ws.activeReviewKey = nil
-                ws.sidebarTab = .changes
-                if let h = ws.review?.tierSections.first?.hunks.first { ws.selectHunk(h) }
+                ws.activateReview(nil)
             default: break
             }
         case "hunk": if arg == "prev" { ReviewNav.previous(ws) } else { ReviewNav.next(ws) }
@@ -190,6 +188,7 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
+        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-") line=\(ws.cursor.map { String($0.line + 1) } ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
         if let r = ws.review { s += "state: identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
         for a in ws.review?.attachments ?? [] { s += "attach: \(a.rule.title) [\(a.label)] result=\(ws.review?.attachmentResults[a.key] != nil)\n" }

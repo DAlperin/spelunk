@@ -5,9 +5,7 @@ import SwiftUI
 struct InspectorView: View {
     @Bindable var ws: Workspace
 
-    var showingHunk: Bool {
-        ws.review != nil && ws.contextFocus == .hunk && ws.changeContext != nil && !ws.contextPinned
-    }
+    var showingHunk: Bool { ws.showsHunkContext }
 
     var body: some View {
         VStack(spacing: 0) {

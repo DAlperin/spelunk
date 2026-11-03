@@ -97,7 +97,6 @@ final class ReviewSession {
     var pullRequest: GitHubService.PullRequestDetails?
     var pendingComments: [PendingComment] = []
     var githubError: String?
-    @ObservationIgnored var onPullRequestLoaded: (() -> Void)?
     let github: GitHubService?
     enum ListMode: String, CaseIterable, Identifiable { case importance = "Importance", files = "Files"; var id: String { rawValue } }
     var listMode: ListMode = ListMode(rawValue: UserDefaults.standard.string(forKey: "review.listMode") ?? "") ?? .importance {
@@ -116,6 +115,8 @@ final class ReviewSession {
     }
     /// Groups opened in the list; the one holding the selected hunk opens on its own.
     var expandedGroups: Set<String> = []
+    /// The low-signal box is open; it opens on its own when navigation reaches a hunk inside it.
+    var showLowSignal = false
     @ObservationIgnored var layoutCache: [TierSection]?
 
     /// The resolved review identity that user state is stored under (see `resolveIdentity`).
@@ -557,7 +558,6 @@ final class ReviewSession {
         do {
             let first = pullRequest == nil
             pullRequest = try await github.details(n)
-            if first { onPullRequestLoaded?() }
             githubError = nil
         } catch {
             githubError = error.localizedDescription

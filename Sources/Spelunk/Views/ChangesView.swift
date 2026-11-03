@@ -46,7 +46,6 @@ struct CheckoutMenu: View {
 struct ChangesView: View {
     @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
-    @State private var lowSignalOpen = false
     @State private var descriptionOpen = false
 
     var body: some View {
@@ -238,9 +237,9 @@ struct ChangesView: View {
             let low = ChangeTier.lowSignal.flatMap { review.hunks(in: $0) }
             if !low.isEmpty {
                 Section {
-                    LowSignalBox(review: review, hunks: low, open: $lowSignalOpen)
+                    LowSignalBox(review: review, hunks: low, open: $review.showLowSignal)
                         .selectionDisabled()
-                    if lowSignalOpen {
+                    if review.showLowSignal {
                         ForEach(ChangeTier.lowSignal) { tier in
                             ForEach(review.hunks(in: tier)) { h in LowSignalRow(review: review, hunk: h).tag(h.id) }
                         }

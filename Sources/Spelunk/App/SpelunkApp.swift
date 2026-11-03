@@ -182,7 +182,7 @@ enum ReviewKeys {
         case "p": ws.moveThread(-1)
         case "r": ws.resolveCurrentThread()
         case "\u{1b}":
-            guard ws.changeContext != nil, ws.contextFocus == .symbol || ws.contextPinned || ws.inspectorPane != .context else { return false }
+            guard ws.changeContext != nil, !ws.showsHunkContext || ws.inspectorPane != .context else { return false }
             ws.showHunkContext()
         default: return false
         }
