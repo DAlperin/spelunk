@@ -126,6 +126,11 @@ open (in review mode; see [Reviewing and browsing](#reviewing-and-browsing)). Se
 Folding can apply this to every file or turn it off. A fold that hides
 changed lines keeps the change's color on its placeholder.
 
+Folded functions show a chevron (›) beside their first line's number; with the pointer over the
+gutter, open functions show one too (⌄). Click a chevron to fold or unfold that function. The status
+bar shows how many of the file's functions are folded, and clicking it gives Fold All Functions,
+Unfold All Functions, Reset to Default Folds, and the setting for how files open.
+
 Any jump to a line inside a fold (a hunk, a definition, a code path step, history) unfolds it.
 Click a placeholder to open it. Navigate › Fold Function (⌥⌘←) and Unfold Function (⌥⌘→) act on the
 function at the cursor, with ⇧ for every function in the file; in vim mode, `za`, `zo`, `zc`, `zR`

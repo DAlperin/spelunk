@@ -88,6 +88,27 @@ extension Workspace {
         }.map(\.id))
     }
 
+    /// First lines of the document's foldable functions, true where folded.
+    func foldHeaders(for d: SourceDocument) -> [Int: Bool] {
+        _ = foldsVersion
+        guard !(documentInReview && diffMode == .split) else { return [:] }
+        let ids = folds[foldKey(d)] ?? []
+        return Dictionary(uniqueKeysWithValues: Self.foldRegions(d).map { ($0.id, ids.contains($0.id)) })
+    }
+
+    /// Folds or unfolds the function whose first line is `id`.
+    func toggleFold(id: Int, in d: SourceDocument) {
+        changeFolds(d) { if $0.contains(id) { $0.remove(id) } else { $0.insert(id) } }
+    }
+
+    /// Drops the document's fold changes, back to what Settings › Editor › Folding starts it with.
+    func resetFolds(_ d: SourceDocument) {
+        let key = foldKey(d)
+        folds[key] = nil
+        foldChanged[key] = nil
+        foldsVersion += 1
+    }
+
     /// The innermost foldable function containing a line.
     private func region(at line: Int, in d: SourceDocument) -> FoldRegion? {
         Self.foldRegions(d).filter { $0.item.contains(line) }.min { $0.item.count < $1.item.count }

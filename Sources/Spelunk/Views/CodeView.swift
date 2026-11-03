@@ -115,6 +115,7 @@ struct CodeView: NSViewRepresentable {
         let specs = secondary ? [] : ws.inlineBlocks(for: document)
         c.blockSpecs = specs
         c.foldRanges = secondary ? [] : ws.foldedRanges(for: document)
+        c.foldHeaders = secondary ? [:] : ws.foldHeaders(for: document)
         let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs), folds: c.foldRanges)
         if c.documentID != document.id {
             // A new instance of the file already shown (a review reload, or the file edited on disk)
@@ -250,6 +251,8 @@ struct CodeView: NSViewRepresentable {
         var revealToken = -1
         var diffMarkers: [Int: DiffLineKind] = [:]
         var changeBars: [Int: ChangeBar] = [:]
+        /// First lines of foldable functions, true where folded; the gutter draws their chevrons.
+        var foldHeaders: [Int: Bool] = [:]
         var diagnostics: [Diagnostic] = []
         var traceLines: Set<Int> = []
         var bookmarkedLines: Set<Int> = []
@@ -779,7 +782,20 @@ final class SourceTextView: NSTextView {
 final class GutterView: NSView {
     weak var textView: NSTextView?
     weak var coordinator: CodeView.Coordinator?
-    let thickness: CGFloat = 72
+    let thickness: CGFloat = 84
+    /// The fold chevrons' column, between the line numbers and the change bar.
+    private var chevronColumn: ClosedRange<CGFloat> { (thickness - 16)...(thickness - 4) }
+    /// The pointer is over the gutter: open functions show their chevrons too.
+    private var hovering = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
 
     init(textView: NSTextView, coordinator: CodeView.Coordinator) {
         self.textView = textView
@@ -804,6 +820,8 @@ final class GutterView: NSView {
              coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         let (badges, currentStep) = (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine)
         let bars = coordinator?.changeBars ?? [:]
+        let foldHeaders = coordinator?.foldHeaders ?? [:]
+        let chevronConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold).applying(.init(paletteColors: [Theme.gutterText]))
         let caretLine = tv.selectedRange().location <= (display?.ns.length ?? 0) ? display.map { $0.lines.position(of: tv.selectedRange().location).line } : nil
         guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
@@ -832,7 +850,7 @@ final class GutterView: NSView {
                 let pf = dline == caretLine ? NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: .bold) : font
                 let str = NSAttributedString(string: "\(p.kind == .added ? "+" : "−")\(p.otherLine + 1)", attributes: [.font: pf, .foregroundColor: color])
                 let size = str.size()
-                str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
+                str.draw(at: NSPoint(x: thickness - size.width - 18, y: y + (h - size.height) / 2))
             case .real(let line):
                 if let k = diff[line] {
                     (k == .added ? Theme.addedMarker : Theme.removedMarker).setFill()
@@ -878,9 +896,16 @@ final class GutterView: NSView {
                     NSColor.systemBlue.setFill()
                     NSRect(x: 33, y: y + 2, width: 3, height: h - 4).fill()
                 }
+                if let folded = foldHeaders[line], folded || hovering,
+                   let img = NSImage(systemSymbolName: folded ? "chevron.right" : "chevron.down", accessibilityDescription: folded ? "Unfold" : "Fold")?
+                    .withSymbolConfiguration(chevronConfig) {
+                    let s = img.size
+                    img.draw(in: NSRect(x: chevronColumn.lowerBound + (chevronColumn.upperBound - chevronColumn.lowerBound - s.width) / 2,
+                                        y: y + (h - s.height) / 2, width: s.width, height: s.height))
+                }
                 let str = NSAttributedString(string: "\(line + 1)", attributes: (caretLine.map { $0 == dline } ?? (line == selLine)) ? boldAttrs : attrs)
                 let size = str.size()
-                str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
+                str.draw(at: NSPoint(x: thickness - size.width - 18, y: y + (h - size.height) / 2))
             case .block, .fold, nil:
                 break
             }
@@ -892,9 +917,14 @@ final class GutterView: NSView {
         guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
         let p = tv.convert(event.locationInWindow, from: nil)
         let idx = lm.characterIndex(for: NSPoint(x: 0, y: p.y - tv.textContainerInset.height), in: tc, fractionOfDistanceBetweenInsertionPoints: nil)
+        let x = convert(event.locationInWindow, from: nil).x
         MainActor.assumeIsolated {
             guard let c = coordinator, let display = c.display,
                   let line = display.realPos(display.lines.position(of: idx))?.line else { return }
+            if chevronColumn.contains(x), c.foldHeaders[line] != nil, let d = c.document {
+                c.ws.toggleFold(id: line, in: d)
+                return
+            }
             c.ws.cursor = SourcePos(line: line, col: 0)
             if event.clickCount == 2 { c.ws.toggleBookmark() }
             needsDisplay = true

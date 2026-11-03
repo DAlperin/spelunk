@@ -417,6 +417,38 @@ struct BreadcrumbBar: View {
     }
 }
 
+/// The open file's folds: how many functions are folded, with fold, unfold and reset commands.
+struct FoldMenu: View {
+    @Bindable var ws: Workspace
+    let document: SourceDocument
+    @AppStorage(Prefs.Key.foldMode) private var foldMode = FoldMode.review.rawValue
+
+    var body: some View {
+        let headers = ws.foldHeaders(for: document)
+        if !headers.isEmpty {
+            let folded = headers.values.filter { $0 }.count
+            Menu {
+                Button("Fold All Functions") { ws.foldAll(true) }
+                Button("Unfold All Functions") { ws.foldAll(false) }
+                Button("Reset to Default Folds") { ws.resetFolds(document) }
+                Divider()
+                Picker("Files Open With", selection: $foldMode) {
+                    ForEach(FoldMode.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+            } label: {
+                Text(verbatim: folded > 0 ? "\(folded) of \(headers.count) folded" : "\(headers.count) foldable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Folds in this file. Click a chevron in the gutter to fold or unfold one function.")
+        }
+    }
+}
+
 struct StatusBar: View {
     @Bindable var ws: Workspace
     @AppStorage(Prefs.Key.vim) private var vim = false
@@ -427,6 +459,7 @@ struct StatusBar: View {
             if let d = ws.document {
                 Text(d.languageName)
                 Text(verbatim: "\(d.lines.lineCount) lines").foregroundStyle(.secondary)
+                FoldMenu(ws: ws, document: d)
                 if d.language == .rust {
                     if d.syntax.errorCount > 0 {
                         Label("Partial structure", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
