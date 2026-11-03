@@ -51,7 +51,6 @@ struct WelcomeView: View {
 struct MainView: View {
     @Bindable var ws: Workspace
     @State private var keyMonitor: Any?
-    @State private var showInspector = true
     @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
@@ -60,14 +59,13 @@ struct MainView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 420)
         } detail: {
             EditorColumn(ws: ws)
-                .inspector(isPresented: $showInspector) {
+                .inspector(isPresented: $ws.showInspector) {
                     InspectorView(ws: ws)
                         .inspectorColumnWidth(min: 280, ideal: 360, max: 560)
                 }
         }
-        .toolbar { MainToolbar(ws: ws, showInspector: $showInspector) }
+        .toolbar { MainToolbar(ws: ws, showInspector: $ws.showInspector) }
         .navigationTitle(ws.name)
-        .sheet(isPresented: $ws.showAsk) { AskSheet(ws: ws) }
         .onAppear {
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws] e in
@@ -128,7 +126,7 @@ struct MainToolbar: ToolbarContent {
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            Button { ws.showAsk = true } label: { Label("Ask", systemImage: "sparkles").labelStyle(.titleAndIcon) }.help("Ask Claude (⌘L)")
+            Button { ws.openAsk() } label: { Label("Ask", systemImage: "sparkles").labelStyle(.titleAndIcon) }.help("Ask Claude (⌘L)")
             Button { ws.addCurrentToTrace() } label: { Label("Trace", systemImage: "point.topleft.down.to.point.bottomright.curvepath").labelStyle(.titleAndIcon) }
                 .help("Add the cursor location to the code path (⇧⌘T)")
             Button { showInspector.toggle() } label: { Image(systemName: "sidebar.right") }.help("Toggle context pane")
@@ -350,9 +348,17 @@ struct StatusBar: View {
                     .onTapGesture { ws.statusMessage = nil }
                     .layoutPriority(-1)
             }
-            if let g = ws.traceGenerating {
-                ProgressView().controlSize(.mini)
-                Text(verbatim: "Tracing: \(g)").foregroundStyle(.purple).lineLimit(1).truncationMode(.tail).layoutPriority(-1)
+            let running = ws.runningJobs.count, unseen = ws.unseenJobs
+            if running > 0 || unseen > 0 {
+                Button { ws.showInspector = true; ws.inspectorPane = .claude } label: {
+                    HStack(spacing: 4) {
+                        if running > 0 { ProgressView().controlSize(.mini) } else { Image(systemName: "sparkles") }
+                        Text(verbatim: running > 0 ? "Claude: \(running) running" + (unseen > 0 ? ", \(unseen) new" : "") : "Claude: \(unseen) new")
+                    }
+                    .foregroundStyle(.purple)
+                }
+                .buttonStyle(.plain).fixedSize()
+                .help(ws.runningJobs.map(\.question).joined(separator: "\n"))
             }
             Spacer(minLength: 8)
             Group {

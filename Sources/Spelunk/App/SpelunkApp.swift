@@ -61,7 +61,7 @@ struct SpelunkApp: App {
                 }.keyboardShortcut("v", modifiers: [.command, .shift])
             }
             CommandMenu("Claude") {
-                Button("Ask…") { model.workspace?.showAsk = true }.keyboardShortcut("l", modifiers: [.command])
+                Button("Ask…") { model.workspace?.openAsk() }.keyboardShortcut("l", modifiers: [.command])
             }
         }
         Settings { SettingsView() }

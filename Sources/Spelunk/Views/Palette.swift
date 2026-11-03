@@ -296,7 +296,7 @@ enum PaletteCommands {
         }
 
         // Claude
-        add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.showAsk = true }
+        add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
 
         // Navigation aids
         add("Toggle Bookmark", nil, "⇧⌘B", icon: "bookmark", when: ws.document != nil) { ws.toggleBookmark() }

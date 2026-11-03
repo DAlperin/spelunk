@@ -1,90 +1,159 @@
 import SwiftUI
 
-struct AskSheet: View {
+/// Claude runs for this workspace: a question box on top and every ask and generated path below,
+/// newest first. Runs are independent, so several can be in flight while you keep reading.
+struct ClaudePane: View {
     @Bindable var ws: Workspace
-    @Environment(\.dismiss) var dismiss
     @State private var question = ""
     @State private var anchor = true
+    @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Ask Claude", systemImage: "sparkles").font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            composer
+            Divider()
+            if ws.jobs.isEmpty {
+                Text("Claude reads the repository with read-only tools. Ask answers in prose with clickable `file:line` citations; Trace turns the question into a code path. Start as many as you like.")
+                    .font(.callout).foregroundStyle(.secondary).padding(12)
                 Spacer()
-                ModelMenu(task: .ask)
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(ws.askEntries) { e in AskEntryView(ws: ws, entry: e).id(e.id) }
+            } else {
+                List {
+                    ForEach(ws.jobs.reversed()) { j in
+                        ClaudeJobCard(ws: ws, job: j)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .onChange(of: ws.askEntries.count) { if let last = ws.askEntries.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                footer
             }
-            if ws.askEntries.isEmpty {
-                Text("Claude reads the repository with read-only tools. Answers cite `file:line` locations you can click.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Spacer()
-            }
+        }
+        .onAppear { ws.markJobsSeen(); focused = true }
+        .onChange(of: ws.askFocus) { focused = true }
+        .onChange(of: ws.jobs.count) { ws.markJobsSeen() }
+    }
+
+    var composer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("What does this do? Where is X handled? How does a peek reach the replica?", text: $question, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...6)
+                .focused($focused)
+                .onSubmit(ask)
             if let a = ws.anchorDescription() {
-                Toggle("Include context: \(a)", isOn: $anchor).font(.caption).lineLimit(1)
+                Toggle(isOn: $anchor) { Text(verbatim: a).lineLimit(1).truncationMode(.middle) }
+                    .toggleStyle(.checkbox).font(.caption).help("Tell Claude where you are looking")
             }
-            HStack {
-                TextField("What does this do? Where is X handled? Why would Y happen?", text: $question, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .onSubmit(send)
-                Button("Ask", action: send).keyboardShortcut(.return, modifiers: .command).disabled(question.isEmpty)
+            HStack(spacing: 6) {
+                Button("Ask", action: ask).keyboardShortcut(.return, modifiers: .command).disabled(question.isEmpty)
+                ModelMenu(task: .ask)
                 Button("Trace") {
                     ws.generateTrace(question, includeAnchor: anchor)
                     question = ""
-                    dismiss()
                 }
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
                 .disabled(question.isEmpty)
-                .help("Turn this question into a step-by-step trace instead of prose")
+                .help("Turn the question into a code path (⇧⌘↩)")
+                ModelMenu(task: .trace)
+                Spacer()
             }
+            .controlSize(.small)
         }
-        .padding(16)
-        .frame(width: 720, height: 560)
+        .padding(10)
     }
 
-    private func send() {
+    var footer: some View {
+        HStack {
+            let running = ws.runningJobs.count
+            Text(verbatim: running > 0 ? "\(running) running" : "\(ws.jobs.count) finished").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Clear finished") { ws.clearFinishedJobs() }.disabled(ws.jobs.allSatisfy(\.running))
+        }
+        .buttonStyle(.link).font(.caption)
+        .padding(.horizontal, 12).frame(height: 28)
+    }
+
+    private func ask() {
         guard !question.isEmpty else { return }
         ws.ask(question, includeAnchor: anchor)
         question = ""
     }
 }
 
-struct AskEntryView: View {
+struct ClaudeJobCard: View {
     @Bindable var ws: Workspace
-    let entry: AskEntry
+    let job: ClaudeJob
+    @State private var expanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(entry.question).font(.callout.weight(.semibold))
-            if let a = entry.anchor { Text(a).font(.caption).foregroundStyle(.secondary) }
-            if entry.running {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text(entry.activity.last ?? "Thinking…").font(.caption).foregroundStyle(.purple).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: job.kind == .trace ? "point.topleft.down.to.point.bottomright.curvepath" : "sparkles")
+                    .font(.caption).foregroundStyle(.purple)
+                Text(job.question).font(.callout.weight(.semibold)).lineLimit(expanded ? 4 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { expanded.toggle() }
+                if job.running {
+                    Button { ws.cancelJob(job.id) } label: { Image(systemName: "stop.circle") }.help("Cancel")
+                } else {
+                    Menu {
+                        Button("Run Again") {
+                            if job.kind == .trace { ws.generateTrace(job.question, includeAnchor: false) } else { ws.ask(job.question, includeAnchor: false) }
+                        }
+                        Button("Copy Answer") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(job.answer, forType: .string)
+                        }.disabled(job.answer.isEmpty)
+                        Divider()
+                        Button("Remove", role: .destructive) { ws.removeJob(job.id) }
+                    } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 }
             }
-            if let e = entry.error { Text(e).foregroundStyle(.red).font(.caption) }
-            if !entry.answer.isEmpty {
-                CitedText(text: entry.answer) { ws.openCitation($0) }
+            .buttonStyle(.borderless)
+            HStack(spacing: 4) {
+                Text(verbatim: "\(job.kind.rawValue) · \(job.model)")
+                if let a = job.anchor { Text("·"); Text(verbatim: a).lineLimit(1).truncationMode(.middle) }
             }
-            if !entry.running && !entry.activity.isEmpty {
-                DisclosureGroup("\(entry.activity.count) tool calls · $\(String(format: "%.3f", entry.cost))") {
-                    ForEach(Array(entry.activity.enumerated()), id: \.offset) { _, a in
-                        Text(a).font(.caption2.monospaced()).foregroundStyle(.secondary)
+            .font(.caption2).foregroundStyle(.tertiary)
+            if job.running {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(job.status).font(.caption).foregroundStyle(.purple).lineLimit(1).truncationMode(.tail)
+                    Spacer()
+                    TimelineView(.periodic(from: job.started, by: 1)) { ctx in
+                        Text(verbatim: "\(Int(ctx.date.timeIntervalSince(job.started)))s").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
-                }.font(.caption)
+                }
+            }
+            if expanded {
+                if let e = job.error { Text(e).foregroundStyle(.red).font(.caption) }
+                if job.kind == .trace {
+                    if job.traceID != nil {
+                        HStack {
+                            Text(job.answer).font(.caption).foregroundStyle(.secondary)
+                            Button("Open Code Path") { ws.openJobTrace(job.id) }.controlSize(.small)
+                        }
+                    }
+                } else if !job.answer.isEmpty {
+                    CitedText(text: job.answer) { ws.openCitation($0) }
+                }
+                if !job.running && !job.activity.isEmpty {
+                    DisclosureGroup(job.status + " · \(job.activity.count) tool calls") {
+                        ForEach(Array(job.activity.enumerated()), id: \.offset) { _, a in
+                            Text(a).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
+                } else if !job.running {
+                    Text(job.status).font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .padding(10)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(job.running ? Color.purple.opacity(0.35) : Color.clear))
     }
 }
 

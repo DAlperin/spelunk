@@ -392,7 +392,7 @@ struct CodeView: NSViewRepresentable {
                 item("Add Review Comment…") { [ws] in ws.draftComment() }
             }
             m.addItem(.separator())
-            item("Ask Claude About This…") { [ws] in ws.showAsk = true }
+            item("Ask Claude About This…") { [ws] in ws.openAsk() }
             if let word {
                 item("Generate Code Path for “\(word)” with Claude") { [ws] in
                     ws.generateTrace("How does `\(word)` get invoked, and what does it do end to end?", includeAnchor: true)

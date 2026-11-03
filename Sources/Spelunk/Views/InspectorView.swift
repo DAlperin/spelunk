@@ -37,6 +37,7 @@ struct InspectorView: View {
                 case .conversation:
                     if let r = ws.review, let pr = r.pullRequest { ConversationPane(ws: ws, review: r, pr: pr) }
                     else { Text("Open a GitHub pull request to see its conversation.").font(.callout).foregroundStyle(.secondary).padding(12); Spacer() }
+                case .claude: ClaudePane(ws: ws)
                 case .paths: TracePanel(ws: ws, traces: ws.traces)
                 case .outline: OutlinePanel(ws: ws)
                 case .bookmarks: BookmarksPanel(ws: ws)
@@ -666,7 +667,7 @@ struct TracePanel: View {
             contextStrip
             Divider()
             pathPicker
-            if ws.showGenerateTrace || ws.traceGenerating != nil { generateBox }
+            if ws.showGenerateTrace || ws.jobs.contains(where: { $0.kind == .trace && $0.running }) { generateBox }
             if let t = traces.active {
                 if t.origin == .claude, let q = t.question { generatedBox(t, q) }
                 if t.steps.isEmpty {
@@ -753,8 +754,17 @@ struct TracePanel: View {
                 ModelMenu(task: .trace)
                 Button { ws.showGenerateTrace = false } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
             }
-            if let g = ws.traceGenerating {
-                HStack { ProgressView().controlSize(.mini); Text(g).font(.caption).foregroundStyle(.purple).lineLimit(1) }
+            let pending = ws.jobs.filter { $0.kind == .trace && $0.running }
+            if !pending.isEmpty {
+                ForEach(pending) { j in
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text(j.question).font(.caption.weight(.medium)).lineLimit(1).truncationMode(.tail)
+                        Text(j.status).font(.caption).foregroundStyle(.purple).lineLimit(1).truncationMode(.tail).layoutPriority(-1)
+                        Spacer(minLength: 0)
+                        Button { ws.cancelJob(j.id) } label: { Image(systemName: "stop.circle") }.buttonStyle(.borderless).help("Cancel")
+                    }
+                }
             } else {
                 Text("Anchored at the cursor. Steps are matched to real symbols; hops Claude could not confirm are marked inferred.")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -775,7 +785,7 @@ struct TracePanel: View {
             Text(q).font(.callout)
             HStack {
                 Button("Refine…") { question = q; ws.showGenerateTrace = true }
-                Button("Regenerate") { ws.generateTrace(q, includeAnchor: false) }.disabled(ws.traceGenerating != nil)
+                Button("Regenerate") { ws.generateTrace(q, includeAnchor: false) }
             }
             .controlSize(.small)
         }

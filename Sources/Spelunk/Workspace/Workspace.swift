@@ -10,7 +10,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 enum ContextFocus { case symbol, hunk }
 
 enum InspectorPane: String, CaseIterable, Identifiable {
-    case context = "Context", conversation = "Conversation", paths = "Code Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
+    case context = "Context", claude = "Claude", conversation = "Conversation", paths = "Code Paths", outline = "Outline", bookmarks = "Bookmarks", problems = "Problems"
     var id: String { rawValue }
 }
 
@@ -54,17 +54,6 @@ final class SymbolContext {
     var elapsed: TimeInterval?
 
     init(name: String, path: String, pos: SourcePos) { self.name = name; self.path = path; self.pos = pos }
-}
-
-struct AskEntry: Identifiable {
-    let id = UUID()
-    var question: String
-    var anchor: String?
-    var answer: String = ""
-    var activity: [String] = []
-    var running = true
-    var cost: Double = 0
-    var error: String?
 }
 
 @MainActor @Observable
@@ -144,9 +133,11 @@ final class Workspace {
     var splitDocument: SourceDocument?
     var selectedHunkID: String?
 
-    var askEntries: [AskEntry] = []
-    var traceGenerating: String?
-    var showAsk = false
+    var jobs: [ClaudeJob] = []
+    @ObservationIgnored var jobTasks: [UUID: Task<Void, Never>] = [:]
+    /// Bumped to focus the Claude pane's question field.
+    var askFocus = 0
+    var showInspector = true
 
     let docs: DocumentCache
     let ra: RustAnalyzer
@@ -773,64 +764,6 @@ final class Workspace {
         if let item { s += " (in \(item.kind.label.lowercased()) `\(item.qualifiedName)`)" }
         if let c = context { s += ", symbol `\(c.name)`" }
         return s
-    }
-
-    func ask(_ question: String, includeAnchor: Bool) {
-        let anchor = includeAnchor ? anchorDescription() : nil
-        var entry = AskEntry(question: question, anchor: anchor)
-        let id = entry.id
-        entry.activity = []
-        askEntries.append(entry)
-        showAsk = true
-        var prompt = question
-        if let anchor { prompt += "\n\nI am looking at \(anchor)." }
-        if let r = review { prompt += "\n\nContext: I am reviewing \(r.title) (\(r.target.label))." }
-        Task {
-            do {
-                let res = try await Claude.run(prompt: prompt, system: ClaudeTasks.askSystem, cwd: root, task: .ask) { [weak self] ev in
-                    Task { @MainActor in
-                        guard let self, let i = self.askEntries.firstIndex(where: { $0.id == id }) else { return }
-                        switch ev {
-                        case .toolUse(let n, let s): self.askEntries[i].activity.append("\(n) \(s)")
-                        case .text(let t): self.askEntries[i].answer = t
-                        }
-                    }
-                }
-                if let i = askEntries.firstIndex(where: { $0.id == id }) {
-                    askEntries[i].answer = res.text
-                    askEntries[i].running = false
-                    askEntries[i].cost = res.costUSD
-                }
-            } catch {
-                if let i = askEntries.firstIndex(where: { $0.id == id }) {
-                    askEntries[i].error = error.localizedDescription
-                    askEntries[i].running = false
-                }
-            }
-        }
-    }
-
-    func generateTrace(_ question: String, includeAnchor: Bool) {
-        let anchor = includeAnchor ? anchorDescription() : nil
-        traceGenerating = "Starting Claude"
-        Task {
-            do {
-                let res = try await Claude.run(prompt: ClaudeTasks.tracePrompt(question: question, anchor: anchor),
-                                               system: ClaudeTasks.traceSystem, cwd: root, task: .trace, schema: ClaudeTasks.traceSchema) { [weak self] ev in
-                    if case .toolUse(let n, let s) = ev { Task { @MainActor in self?.traceGenerating = "\(n) \(s)" } }
-                }
-                let resp = try Claude.decode(ClaudeTasks.TraceResponse.self, from: res)
-                let trace = ClaudeTasks.materialize(resp, question: question, docs: docs)
-                traces.add(trace)
-                traceGenerating = nil
-                statusMessage = String(format: "Trace generated: %d steps, %d verified ($%.2f)",
-                                       trace.steps.count, trace.steps.filter(\.verified).count, res.costUSD)
-                playStep(0)
-            } catch {
-                traceGenerating = nil
-                statusMessage = "Trace failed: \(error.localizedDescription)"
-            }
-        }
     }
 
     /// Opens a `path:line` reference from Claude's prose.

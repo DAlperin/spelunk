@@ -65,7 +65,7 @@ final class DebugBridge {
         case "triage": Task { await ws.review?.triageWithClaude() }
         case "trace": ws.generateTrace(arg, includeAnchor: true)
         case "ask": ws.ask(arg, includeAnchor: true)
-        case "askclose": ws.showAsk = false
+        case "askclose": ws.inspectorPane = .context
         case "clippy": ws.clippy.run()
         case "scip": ws.scip.generate(revision: ws.vcs.revision, sourceFiles: ws.allFiles)
         case "dump": dump(ws)
@@ -112,7 +112,7 @@ final class DebugBridge {
             model?.openSettings?()
         case "closesettings":
             NSApp.windows.first { $0.title.contains("Settings") || $0.identifier?.rawValue.contains("Settings") == true }?.close()
-        case "askopen": ws.showAsk = true
+        case "askopen": ws.openAsk()
         case "submitclose": ws.showSubmitReview = false
         case "commentclose": ws.commentDraft = nil
         case "palette": ws.palette = arg == "commands" ? .commands : .files
@@ -162,7 +162,7 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
-        for e in ws.askEntries { s += "ask: \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
+        for e in ws.jobs { s += "job: \(e.kind.rawValue) \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
         if let m = ws.statusMessage { s += "status: \(m)\n" }
         s += "scm kind=\(ws.scm.kind) rows=\(ws.scm.rows.count) changes=\(ws.scm.rows.compactMap(\.change).count) wc=\(ws.scm.workingCopy?.changeId ?? "-") wcfiles=\(ws.scm.workingCopyFiles.count) selected=\(ws.scm.selectedID ?? "-") selfiles=\(ws.scm.selectedFiles.map(\.path).prefix(5)) err=\(ws.scm.lastError ?? "-")\n"
         if let pr = ws.review?.pullRequest {
