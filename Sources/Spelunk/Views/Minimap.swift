@@ -195,13 +195,21 @@ extension CodeView.Coordinator {
 
     /// Leading whitespace and trimmed length of each display line, capped for the minimap.
     static func shapes(_ display: DisplayDoc) -> [LineShape] {
-        (0..<display.lines.lineCount).map { i in
+        let ns = display.ns
+        var chars = [unichar](repeating: 0, count: ns.length)
+        ns.getCharacters(&chars, range: NSRange(location: 0, length: ns.length))
+        func blank(_ c: unichar) -> Bool { c == 32 || c == 9 || c == 10 || c == 13 }
+        return (0..<display.lines.lineCount).map { i in
             let r = display.lines.lineRange(i)
-            guard r.length > 0 else { return LineShape(indent: 0, length: 0) }
-            let s = display.ns.substring(with: NSRange(location: r.location, length: min(r.length, 200)))
-            let indent = s.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
-            let len = s.trimmingCharacters(in: .whitespacesAndNewlines).count
-            return LineShape(indent: min(indent, 80), length: min(len, 120 - min(indent, 80)))
+            let end = r.location + min(r.length, 200)
+            var indent = 0, first = r.location
+            while first < end, chars[first] == 32 || chars[first] == 9 {
+                indent += chars[first] == 9 ? 4 : 1
+                first += 1
+            }
+            var last = end
+            while last > first, blank(chars[last - 1]) { last -= 1 }
+            return LineShape(indent: min(indent, 80), length: min(last - first, 120 - min(indent, 80)))
         }
     }
 

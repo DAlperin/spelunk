@@ -49,7 +49,7 @@ struct CodeView: NSViewRepresentable {
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         tv.autoresizingMask = [.width]
         tv.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
-        layout.allowsNonContiguousLayout = false
+        layout.allowsNonContiguousLayout = true
 
         let scroll = NSScrollView()
         scroll.documentView = tv
@@ -419,13 +419,17 @@ struct CodeView: NSViewRepresentable {
                 default: break
                 }
             }
-            tv.textStorage?.setAttributedString(attr)
+            if let storage = tv.textStorage {
+                // Emptying first keeps the copy linear: inserting style runs ahead of the old text's
+                // runs shifts all of those on every insert.
+                storage.beginEditing()
+                storage.deleteCharacters(in: NSRange(location: 0, length: storage.length))
+                storage.setAttributedString(attr)
+                storage.endEditing()
+            }
             shown = display
             minimapWidths = Self.shapes(display)
-            if let lm = tv.layoutManager, let tc = tv.textContainer {
-                lm.ensureLayout(for: tc)
-                tv.sizeToFit()
-            }
+            tv.sizeToFit()
             // A re-render of the same file keeps the caret on the same line, real or phantom.
             var caret = 0
             if keepScroll, !secondary, let at {
@@ -519,20 +523,19 @@ struct CodeView: NSViewRepresentable {
         }
 
         private func scrollTo(_ range: SourceRange) {
-            guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer, let display,
+            guard let tv = textView, let lm = tv.layoutManager, let display,
                   let clip = tv.enclosingScrollView?.contentView else { return }
             let len = tv.textStorage?.length ?? 0
             let start = min(display.displayOffset(range.start), max(0, len - 1))
             guard len > 0 else { return }
             let g = lm.glyphIndexForCharacter(at: start)
-            lm.ensureLayout(forGlyphRange: NSRange(location: 0, length: g + 1))
             var rect = lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)
             rect.origin.y += tv.textContainerInset.height
             let caretX = lm.location(forGlyphAt: g).x + rect.minX
             let visible = clip.bounds
-            // The full height from layout, since the frame may not have grown to the new text yet.
-            lm.ensureLayout(for: tc)
-            let contentHeight = max(tv.frame.height, lm.usedRect(for: tc).maxY + tv.textContainerInset.height * 2)
+            // Every line is the same height, so the full height needs no layout of the whole text,
+            // and holds before the frame has grown to new text.
+            let contentHeight = max(tv.frame.height, CGFloat(display.lines.lineCount + 1) * lineHeight + tv.textContainerInset.height * 2)
             let maxY = max(0, contentHeight - visible.height)
             let y = min(maxY, max(0, rect.midY - visible.height * 0.35))
             // Scroll sideways only when the target's start would be off screen.
