@@ -47,7 +47,7 @@ enum ChangeTier: String, Codable, CaseIterable, Identifiable, Comparable, Sendab
     static let lowSignal: [ChangeTier] = [.docs, .tests, .mechanical]
 }
 
-struct HunkAnalysis: Sendable {
+struct HunkAnalysis: Sendable, Codable {
     var tier: ChangeTier
     var reasons: [String]
     var enclosing: String?

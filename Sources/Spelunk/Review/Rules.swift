@@ -137,7 +137,7 @@ struct SemanticFacts: Sendable {
 }
 
 /// Conditions a hunk's rules could not decide in the first pass.
-struct RulePending: Sendable, Hashable {
+struct RulePending: Sendable, Hashable, Codable {
     var needs = SemanticNeeds()
     var questions: Set<String> = []
     var isEmpty: Bool { needs.isEmpty && questions.isEmpty }
@@ -463,7 +463,7 @@ final class ReviewRules: @unchecked Sendable {
 }
 
 /// What a rule can ask about a hunk. Computed once per hunk by `ChangeClassifier`.
-struct HunkFacts {
+struct HunkFacts: @unchecked Sendable {
     var path: String
     var langs: Set<String>
     var langDisplay: String

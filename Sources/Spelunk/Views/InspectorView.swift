@@ -66,7 +66,7 @@ struct InspectorView: View {
                 if ws.review != nil, ws.changeContext != nil, !ws.contextPinned {
                     Picker("", selection: Binding(get: { showingHunk ? ContextFocus.hunk : .symbol }, set: { ws.contextFocus = $0 })) {
                         Text(verbatim: ReviewNav.importantPosition(ws).map { "Hunk \($0.0)/\($0.1)" } ?? "Hunk").tag(ContextFocus.hunk)
-                        Text(verbatim: ws.context?.name ?? "Symbol").tag(ContextFocus.symbol)
+                        Text(verbatim: ws.context.map { $0.name.count > 16 ? $0.name.prefix(15) + "…" : $0.name } ?? "Symbol").tag(ContextFocus.symbol)
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                     .help("Switch between the selected hunk's change context and the last clicked symbol (Esc returns to the hunk)")
@@ -86,6 +86,7 @@ struct InspectorView: View {
                 }
                 .help(ws.contextPinned ? "Unpin: follow the cursor again" : "Keep this symbol while you click elsewhere")
                 .disabled(ws.context == nil)
+                .fixedSize()
             }
             Menu {
                 ForEach(InspectorPane.allCases) { p in

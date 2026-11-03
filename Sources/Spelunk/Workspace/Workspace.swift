@@ -530,10 +530,15 @@ final class Workspace {
             pinnedReviews.append(r)
             activeReviewKey = target.key
         }
+        func selectFirst() {
+            let focused = focusPath.flatMap { p in r.allHunks.first { $0.path == p } }
+            if let first = focused ?? r.tierSections.first?.hunks.first ?? r.allHunks.first { selectHunk(first) }
+        }
+        // A restored snapshot is shown at once; the refresh keeps the selection when the hunk survives.
+        if r.state == .ready, selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
         Task {
             await r.load()
-            let focused = focusPath.flatMap { p in r.allHunks.first { $0.path == p } }
-            if let first = focused ?? r.hunks(in: .critical).first ?? r.hunks(in: .behavior).first ?? r.allHunks.first { selectHunk(first) }
+            if selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
         }
     }
 

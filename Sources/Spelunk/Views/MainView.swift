@@ -554,16 +554,20 @@ struct HunkStrip: View {
                     .onTapGesture { ws.showHunkContext() }
                 Text(tier.title).font(.callout.weight(.semibold)).foregroundStyle(tier.color).fixedSize()
                 Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent)
-                    .font(.callout.monospaced().weight(.medium)).lineLimit(1).truncationMode(.middle).layoutPriority(1)
+                    .font(.callout.monospaced().weight(.medium)).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: 320, alignment: .leading).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
                 Text(verbatim: sizeText).font(.callout.monospaced()).foregroundStyle(.secondary).fixedSize()
                 if let t = review.triage(of: hunk) {
                     Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption).foregroundStyle(.purple)
                 }
-                Text(review.summary(of: hunk)).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(ruleHelp)
+                Text(review.summary(of: hunk)).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help(ruleHelp)
                     .onTapGesture { ws.showHunkContext() }
+                    .layoutPriority(-1)
                 Spacer(minLength: 4)
+                HStack(spacing: 8) {
                 if let (i, n) = ReviewNav.importantPosition(ws) {
-                    Text(verbatim: "\(i) of \(n) important").font(.caption).foregroundStyle(.secondary).fixedSize()
+                    ViewThatFits { Text(verbatim: "\(i) of \(n) important"); Text(verbatim: "\(i)/\(n)") }
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Button { ReviewNav.previous(ws) } label: { KeyCap("K") }.help("Previous hunk (K)")
                 Button { ReviewNav.next(ws) } label: { KeyCap("J") }.help("Next hunk (J); ⇧J next unviewed important hunk")
@@ -578,7 +582,11 @@ struct HunkStrip: View {
                     .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .help("Mark viewed and go to the next important hunk (V)")
+                }
+                .fixedSize()
+                .layoutPriority(2)
             }
+            .lineLimit(1)
         }
         .buttonStyle(.plain)
         .controlSize(.small)

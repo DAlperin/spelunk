@@ -142,8 +142,9 @@ enum FileClassifier {
     }
 }
 
-/// A loaded file: text, line table, and syntax.
-final class SourceDocument: Identifiable {
+/// A loaded file: text, line table, and syntax. Built off the main thread during review loading;
+/// immutable apart from the lazily parsed tree, which is only touched on the main thread.
+final class SourceDocument: Identifiable, @unchecked Sendable {
     let id = UUID()
     let path: String
     let text: String

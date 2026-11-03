@@ -165,6 +165,7 @@ final class ReviewSession {
         self.github = github
         self.tracksWorkingCopy = tracksWorkingCopy
         loadPersisted()
+        _ = restoreSnapshot()
     }
 
     // MARK: Persistence
@@ -209,6 +210,52 @@ final class ReviewSession {
         if let d = try? JSONEncoder().encode(p) { try? d.write(to: stateURL, options: .atomic) }
     }
 
+    // MARK: Snapshot
+
+    /// The last loaded diff and its classification, so reopening a review shows it immediately.
+    private struct Snapshot: Codable {
+        var diff: String
+        var analyses: [String: HunkAnalysis]
+        var title: String
+        var body: String
+        var oldRev: String
+        var newRev: String?
+        var prBaseOid: String?
+        var prHeadOid: String?
+        var vcs: String
+    }
+
+    private var snapshotURL: URL {
+        AppPaths.support(for: root).appendingPathComponent("review-snapshot-\(String(UInt(bitPattern: target.key.stableHash), radix: 36)).json")
+    }
+
+    private func saveSnapshot(_ diff: String) {
+        guard !tracksWorkingCopy, diff.utf8.count < 20_000_000 else { return }
+        let snap = Snapshot(diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
+                            prBaseOid: prBaseOid, prHeadOid: prHeadOid, vcs: vcs == .jj ? "jj" : "git")
+        Task.detached { [url = snapshotURL] in
+            if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
+        }
+    }
+
+    func restoreSnapshot() -> Bool {
+        guard !tracksWorkingCopy, let d = try? Data(contentsOf: snapshotURL), let snap = try? JSONDecoder().decode(Snapshot.self, from: d) else { return false }
+        let restored = DiffParser.parse(snap.diff).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
+        guard !restored.isEmpty else { return false }
+        title = snap.title
+        body = snap.body
+        oldRev = snap.oldRev
+        newRev = snap.newRev
+        prBaseOid = snap.prBaseOid
+        prHeadOid = snap.prHeadOid
+        vcs = snap.vcs == "jj" ? .jj : .git
+        files = restored
+        analyses = snap.analyses
+        recomputeGroups()
+        state = .ready
+        return true
+    }
+
     // MARK: Loading
 
     /// Computes the diff and classifies it. The first load shows progress; later loads (live
@@ -217,18 +264,43 @@ final class ReviewSession {
         guard !loading else { reloadPending = true; return }
         loading = true
         defer { loading = false }
-        let first = files.isEmpty && state != .ready
+        var first = files.isEmpty && state != .ready
+        // Show the last result at once and refresh behind it.
+        if first, restoreSnapshot() { first = false }
         if first { state = .loading("Computing diff") }
         do {
             let diffText = try await fetchDiff()
             let newFiles = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
             oldDocs = [:]
             newDocs = [:]
-            if case .githubPR(let n) = target, first { await refreshPullRequest(n) }
+            if case .githubPR(let n) = target, pullRequest == nil { Task { await refreshPullRequest(n) } }
             if first { state = .loading("Classifying \(newFiles.count) files") }
             var newAnalyses: [String: HunkAnalysis] = [:]
             var newFacts: [String: HunkFacts] = [:]
-            for f in newFiles {
+            let started = Date()
+            let source = DocSource(root: root, vcs: vcs, oldRev: oldRev, newRev: newRev)
+            // Fetch, parse and classify files in parallel; each file costs one or two VCS reads and parses.
+            let results = await withTaskGroup(of: FileResult.self) { group in
+                var out: [FileResult] = []
+                var pending = newFiles[...]
+                func add(_ f: FileDiff) {
+                    group.addTask { await Self.analyzeFile(f, source: source) }
+                }
+                for _ in 0..<min(10, pending.count) { add(pending.removeFirst()) }
+                for await r in group {
+                    out.append(r)
+                    if first { state = .loading("Classifying \(out.count)/\(newFiles.count) files") }
+                    if let f = pending.first { pending.removeFirst(); add(f) }
+                }
+                return out
+            }
+            for r in results {
+                if let d = r.oldDoc { oldDocs[d.path] = d }
+                if let d = r.newDoc { newDocs[d.path] = d }
+                for (id, a, f) in r.hunks { newAnalyses[id] = a; newFacts[id] = f }
+            }
+            // A PR whose commits are not local reads contents from GitHub, one file at a time.
+            for f in newFiles where newFacts[f.hunks.first?.id ?? ""] == nil && !f.hunks.isEmpty {
                 let oldDoc = f.status == .added ? nil : await document(f.oldPath, side: .old)
                 let newDoc = f.status == .deleted ? nil : await document(f.newPath, side: .new)
                 for h in f.hunks {
@@ -237,6 +309,7 @@ final class ReviewSession {
                     newFacts[h.id] = r.facts
                 }
             }
+            Log.debug(String(format: "review: classified %d files in %.2fs", newFiles.count, Date().timeIntervalSince(started)))
             files = newFiles
             facts = newFacts
             semantic = [:]
@@ -250,6 +323,7 @@ final class ReviewSession {
             lastLoaded = Date()
             state = .ready
             save()
+            saveSnapshot(diffText)
             if Self.autoClassify { Task { await quickClassify() } }
             Task { await resolvePendingRules() }
         } catch {
@@ -288,7 +362,7 @@ final class ReviewSession {
             return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", base], cwd: root)
         case .githubPR(let n):
             vcs = .git
-            state = .loading("Fetching PR #\(n)")
+            if files.isEmpty { state = .loading("Fetching PR #\(n)") }
             let json = try await Shell.output("gh", ["pr", "view", "\(n)", "--json", "title,body,baseRefOid,headRefOid,url,author"], cwd: root)
             guard let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                   let base = obj["baseRefOid"] as? String, let head = obj["headRefOid"] as? String else {
@@ -299,7 +373,7 @@ final class ReviewSession {
             prBaseOid = base
             prHeadOid = head
             if !(await hasCommit(head)) {
-                state = .loading("Fetching PR commits")
+                if files.isEmpty { state = .loading("Fetching PR commits") }
                 for remote in await remotesForRepository() {
                     _ = try? await Shell.run("git", ["fetch", "--quiet", "--no-tags", remote, "pull/\(n)/head"], cwd: root)
                     if await hasCommit(head) {
@@ -321,6 +395,46 @@ final class ReviewSession {
     }
 
     enum Side { case old, new }
+
+    /// Where file contents for each side come from, captured for background loading.
+    struct DocSource: Sendable {
+        var root: URL
+        var vcs: VCSKind
+        var oldRev: String
+        var newRev: String?
+
+        func text(_ path: String, old: Bool) async -> String? {
+            let rev: String? = old ? oldRev : newRev
+            if !old && rev == nil { return try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8) }
+            guard let rev, !rev.isEmpty else { return nil }
+            if vcs == .jj {
+                if let t = try? await Shell.output("jj", ["file", "show", "--ignore-working-copy", "-r", rev, "--", "root-file:\"\(path)\""], cwd: root) { return t }
+                return try? await Shell.output("jj", ["file", "show", "--ignore-working-copy", "-r", rev, path], cwd: root)
+            }
+            return try? await Shell.output("git", ["show", "\(rev):\(path)"], cwd: root)
+        }
+    }
+
+    struct FileResult: Sendable {
+        var oldDoc: SourceDocument?
+        var newDoc: SourceDocument?
+        var hunks: [(String, HunkAnalysis, HunkFacts)]
+    }
+
+    nonisolated static func analyzeFile(_ f: FileDiff, source: DocSource) async -> FileResult {
+        async let oldText = f.status == .added ? nil : source.text(f.oldPath, old: true)
+        async let newText = f.status == .deleted ? nil : source.text(f.newPath, old: false)
+        let ot = await oldText, nt = await newText
+        // Missing contents (a PR not fetched locally) fall back to the main-actor path.
+        if (f.status != .added && ot == nil) || (f.status != .deleted && nt == nil) { return FileResult(hunks: []) }
+        let oldDoc = ot.map { SourceDocument(path: f.oldPath, text: $0, revisionLabel: "Before") }
+        let newDoc = nt.map { SourceDocument(path: f.newPath, text: $0, revisionLabel: source.newRev == nil ? nil : "After") }
+        let hunks = f.hunks.map { h in
+            let r = ChangeClassifier.analyze(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc, root: source.root)
+            return (h.id, r.analysis, r.facts)
+        }
+        return FileResult(oldDoc: oldDoc, newDoc: newDoc, hunks: hunks)
+    }
 
     func document(_ path: String, side: Side) async -> SourceDocument? {
         if side == .old, let d = oldDocs[path] { return d }

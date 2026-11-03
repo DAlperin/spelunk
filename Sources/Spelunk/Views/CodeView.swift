@@ -43,7 +43,8 @@ struct CodeView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = tv
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
+        // Wide lines still scroll with the trackpad; an overlay horizontal scroller would cover the last line.
+        scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.background
@@ -61,9 +62,17 @@ struct CodeView: NSViewRepresentable {
         gutter.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(scroll)
         host.addSubview(gutter)
+        let mapWidth: CGFloat = secondary ? 0 : MinimapView.width
+        let minimap = MinimapView(textView: tv, coordinator: context.coordinator)
+        minimap.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(minimap)
         NSLayoutConstraint.activate([
+            minimap.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            minimap.topAnchor.constraint(equalTo: host.topAnchor),
+            minimap.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            minimap.widthAnchor.constraint(equalToConstant: mapWidth),
             scroll.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: minimap.leadingAnchor),
             scroll.topAnchor.constraint(equalTo: host.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: host.bottomAnchor),
             gutter.leadingAnchor.constraint(equalTo: host.leadingAnchor),
@@ -73,6 +82,8 @@ struct CodeView: NSViewRepresentable {
         ])
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(gutter, selector: #selector(GutterView.redraw), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        NotificationCenter.default.addObserver(minimap, selector: #selector(MinimapView.redraw), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        context.coordinator.minimap = minimap
         context.coordinator.textView = tv
         context.coordinator.gutter = gutter
         context.coordinator.observeScrolling(scroll.contentView)
@@ -124,7 +135,13 @@ struct CodeView: NSViewRepresentable {
             }
         }
         c.layoutBlocks()
+        if !secondary, let display = c.display {
+            c.hunkRegions = c.computeHunkRegions(ws: ws, document: document, display: display)
+        } else {
+            c.hunkRegions = []
+        }
         c.gutter?.needsDisplay = true
+        c.minimap?.needsDisplay = true
     }
 
     @MainActor
@@ -183,6 +200,9 @@ struct CodeView: NSViewRepresentable {
         var ws: Workspace
         weak var textView: SourceTextView?
         weak var gutter: GutterView?
+        weak var minimap: MinimapView?
+        var hunkRegions: [HunkRegion] = []
+        var minimapWidths: [LineShape] = []
         var documentID: UUID?
         var document: SourceDocument?
         var display: DisplayDoc?
@@ -278,6 +298,7 @@ struct CodeView: NSViewRepresentable {
             attr.endEditing()
             let origin = tv.enclosingScrollView?.contentView.bounds.origin
             tv.textStorage?.setAttributedString(attr)
+            minimapWidths = Self.shapes(display)
             if let lm = tv.layoutManager, let tc = tv.textContainer {
                 lm.ensureLayout(for: tc)
                 tv.sizeToFit()
@@ -420,6 +441,7 @@ final class SourceTextView: NSTextView {
     /// "→ step N" pills after call sites that lead to another step of the active code path.
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawHunkBoundary(dirtyRect)
         let (pills, display) = MainActor.assumeIsolated { (coordinator?.stepPills ?? [:], coordinator?.display) }
         guard !pills.isEmpty, let display, let lm = layoutManager, display.ns.length > 0 else { return }
         let font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
@@ -442,6 +464,34 @@ final class SourceTextView: NSTextView {
             NSColor.systemPurple.withAlphaComponent(0.16).setFill()
             NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).fill()
             label.draw(at: NSPoint(x: box.minX + 5, y: box.minY + 2))
+        }
+    }
+
+    /// The selected review hunk: a tier-colored bar down its left edge and hairlines above and below.
+    private func drawHunkBoundary(_ dirtyRect: NSRect) {
+        let (region, display) = MainActor.assumeIsolated { (coordinator?.hunkRegions.first(where: \.selected), coordinator?.display) }
+        guard let region, let display, let lm = layoutManager, display.ns.length > 0 else { return }
+        func fragment(_ dl: Int) -> NSRect {
+            let off = display.lines.starts[min(dl, display.lines.lineCount - 1)]
+            let g = lm.glyphIndexForCharacter(at: min(off, display.ns.length - 1))
+            var r = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil, withoutAdditionalLayout: true)
+            r.origin.y += textContainerInset.height
+            return r
+        }
+        let top = fragment(region.lines.lowerBound).minY, bottom = fragment(region.lines.upperBound).maxY
+        let box = NSRect(x: 0, y: top, width: bounds.width, height: bottom - top)
+        guard box.insetBy(dx: 0, dy: -30).intersects(dirtyRect) else { return }
+        let vis = visibleRect
+        region.color.withAlphaComponent(0.9).setFill()
+        NSRect(x: vis.minX + 1, y: top, width: 3, height: bottom - top).fill()
+        region.color.withAlphaComponent(0.55).setStroke()
+        for yy in [top + 0.5, bottom - 0.5] {
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: vis.minX, y: yy))
+            p.line(to: NSPoint(x: vis.maxX, y: yy))
+            p.lineWidth = 1
+            p.setLineDash([4, 3], count: 2, phase: 0)
+            p.stroke()
         }
     }
 
