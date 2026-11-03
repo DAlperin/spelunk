@@ -114,19 +114,34 @@ final class MinimapView: NSView {
         let s = scale
         let barH = max(1, min(2, s - (s > 1.5 ? 0.5 : 0)))
         let maxW = bounds.width - 16
-        for (i, e) in display.entries.enumerated() {
-            let w = i < widths.count ? widths[i] : CodeView.Coordinator.LineShape(indent: 0, length: 0)
-            let color: NSColor
-            switch e {
-            case .phantom(let p): color = (p.kind == .added ? Theme.addedMarker : Theme.removedMarker).withAlphaComponent(0.8)
-            case .real: color = Theme.gutterText.withAlphaComponent(0.45)
-            case .block: color = .systemBlue.withAlphaComponent(0.3)
-            case .fold: color = Theme.gutterText.withAlphaComponent(0.25)
+        let colors = [Theme.gutterText.withAlphaComponent(0.45), Theme.addedMarker.withAlphaComponent(0.8),
+                      Theme.removedMarker.withAlphaComponent(0.8), NSColor.systemBlue.withAlphaComponent(0.3),
+                      Theme.gutterText.withAlphaComponent(0.25)]
+        // Lines that land on the same pixel row merge into one bar per color spanning them all.
+        var bars: [Int: (line: Int, from: Int, to: Int)] = [:]
+        func flush() {
+            for (c, b) in bars {
+                colors[c].setFill()
+                NSRect(x: 10 + CGFloat(b.from) * maxW / 120, y: y(b.line), width: max(2, CGFloat(b.to - b.from) * maxW / 120), height: barH).fill()
             }
-            guard w.length > 0 else { continue }
-            color.setFill()
-            NSRect(x: 10 + CGFloat(w.indent) * maxW / 120, y: y(i), width: max(2, CGFloat(w.length) * maxW / 120), height: barH).fill()
+            bars.removeAll(keepingCapacity: true)
         }
+        var row = -1
+        for (i, e) in display.entries.enumerated() {
+            guard i < widths.count, widths[i].length > 0 else { continue }
+            let w = widths[i]
+            let c = switch e {
+            case .real: 0
+            case .phantom(let p): p.kind == .added ? 1 : 2
+            case .block: 3
+            case .fold: 4
+            }
+            let r = s < 1 ? Int(y(i)) : i
+            if r != row { flush(); row = r }
+            let b = bars[c] ?? (i, w.indent, w.indent + w.length)
+            bars[c] = (b.line, min(b.from, w.indent), max(b.to, w.indent + w.length))
+        }
+        flush()
         for r in regions {
             let top = y(r.lines.lowerBound), bottom = y(r.lines.upperBound) + max(barH, 2)
             r.color.withAlphaComponent(r.selected ? 1 : 0.75).setFill()
