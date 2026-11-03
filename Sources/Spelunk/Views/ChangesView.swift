@@ -166,6 +166,7 @@ struct ChangesView: View {
                 .background((pr.state == "OPEN" ? Color.green : Color.purple).opacity(0.18), in: Capsule())
             ChecksSummary(checks: pr.checks)
             Spacer()
+            HeadIntelButton(review: review)
             CheckoutMenu(ws: ws, review: review).controlSize(.small)
         }
         Text(pr.title).font(.headline).lineLimit(3)
@@ -541,5 +542,28 @@ struct LowSignalRow: View {
             Text(verbatim: review.location(of: hunk)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
         }
         .opacity(viewed ? 0.55 : 0.85)
+    }
+}
+
+/// Starts or shows the review head's own rust-analyzer.
+struct HeadIntelButton: View {
+    @Bindable var review: ReviewSession
+    var body: some View {
+        let _ = review.headIntelVersion
+        if review.afterIsWorkingCopy || !review.files.contains(where: { $0.path.hasSuffix(".rs") }) {
+            EmptyView()
+        } else if let h = review.headIntel {
+            TimelineView(.periodic(from: .now, by: 2)) { _ in
+                HStack(spacing: 3) {
+                    Circle().fill(h.server.status == .ready ? Color.green : h.server.status.isUsable ? .yellow : .gray).frame(width: 6, height: 6)
+                    Text(h.server.status == .ready ? "head indexed" : "indexing head").font(.caption).foregroundStyle(.secondary)
+                }
+                .help("This PR's own rust-analyzer: \(h.server.status.label). Symbols in PR files are answered about the PR's code.")
+            }
+        } else {
+            Button("Index head") { Task { await review.startHeadIntel() } }
+                .buttonStyle(.link).font(.caption)
+                .help("Start a rust-analyzer on this PR's head so answers come from the PR's own code (a second full index)")
+        }
     }
 }

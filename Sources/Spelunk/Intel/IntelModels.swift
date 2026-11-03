@@ -62,6 +62,9 @@ final class CallNode: Identifiable {
     var payload: LSPPayload?
     var isTest = false
     let ancestry: Set<String>
+    /// The intelligence that produced the node (a review head's), when not the working copy's.
+    weak var hub: IntelHub?
+    var version: CodeVersion?
 
     init(name: String, detail: String, location: CodeLocation, callSites: [CodeLocation], source: IntelSource,
          payload: LSPPayload?, ancestry: Set<String>) {

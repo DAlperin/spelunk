@@ -416,7 +416,7 @@ struct CallTreeRow: View {
             HStack(spacing: 4) {
                 Button {
                     expanded.toggle()
-                    if expanded { Task { await ws.intel.expand(node, direction) } }
+                    if expanded { Task { await ws.expand(node, direction) } }
                 } label: {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
                         .frame(width: 12, height: 16).contentShape(Rectangle())

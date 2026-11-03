@@ -31,6 +31,9 @@ final class SymbolContext {
     let name: String
     let path: String
     let pos: SourcePos
+    /// The intelligence answering for this symbol, and the version its answers belong to.
+    var hub: IntelHub?
+    var version: CodeVersion?
     var details: SymbolDetails?
     var references: [ReferenceHit] = []
     var referencesSource: IntelSource?
@@ -226,6 +229,7 @@ final class Workspace {
         contextTask?.cancel()
         refreshTask?.cancel()
         for s in servers { s.stop() }
+        for r in pinnedReviews { r.stopHeadIntel() }
         clippy.cancel(); scip.cancel(); watcher?.stop()
     }
 
@@ -283,6 +287,7 @@ final class Workspace {
     }
 
     func closeReview(_ key: String) {
+        pinnedReviews.first { $0.target.key == key }?.stopHeadIntel()
         pinnedReviews.removeAll { $0.target.key == key }
         if activeReviewKey == key { activateReview(nil) }
     }
@@ -402,11 +407,11 @@ final class Workspace {
         if contextPinned { return }
         if context?.name == name && context?.path == d.path && context?.pos.line == p.line { return }
         let isWorkingCopy = d.isWorkingCopy
-        // Code intelligence answers about the files on disk. For a Before/After view, query the same
-        // symbol at its nearest occurrence in the working-copy file (falls back to name-based search
-        // when the file no longer exists there).
-        let queryPos = intelPosition(in: d, name: name, range: range)
+        let target = intelTarget(d, name: name, range: range)
+        let queryPos = target.pos
         let ctx = SymbolContext(name: name, path: d.path, pos: queryPos)
+        ctx.hub = target.hub
+        ctx.version = target.version
         context = ctx
         highlightRanges = []
         contextTask?.cancel()
@@ -416,7 +421,9 @@ final class Workspace {
             } else if context === ctx {
                 highlightRanges = localOccurrences(of: name, in: d)
             }
-            ctx.details = await intel.details(path: d.path, at: queryPos, name: name)
+            var details = await target.hub.details(path: d.path, at: queryPos, name: name)
+            details.definition = details.definition.map { Self.tagged($0, target.version) }
+            ctx.details = details
             guard context === ctx else { return }
             describeContainer(ctx)
             async let refs: Void = loadReferences(ctx)
@@ -438,8 +445,8 @@ final class Workspace {
 
     func loadReferences(_ ctx: SymbolContext) async {
         ctx.loadingReferences = true
-        let (refs, src) = await intel.references(path: ctx.path, at: ctx.pos, name: ctx.name)
-        ctx.references = refs
+        let (refs, src) = await (ctx.hub ?? intel).references(path: ctx.path, at: ctx.pos, name: ctx.name)
+        ctx.references = refs.map { var h = $0; h.location = Self.tagged(h.location, ctx.version); return h }
         ctx.referencesSource = src
         ctx.loadingReferences = false
     }
@@ -447,9 +454,12 @@ final class Workspace {
     func loadCallersAndCallees(_ ctx: SymbolContext) async {
         ctx.loadingCallers = true
         ctx.loadingCallees = true
-        ctx.callers = await intel.callRoots(.incoming, path: ctx.path, at: ctx.pos, name: ctx.name)
+        let hub = ctx.hub ?? intel
+        ctx.callers = await hub.callRoots(.incoming, path: ctx.path, at: ctx.pos, name: ctx.name)
+        tag(ctx.callers, ctx.version, hub: hub)
         ctx.loadingCallers = false
-        let callees = await intel.callRoots(.outgoing, path: ctx.path, at: ctx.pos, name: ctx.name)
+        let callees = await hub.callRoots(.outgoing, path: ctx.path, at: ctx.pos, name: ctx.name)
+        tag(callees, ctx.version, hub: hub)
         // In call order: by the first call site.
         ctx.callees = callees.sorted { ($0.callSites.first?.line ?? .max, $0.callSites.first?.range.start.col ?? 0) < ($1.callSites.first?.line ?? .max, $1.callSites.first?.range.start.col ?? 0) }
         ctx.loadingCallees = false
@@ -457,7 +467,7 @@ final class Workspace {
     }
 
     private func describeContainer(_ ctx: SymbolContext) {
-        guard let def = ctx.details?.definition, let doc = docs.document(def.path),
+        guard let def = ctx.details?.definition, let doc = (ctx.hub ?? intel).docs.document(def.path),
               let item = doc.syntax.flatOutline.first(where: { $0.nameRange.start.line == def.line && $0.name == ctx.name }) else { return }
         ctx.isPublic = item.isPublic
         if let p = item.parent {
@@ -480,7 +490,9 @@ final class Workspace {
 
     func loadCalls(_ ctx: SymbolContext) async {
         ctx.loadingCalls = true
-        ctx.calls = await intel.callRoots(ctx.callDirection, path: ctx.path, at: ctx.pos, name: ctx.name)
+        let hub = ctx.hub ?? intel
+        ctx.calls = await hub.callRoots(ctx.callDirection, path: ctx.path, at: ctx.pos, name: ctx.name)
+        tag(ctx.calls, ctx.version, hub: hub)
         ctx.loadingCalls = false
     }
 
@@ -488,8 +500,8 @@ final class Workspace {
         let kind = ctx.details?.kindLabel ?? ""
         guard kind == "Trait" || kind == "Struct" || kind == "Enum" || kind == "Method" || kind == "Function" || kind == "Symbol" else { return }
         ctx.loadingImpls = true
-        let (hits, src) = await intel.implementations(path: ctx.path, at: ctx.pos, name: ctx.name)
-        ctx.implementations = hits.filter { !($0.location.path == ctx.path && $0.location.line == ctx.pos.line) }
+        let (hits, src) = await (ctx.hub ?? intel).implementations(path: ctx.path, at: ctx.pos, name: ctx.name)
+        ctx.implementations = hits.map { var h = $0; h.location = Self.tagged(h.location, ctx.version); return h }.filter { !($0.location.path == ctx.path && $0.location.line == ctx.pos.line) }
         ctx.implementationsSource = src
         ctx.loadingImpls = false
     }
@@ -505,10 +517,11 @@ final class Workspace {
     func goToDefinition(at p: SourcePos) {
         guard let d = document, let (name, range) = d.word(at: p) else { return }
         let gen = beginNavigation(.definition)
-        let pos = intelPosition(in: d, name: name, range: range)
+        let target = intelTarget(d, name: name, range: range)
         Task {
             statusMessage = "Resolving \(name)…"
-            let (defs, src) = await intel.definitions(path: d.path, at: pos, name: name)
+            let (found, src) = await target.hub.definitions(path: d.path, at: target.pos, name: name)
+            let defs = found.map { Self.tagged($0, target.version) }
             guard isCurrentNavigation(gen) else { return }
             statusMessage = nil
             guard let first = defs.first else { statusMessage = "No definition found for \(name)"; return }
@@ -592,6 +605,7 @@ final class Workspace {
         if let p = focusPath, r.state == .ready, r.allHunks.contains(where: { $0.path == p }) { selectFirst() }
         Task {
             await r.load()
+            if Prefs.headServer, r.files.contains(where: { $0.path.hasSuffix(".rs") }) { await r.startHeadIntel() }
             guard review === r else { return }
             if selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
         }

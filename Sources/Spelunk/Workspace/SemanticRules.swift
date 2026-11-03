@@ -44,7 +44,7 @@ extension Workspace {
                 for _ in 2...needs.depth {
                     var next: [CallNode] = []
                     for n in frontier.prefix(25) {
-                        await intel.expand(n, .incoming)
+                        await expand(n, .incoming)
                         next += n.children ?? []
                     }
                     names += next.map(\.name)

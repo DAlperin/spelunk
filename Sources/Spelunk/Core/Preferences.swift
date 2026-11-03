@@ -36,6 +36,7 @@ enum Prefs {
         static let scipFirst = "intel.scipFirstWhileCold"
         static let openDocuments = "intel.openDocuments"
         static let documentCacheSize = "intel.documentCacheSize"
+        static let headServer = "intel.headServer"
     }
 
     static let defaults: [String: Any] = [
@@ -67,6 +68,7 @@ enum Prefs {
         Key.scipFirst: true,
         Key.openDocuments: 24,
         Key.documentCacheSize: 300,
+        Key.headServer: false,
     ]
 
     static func register() { _ = registration }
@@ -96,5 +98,6 @@ enum Prefs {
     static var autoStartServers: Bool { d.bool(forKey: Key.autoStartServers) }
     static var scipFirst: Bool { d.bool(forKey: Key.scipFirst) }
     static var openDocuments: Int { max(4, d.integer(forKey: Key.openDocuments)) }
+    static var headServer: Bool { d.bool(forKey: Key.headServer) }
     static var documentCacheSize: Int { max(20, d.integer(forKey: Key.documentCacheSize)) }
 }

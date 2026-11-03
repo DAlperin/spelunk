@@ -146,6 +146,7 @@ private struct IntelligenceSettings: View {
     @AppStorage(Prefs.Key.scipFirst) var scipFirst = true
     @AppStorage(Prefs.Key.openDocuments) var openDocuments = 24
     @AppStorage(Prefs.Key.documentCacheSize) var cacheSize = 300
+    @AppStorage(Prefs.Key.headServer) var headServer = false
     @State private var detectedRA = "…"
     @State private var detectedSK = "…"
 
@@ -162,6 +163,10 @@ private struct IntelligenceSettings: View {
             .task {
                 detectedRA = await LanguageServer.resolveBinary(.rust) ?? "none"
                 detectedSK = await LanguageServer.resolveBinary(.swift) ?? "none"
+            }
+            Section("Reviews") {
+                Toggle("Index pull request heads with their own rust-analyzer", isOn: $headServer)
+                Note("Answers for code in a pull request then come from the PR's own code instead of the working copy at the matching position. Costs a second full index (memory and a few minutes) per open PR; it can also be started from the PR header.")
             }
             Section("Fallbacks") {
                 Toggle("Answer from the SCIP index while rust-analyzer warms up", isOn: $scipFirst)

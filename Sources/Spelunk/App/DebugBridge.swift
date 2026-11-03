@@ -176,6 +176,21 @@ final class DebugBridge {
                 let r = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc)
                 c.hover.mouseMoved(at: NSPoint(x: r.midX + tv.textContainerInset.width, y: r.midY + tv.textContainerInset.height))
             }
+        case "screenpos":
+            // screenpos <line>:<col>: the glyph's centre in CoreGraphics screen coordinates (top-left origin)
+            if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let c = tv.coordinator, let d = c.display,
+               let lm = tv.layoutManager, let tc = tv.textContainer, let w = tv.window {
+                let off = d.displayOffset(pos(arg))
+                var r = lm.boundingRect(forGlyphRange: NSRange(location: lm.glyphIndexForCharacter(at: off), length: 1), in: tc)
+                r.origin.x += tv.textContainerInset.width; r.origin.y += tv.textContainerInset.height
+                let sr = w.convertToScreen(tv.convert(r, to: nil))
+                let h = NSScreen.screens.first?.frame.height ?? 0
+                Log.debug("screenpos: \(Int(sr.midX)) \(Int(h - sr.midY))")
+            }
+        case "hovershown":
+            let shown = NSApp.windows.contains { $0.isVisible && $0.className.contains("Popover") }
+            Log.debug("hovershown: \(shown)")
+        case "headintel": Task { await ws.review?.startHeadIntel() }
         case "openjobtrace":
             if let j = ws.jobs.last(where: { $0.kind == .trace && $0.traceID != nil }) { ws.openJobTrace(j.id) }
         case "rulewriter": ws.ruleWriterSeed = arg; ws.showRuleWriter = true
@@ -222,7 +237,8 @@ final class DebugBridge {
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
         s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
-        if let c = ws.context { s += "context: \(c.name) kind=\(c.details?.kindLabel ?? "-") source=\(c.details?.source.label ?? "-") callers=\(c.callers.count) refs=\(c.references.count) ra=\(ws.ra.status.label)\n" }
+        if let h = ws.review?.headIntel { s += "headintel: \(h.server.status.label) root=\(h.root.lastPathComponent)\n" }
+        if let c = ws.context { s += "context: \(c.name) version=\(c.version.map { "\($0)" } ?? "wc") def=\(c.details?.definition.map { "\($0.path):\($0.line + 1)" } ?? "-") kind=\(c.details?.kindLabel ?? "-") source=\(c.details?.source.label ?? "-") callers=\(c.callers.count) refs=\(c.references.count) ra=\(ws.ra.status.label)\n" }
         if let cc = ws.changeContext { s += "changecontext: enclosing=\(cc.enclosing ?? "-") callers=\(cc.callers.map(\.name).prefix(4).joined(separator: ",")) loading=\(cc.loading)\n" }
         if let r = ws.review { s += "state: identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }

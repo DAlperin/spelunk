@@ -117,6 +117,10 @@ final class ReviewSession {
     var listMode: ListMode = ListMode(rawValue: UserDefaults.standard.string(forKey: "review.listMode") ?? "") ?? .importance {
         didSet { UserDefaults.standard.set(listMode.rawValue, forKey: "review.listMode") }
     }
+    /// The head's own rust-analyzer, when started.
+    @ObservationIgnored var headIntel: HeadIntel? { didSet { headIntelVersion += 1 } }
+    var headIntelVersion = 0
+
     /// The open pull request for a local review's bookmark, when there is one.
     var linkedPR: Int?
     var linkedBookmark: String?
