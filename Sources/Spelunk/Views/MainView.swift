@@ -345,40 +345,55 @@ struct StatusBar: View {
                 }
             }
             if let msg = ws.statusMessage {
-                Text(msg).foregroundStyle(.secondary).lineLimit(1)
+                Text(msg).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .help(msg)
                     .onTapGesture { ws.statusMessage = nil }
+                    .layoutPriority(-1)
             }
             if let g = ws.traceGenerating {
                 ProgressView().controlSize(.mini)
-                Text(verbatim: "Tracing: \(g)").foregroundStyle(.purple).lineLimit(1)
+                Text(verbatim: "Tracing: \(g)").foregroundStyle(.purple).lineLimit(1).truncationMode(.tail).layoutPriority(-1)
             }
-            Spacer()
-            clippyStatus
-            Button { showIndex.toggle() } label: {
-                HStack(spacing: 4) {
-                    Circle().fill(raColor).frame(width: 7, height: 7)
-                    Text(raLabel)
-                    Text("·").foregroundStyle(.tertiary)
-                    Text(ws.scip.summary)
+            Spacer(minLength: 8)
+            Group {
+                clippyStatus
+                Button { showIndex.toggle() } label: {
+                    HStack(spacing: 4) {
+                        Circle().fill(raColor).frame(width: 7, height: 7)
+                        Text(raLabel)
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(ws.scip.summary)
+                    }
                 }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
+                if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
             }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
-            if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
+            .fixedSize()
             if ws.review != nil {
-                HStack(spacing: 4) {
-                    KeyCap("J"); KeyCap("K"); Text("hunk")
-                    KeyCap("⇧J"); Text("next important")
-                    KeyCap("V"); Text("viewed")
-                    if ws.review?.pullRequest != nil { KeyCap("C"); Text("comment"); KeyCap("N"); KeyCap("P"); Text("thread") }
+                ViewThatFits(in: .horizontal) {
+                    keyHints(labels: true)
+                    keyHints(labels: false)
+                    Color.clear.frame(width: 0)
                 }
                 .foregroundStyle(.secondary)
+                .layoutPriority(-2)
             }
         }
         .font(.system(size: 11))
         .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(height: 24)
+    }
+
+    func keyHints(labels: Bool) -> some View {
+        HStack(spacing: 4) {
+            KeyCap("J"); KeyCap("K"); if labels { Text("hunk") }
+            KeyCap("⇧J"); if labels { Text("next important") }
+            KeyCap("V"); if labels { Text("viewed") }
+            if ws.review?.pullRequest != nil { KeyCap("C"); if labels { Text("comment") }; KeyCap("N"); KeyCap("P"); if labels { Text("thread") } }
+        }
+        .fixedSize()
     }
 
     @ViewBuilder var clippyStatus: some View {

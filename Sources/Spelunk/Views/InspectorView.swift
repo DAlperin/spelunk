@@ -578,13 +578,22 @@ struct CollapsedRows: View {
                 if ws.traces.traces.isEmpty {
                     Text("none").font(.caption).foregroundStyle(.tertiary)
                 } else {
-                    Button(ws.traces.active?.title ?? "\(ws.traces.traces.count) paths") { ws.inspectorPane = .paths }
-                        .buttonStyle(.link).font(.caption).lineLimit(1)
+                    Button { ws.inspectorPane = .paths } label: {
+                        Text(ws.traces.active?.title ?? "\(ws.traces.traces.count) paths")
+                            .lineLimit(1).truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
+                    .help(ws.traces.active?.title ?? "")
+                    .layoutPriority(-1)
                 }
-                Spacer()
-                Button("New from cursor") { ws.newCodePath(fromCursor: true); ws.inspectorPane = .paths }.disabled(ws.document == nil)
-                Text("·").foregroundStyle(.tertiary)
-                Button("Generate") { ws.inspectorPane = .paths; ws.showGenerateTrace = true }
+                Spacer(minLength: 4)
+                HStack(spacing: 6) {
+                    Button("New from cursor") { ws.newCodePath(fromCursor: true); ws.inspectorPane = .paths }.disabled(ws.document == nil)
+                    Text("·").foregroundStyle(.tertiary)
+                    Button("Generate") { ws.inspectorPane = .paths; ws.showGenerateTrace = true }
+                }
+                .fixedSize()
             }
             HStack(spacing: 6) {
                 Text("Bookmarks").font(.caption.weight(.semibold)).frame(width: 78, alignment: .leading)
