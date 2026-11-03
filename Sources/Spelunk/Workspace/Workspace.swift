@@ -94,6 +94,10 @@ final class Workspace {
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
     var showRuleWriter = false
+    /// The vim mode and pending keys for the status bar; nil when vim navigation is off.
+    var vimStatus: String?
+    /// The old-side line number when the caret is on an inline removed line.
+    var removedLineAtCaret: Int?
     @ObservationIgnored var navGeneration = 0
     @ObservationIgnored var phantomCache: (key: String, value: [Int: [PhantomLine]])?
     @ObservationIgnored var hoverCache: [String: HoverInfo] = [:]
@@ -323,9 +327,11 @@ final class Workspace {
 
     // MARK: Navigation
 
+    /// Where the caret is, for history: going back returns exactly here, in this version of the file.
     var currentLocation: CodeLocation? {
         guard let d = document else { return nil }
-        return CodeLocation(path: d.path, range: selection ?? SourceRange(line: cursor?.line ?? 0))
+        let range = cursor.map { SourceRange(start: $0, end: $0) } ?? selection ?? SourceRange(line: 0)
+        return CodeLocation(path: d.path, range: range, version: d.isWorkingCopy ? nil : d.version)
     }
 
     /// Opens a location in the working copy. Records it in history, and in the active trace when recording.

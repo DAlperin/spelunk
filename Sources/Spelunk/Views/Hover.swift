@@ -130,7 +130,18 @@ final class HoverController: NSObject, NSPopoverDelegate {
         if popover == nil { hide() }
     }
 
+    /// Shows the card for the character at a point now, from the keyboard (vim `K`). It stays until
+    /// the next key or click rather than following the pointer.
+    func showNow(at point: NSPoint) {
+        hide()
+        fromKeyboard = true
+        show(at: point)
+    }
+
+    private var fromKeyboard = false
+
     func hide() {
+        fromKeyboard = false
         timer?.invalidate()
         watcher?.invalidate()
         watcher = nil
@@ -181,7 +192,7 @@ final class HoverController: NSObject, NSPopoverDelegate {
             guard tv.visibleRect.intersects(rect) else { return }
             // Still on the symbol after the lookup?
             let now = tv.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
-            guard rect.insetBy(dx: -4, dy: -4).contains(now) else { return }
+            guard self.fromKeyboard || rect.insetBy(dx: -4, dy: -4).contains(now) else { return }
             let p = NSPopover()
             p.behavior = .applicationDefined
             p.animates = false
@@ -200,7 +211,7 @@ final class HoverController: NSObject, NSPopoverDelegate {
             self.popover = p
             self.shownRange = r
             self.symbolRect = window.convertToScreen(tv.convert(rect, to: nil))
-            self.watch()
+            if !self.fromKeyboard { self.watch() }
         }
     }
 

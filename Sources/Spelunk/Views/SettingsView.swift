@@ -51,6 +51,7 @@ private struct EditorSettings: View {
     @AppStorage(Prefs.Key.hunkBoundary) var hunkBoundary = true
     @AppStorage(Prefs.Key.hoverEnabled) var hover = true
     @AppStorage(Prefs.Key.hoverDelay) var hoverDelay = 0.6
+    @AppStorage(Prefs.Key.vim) var vim = false
 
     var body: some View {
         Form {
@@ -66,6 +67,10 @@ private struct EditorSettings: View {
                 if minimap {
                     Slider(value: $minimapWidth, in: 40...140) { Text(verbatim: "Minimap width: \(Int(minimapWidth)) pt") }
                 }
+            }
+            Section("Keyboard") {
+                Toggle("Vim navigation in the code view", isOn: $vim)
+                Note("Motions (hjkl, w b e, 0 ^ $, gg G, H M L, Ctrl-d/u, { } %, f t ; ,), search (/ n N * #), visual v V with y to copy, gd definition, K hover, Ctrl-o / Ctrl-i back and forward. Review keys become ]h [h (hunk), ]u (next unviewed), ]t [t (thread), space v (viewed), space c (comment), space r (resolve), space a (ask), space p (add to code path).")
             }
             Section("Hover") {
                 Toggle("Show symbol details on hover", isOn: $hover)

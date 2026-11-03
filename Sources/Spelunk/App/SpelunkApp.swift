@@ -302,6 +302,8 @@ enum ReviewKeys {
     @MainActor static func handle(_ event: NSEvent, ws: Workspace) -> Bool {
         if event.timestamp == lastHandled { return true }
         guard ws.review != nil, ws.palette == nil, ws.commentDraft == nil else { return false }
+        // With vim navigation the code view's own bindings apply there (]h, [h, space v, ...).
+        if Prefs.vim, event.window?.firstResponder is SourceTextView { return false }
         let mods = event.modifierFlags.intersection([.command, .option, .control])
         guard mods.isEmpty, let chars = event.charactersIgnoringModifiers?.lowercased(), chars.count == 1 else { return false }
         let shift = event.modifierFlags.contains(.shift)

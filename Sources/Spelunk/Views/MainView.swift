@@ -409,6 +409,7 @@ struct BreadcrumbBar: View {
 
 struct StatusBar: View {
     @Bindable var ws: Workspace
+    @AppStorage(Prefs.Key.vim) private var vim = false
     @State private var showIndex = false
 
     var body: some View {
@@ -424,6 +425,13 @@ struct StatusBar: View {
                     let tests = d.syntax.testLineRanges.count
                     if tests > 0 { Text(verbatim: "\(tests) test region\(tests == 1 ? "" : "s")").foregroundStyle(.secondary) }
                 }
+            }
+            if vim {
+                Text(ws.vimStatus ?? "NORMAL").font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background((ws.vimStatus ?? "").hasPrefix("VISUAL") ? Color.orange.opacity(0.25) : Color.accentColor.opacity(0.2), in: RoundedRectangle(cornerRadius: 3))
+                    .fixedSize()
+                    .help("Vim navigation: ]h [h hunks, ]u next unviewed, space v viewed, space c comment, ]t [t threads, gd definition, K hover, Ctrl-o back")
             }
             if let msg = ws.statusMessage {
                 Text(msg).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
@@ -456,7 +464,8 @@ struct StatusBar: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
-                if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
+                if let r = ws.removedLineAtCaret { Text(verbatim: "Removed line \(r)").foregroundStyle(.red) }
+            else if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
             }
             .fixedSize()
             if ws.review != nil {

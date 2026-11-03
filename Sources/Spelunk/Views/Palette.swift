@@ -297,6 +297,10 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        add(Prefs.vim ? "Turn Off Vim Navigation" : "Turn On Vim Navigation", nil, nil, icon: "keyboard") {
+            UserDefaults.standard.set(!Prefs.vim, forKey: Prefs.Key.vim)
+            ws.vimStatus = nil
+        }
         if ws.activeReviewKey != nil {
             add("Close Review, Back to Working Copy", ws.review?.shortLabel, "⌥⌘W", icon: "xmark.circle") { ws.closeActiveReview() }
         }

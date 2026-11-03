@@ -13,6 +13,7 @@ enum Prefs {
         static let hunkBoundary = "editor.hunkBoundary"
         static let hoverEnabled = "hover.enabled"
         static let hoverDelay = "hover.delay"
+        static let vim = "editor.vim"
         // Review
         static let autoClassify = "review.autoClassify"
         static let groupRelated = "review.groupRelated"
@@ -48,6 +49,7 @@ enum Prefs {
         Key.hunkBoundary: true,
         Key.hoverEnabled: true,
         Key.hoverDelay: 0.6,
+        Key.vim: false,
         Key.autoClassify: true,
         Key.groupRelated: true,
         Key.hideMechanical: true,
@@ -83,6 +85,7 @@ enum Prefs {
     static var hunkBoundary: Bool { d.bool(forKey: Key.hunkBoundary) }
     static var hoverEnabled: Bool { d.bool(forKey: Key.hoverEnabled) }
     static var hoverDelay: Double { d.double(forKey: Key.hoverDelay) }
+    static var vim: Bool { d.bool(forKey: Key.vim) }
     static var autoClassify: Bool { d.bool(forKey: Key.autoClassify) }
     static var hideMechanical: Bool { d.bool(forKey: Key.hideMechanical) }
     static var quickBatch: Int { max(10, d.integer(forKey: Key.quickBatch)) }

@@ -120,6 +120,16 @@ final class DebugBridge {
                     NSApp.postEvent(e, atStart: false)
                 }
             }
+        case "ctrlkey":
+            // ctrlkey <char>: one control-modified key press.
+            guard let w = mainWindow, let ch = arg.first else { break }
+            w.makeKeyAndOrderFront(nil)
+            w.makeFirstResponder(w.contentView?.firstSubview(ofType: SourceTextView.self))
+            if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: w.windowNumber, context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch),
+                                        isARepeat: false, keyCode: 0) {
+                NSApp.postEvent(e, atStart: false)
+            }
         case "clickat":
             // clickat <x> <y> in points from the window's top-left; goes through normal event dispatch.
             let n = arg.split(separator: " ").compactMap { Double($0) }
@@ -269,7 +279,7 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
-        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
+        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") removed=\(ws.removedLineAtCaret.map(String.init) ?? "-") vim=\(ws.vimStatus ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
         if let h = ws.review?.headIntel { s += "headintel: \(h.server.status.label) root=\(h.root.lastPathComponent)\n" }
         if let c = ws.context { s += "context: \(c.name) version=\(c.version.map { "\($0)" } ?? "wc") def=\(c.details?.definition.map { "\($0.path):\($0.line + 1)" } ?? "-") kind=\(c.details?.kindLabel ?? "-") source=\(c.details?.source.label ?? "-") callers=\(c.callers.count) refs=\(c.references.count) ra=\(ws.ra.status.label)\n" }
         if let cc = ws.changeContext { s += "changecontext: enclosing=\(cc.enclosing ?? "-") callers=\(cc.callers.map(\.name).prefix(4).joined(separator: ",")) loading=\(cc.loading)\n" }

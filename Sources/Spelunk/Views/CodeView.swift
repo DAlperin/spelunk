@@ -98,6 +98,7 @@ struct CodeView: NSViewRepresentable {
         context.coordinator.minimap = minimap
         context.coordinator.textView = tv
         context.coordinator.hover.textView = tv
+        if !secondary { context.coordinator.vim = VimController(textView: tv) }
         context.coordinator.gutter = gutter
         context.coordinator.observeScrolling(scroll.contentView)
         return host
@@ -224,6 +225,7 @@ struct CodeView: NSViewRepresentable {
         weak var gutter: GutterView?
         weak var minimap: MinimapView?
         let hover = HoverController()
+        var vim: VimController?
         /// Follows the minimap preferences while the editor is open.
         var minimapWidth: NSLayoutConstraint?
         var hunkRegions: [HunkRegion] = []
@@ -261,8 +263,18 @@ struct CodeView: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !secondary, !movingCaret, let tv = textView, let display else { return }
             let r = tv.selectedRange()
-            guard r.location <= display.ns.length, let pos = display.realPos(display.lines.position(of: r.location)) else { return }
+            guard r.location <= display.ns.length else { return }
+            let dpos = display.lines.position(of: r.location)
+            gutter?.needsDisplay = true
+            guard let pos = display.realPos(dpos) else {
+                if case .phantom(let p) = display.entry(dpos.line) { ws.removedLineAtCaret = p.otherLine + 1 }
+                return
+            }
+            if ws.removedLineAtCaret != nil { ws.removedLineAtCaret = nil }
             if ws.cursor != pos { ws.cursor = pos }
+            // The current-line highlight follows the caret; a navigation target's highlight ends here.
+            let here = SourceRange(start: pos, end: pos)
+            if r.length == 0, ws.selection != here { ws.selection = here }
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool { false }
@@ -317,6 +329,9 @@ struct CodeView: NSViewRepresentable {
         }
 
         func load(_ display: DisplayDoc, into tv: NSTextView, keepScroll: Bool) {
+            // Replacing the text moves the selection; that is not the user moving the caret.
+            movingCaret = true
+            defer { movingCaret = false }
             let doc = display.doc
             let font = Theme.codeFont
             let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
@@ -352,9 +367,7 @@ struct CodeView: NSViewRepresentable {
                 lm.ensureLayout(for: tc)
                 tv.sizeToFit()
             }
-            movingCaret = true
             tv.setSelectedRange(NSRange(location: 0, length: 0))
-            movingCaret = false
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
             if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
@@ -547,17 +560,41 @@ final class SourceTextView: NSTextView {
         }
     }
 
-    /// A 2 pt caret, easier to find in a read-mostly view than the default hairline.
+    /// A 2 pt caret, easier to find in a read-mostly view than the default hairline; a block over
+    /// the character in vim normal mode.
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         var r = rect
+        if VimController.enabled, coordinator?.vim?.isNormal == true {
+            let font = Theme.codeFont
+            r.size.width = font.advancement(forGlyph: font.glyph(withName: "M")).width
+            if flag {
+                color.withAlphaComponent(0.45).setFill()
+                r.fill(using: .sourceOver)
+            } else {
+                setNeedsDisplay(r, avoidAdditionalLayout: true)
+            }
+            return
+        }
         r.size.width = 2
         super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
     }
 
+    override func keyDown(with event: NSEvent) {
+        coordinator?.hover.hide()
+        if let vim = coordinator?.vim, vim.handle(event) { return }
+        // With vim navigation on, letters that are not commands do nothing rather than beep.
+        if VimController.enabled, event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           let c = event.characters?.first, !c.isNewline, event.keyCode != 53, event.keyCode < 115 { return }
+        super.keyDown(with: event)
+    }
+
+    /// Escape in a text view asks for completions; this view has none.
+    override func complete(_ sender: Any?) {}
+
     override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
-        // The wider caret needs its extra column redrawn when it blinks off.
+        // The wider caret needs its extra columns redrawn when it blinks off.
         var r = invalidRect
-        r.size.width += 1
+        r.size.width += VimController.enabled ? Theme.codeFont.pointSize : 1
         super.setNeedsDisplay(r, avoidAdditionalLayout: flag)
     }
 
@@ -639,6 +676,7 @@ final class GutterView: NSView {
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
              coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         let (badges, currentStep) = (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine)
+        let caretLine = tv.selectedRange().location <= (display?.ns.length ?? 0) ? display.map { $0.lines.position(of: tv.selectedRange().location).line } : nil
         guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
         let glyphRange = lm.glyphRange(forBoundingRect: visible, in: tc)
@@ -663,7 +701,8 @@ final class GutterView: NSView {
                 let color = p.kind == .added ? Theme.addedMarker : Theme.removedMarker
                 color.setFill()
                 NSRect(x: thickness - 3, y: y, width: 3, height: h).fill()
-                let str = NSAttributedString(string: "\(p.kind == .added ? "+" : "−")\(p.otherLine + 1)", attributes: [.font: font, .foregroundColor: color])
+                let pf = dline == caretLine ? NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: .bold) : font
+                let str = NSAttributedString(string: "\(p.kind == .added ? "+" : "−")\(p.otherLine + 1)", attributes: [.font: pf, .foregroundColor: color])
                 let size = str.size()
                 str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
             case .real(let line):
@@ -697,7 +736,7 @@ final class GutterView: NSView {
                     NSColor.systemBlue.setFill()
                     NSRect(x: 33, y: y + 2, width: 3, height: h - 4).fill()
                 }
-                let str = NSAttributedString(string: "\(line + 1)", attributes: line == selLine ? boldAttrs : attrs)
+                let str = NSAttributedString(string: "\(line + 1)", attributes: (caretLine.map { $0 == dline } ?? (line == selLine)) ? boldAttrs : attrs)
                 let size = str.size()
                 str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
             case .block, nil:
