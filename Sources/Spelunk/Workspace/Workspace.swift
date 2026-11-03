@@ -277,6 +277,9 @@ final class Workspace {
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var fileListStale = false
+    @ObservationIgnored private var pendingListPaths: Set<String> = []
+    @ObservationIgnored private var unlistedPaths: Set<String> = []
 
     private func startWatching() {
         let w = FileWatcher(root: root) { [weak self] paths in
@@ -291,11 +294,28 @@ final class Workspace {
     private func filesChanged(_ paths: [String]) {
         for s in servers { s.filesChanged(paths, except: document?.isWorkingCopy == true ? document?.path : nil) }
         if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
+        // A path that is new to the file list, or a listed one that is gone, means files were added or removed.
+        let fm = FileManager.default
+        let candidates = paths.filter { p in
+            !unlistedPaths.contains(p) && allFileSet.contains(p) != fm.fileExists(atPath: root.appendingPathComponent(p).path)
+        }
+        if !candidates.isEmpty { fileListStale = true; pendingListPaths.formUnion(candidates) }
         refreshTask?.cancel()
         refreshTask = Task {
             try? await Task.sleep(for: .seconds(Prefs.refreshDelay))
             guard !Task.isCancelled else { return }
             await refreshWorkingReview()
+            // After the review's diff, which snapshots a jj working copy, so the list includes new files.
+            if fileListStale {
+                fileListStale = false
+                allFiles = await VCS.listFiles(root, vcs: vcs.kind)
+                allFileSet = Set(allFiles)
+                // Paths that exist but stay out of the list (ignored files, folders) do not trigger it again.
+                let fm = FileManager.default
+                unlistedPaths.formUnion(pendingListPaths.filter { !allFileSet.contains($0) && fm.fileExists(atPath: root.appendingPathComponent($0).path) })
+                pendingListPaths = []
+                await rebuildTreeAsync()
+            }
             if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
         }
     }
