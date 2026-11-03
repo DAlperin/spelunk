@@ -217,7 +217,10 @@ final class Workspace {
         let store = Store.shared(for: self.root)
         Task { await store.prune(days: Prefs.cacheDays) }
         grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadCurrentDocument() }
+            MainActor.assumeIsolated {
+                self?.docs.invalidate()
+                self?.reloadCurrentDocument()
+            }
         }
         diffOptionsObserver = NotificationCenter.default.addObserver(forName: .diffOptionsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -230,13 +233,21 @@ final class Workspace {
     @ObservationIgnored private var grammarObserver: NSObjectProtocol?
     @ObservationIgnored private var diffOptionsObserver: NSObjectProtocol?
 
-    /// Re-parses open documents, e.g. after grammars change.
+    @ObservationIgnored private var reloadGeneration = 0
+
+    /// Reads and parses the open working-copy file again, off the main thread. When several reloads
+    /// overlap, the last one asked for wins.
     func reloadCurrentDocument(keepPosition: Bool = false) {
-        docs.invalidate()
-        guard let d = document, d.isWorkingCopy, let fresh = docs.document(d.path) else { return }
-        document = fresh
-        server(for: fresh.path)?.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
-        if !keepPosition { revealRequest += 1 }
+        guard let d = document, d.isWorkingCopy else { return }
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        Task {
+            guard let fresh = await docs.documents([d.path])[d.path], generation == reloadGeneration,
+                  let current = document, current !== fresh, current.path == d.path, current.isWorkingCopy else { return }
+            document = fresh
+            server(for: fresh.path)?.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
+            if !keepPosition { revealRequest += 1 }
+        }
     }
 
     func start() async {
