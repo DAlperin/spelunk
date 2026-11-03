@@ -18,6 +18,8 @@ struct ReviewTabsView: View {
 struct CheckoutMenu: View {
     @Bindable var ws: Workspace
     let review: ReviewSession
+    /// Icon only, for a narrow sidebar.
+    var compact = false
     @State private var options: [ReviewSession.CheckoutOption] = []
     @State private var pending: ReviewSession.CheckoutOption?
 
@@ -26,8 +28,9 @@ struct CheckoutMenu: View {
             if options.isEmpty { Text("Nothing to check out") }
             ForEach(options) { o in Button(o.label) { pending = o } }
         } label: {
-            Label("Check out", systemImage: "arrow.down.to.line")
+            if compact { Image(systemName: "arrow.down.to.line") } else { Label("Check out", systemImage: "arrow.down.to.line") }
         }
+        .help("Check out this change into the working copy")
         .fixedSize()
         .task(id: review.target.key) { options = await review.checkoutOptions(repoVCS: ws.vcs.kind) }
         .onChange(of: review.pullRequest?.headSha) { Task { options = await review.checkoutOptions(repoVCS: ws.vcs.kind) } }
@@ -163,15 +166,29 @@ struct ChangesView: View {
 
     @ViewBuilder func prHeader(_ pr: GitHubService.PullRequestDetails) -> some View {
         HStack(spacing: 6) {
-            Text(verbatim: "#" + String(pr.number)).font(.callout.monospaced().weight(.semibold))
-            Text(pr.isDraft ? "Draft" : pr.state.capitalized).font(.caption2.weight(.semibold))
+            Text(verbatim: "#" + String(pr.number)).font(.callout.monospaced().weight(.semibold)).fixedSize()
+            Text(pr.isDraft ? "Draft" : pr.state.capitalized).font(.caption2.weight(.semibold)).fixedSize()
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background((pr.state == "OPEN" ? Color.green : Color.purple).opacity(0.18), in: Capsule())
-            ChecksSummary(checks: pr.checks)
-            Spacer()
-            HeadIntelButton(review: review)
-            CheckoutMenu(ws: ws, review: review).controlSize(.small)
+            ChecksSummary(checks: pr.checks).fixedSize()
+            Spacer(minLength: 4)
+            // Labels give way to icons as the sidebar narrows; nothing wraps.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    HeadIntelButton(review: review).fixedSize()
+                    CheckoutMenu(ws: ws, review: review).controlSize(.small)
+                }
+                HStack(spacing: 6) {
+                    HeadIntelButton(review: review).fixedSize()
+                    CheckoutMenu(ws: ws, review: review, compact: true).controlSize(.small)
+                }
+                HStack(spacing: 6) {
+                    HeadIntelButton(review: review, compact: true).fixedSize()
+                    CheckoutMenu(ws: ws, review: review, compact: true).controlSize(.small)
+                }
+            }
         }
+        .lineLimit(1)
         Text(pr.title).font(.headline).lineLimit(3)
         HStack(spacing: 4) {
             Text(verbatim: "\(pr.author) → \(pr.baseRef)")
@@ -551,6 +568,8 @@ struct LowSignalRow: View {
 /// Starts or shows the review head's own rust-analyzer.
 struct HeadIntelButton: View {
     @Bindable var review: ReviewSession
+    /// An icon or dot without words, for a narrow sidebar.
+    var compact = false
     var body: some View {
         let _ = review.headIntelVersion
         if review.afterIsWorkingCopy || review.tracksWorkingCopy || !review.files.contains(where: { $0.path.hasSuffix(".rs") }) {
@@ -559,12 +578,14 @@ struct HeadIntelButton: View {
             TimelineView(.periodic(from: .now, by: 2)) { _ in
                 HStack(spacing: 3) {
                     Circle().fill(h.server.status == .ready ? Color.green : h.server.status.isUsable ? .yellow : .gray).frame(width: 6, height: 6)
-                    Text(h.server.status == .ready ? "head indexed" : "indexing head").font(.caption).foregroundStyle(.secondary)
+                    if !compact { Text(h.server.status == .ready ? "head indexed" : "indexing head").font(.caption).foregroundStyle(.secondary) }
                 }
                 .help("This PR's own rust-analyzer: \(h.server.status.label). Symbols in PR files are answered about the PR's code.")
             }
         } else {
-            Button("Index head") { Task { await review.startHeadIntel() } }
+            Button { Task { await review.startHeadIntel() } } label: {
+                if compact { Image(systemName: "cpu") } else { Text("Index head") }
+            }
                 .buttonStyle(.link).font(.caption)
                 .help("Start a rust-analyzer on this PR's head so answers come from the PR's own code (a second full index)")
         }
