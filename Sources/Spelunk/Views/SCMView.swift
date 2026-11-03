@@ -71,18 +71,7 @@ struct ChangeGraphView: View {
                 Task { await scm.select(scm.rows.first { $0.change?.id == id }?.change) }
             })) {
                 ForEach(scm.rows) { row in
-                    if let c = row.change {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ChangeRow(graph: row.graph, change: c, kind: scm.kind)
-                            if scm.selectedID == c.id { selectedDetail(c, graph: row.graph) }
-                        }
-                        .tag(c.id)
-                        .contextMenu { changeMenu(c) }
-                    } else {
-                        Text(row.graph).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
-                            .lineLimit(1).frame(height: 12)
-                            .selectionDisabled()
-                    }
+                    if let c = row.change { graphRow(row.layout, c) }
                 }
             }
             .listStyle(.sidebar)
@@ -150,8 +139,24 @@ struct ChangeGraphView: View {
         .padding(.horizontal, 10).padding(.bottom, 8)
     }
 
+    func graphRow(_ layout: GraphLayout, _ c: SCMService.Change) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ChangeRow(change: c, kind: scm.kind)
+            if scm.selectedID == c.id { selectedDetail(c) }
+        }
+        .padding(.leading, GraphLanes.width(layout) + 4)
+        .padding(.vertical, 3)
+        .background(alignment: .leading) {
+            GraphLanes(layout: layout, workingCopy: c.isWorkingCopy, immutable: c.isImmutable)
+                .frame(width: GraphLanes.width(layout))
+        }
+        .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
+        .tag(c.id)
+        .contextMenu { changeMenu(c) }
+    }
+
     @ViewBuilder
-    func selectedDetail(_ c: SCMService.Change, graph: String) -> some View {
+    func selectedDetail(_ c: SCMService.Change) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Button("Review") { ws.reviewChange(c) }
@@ -165,7 +170,6 @@ struct ChangeGraphView: View {
                 FileStatusRow(file: f) { ws.reviewChange(c, focusPath: f.path) }
             }
         }
-        .padding(.leading, CGFloat(graph.count) * 6.5 + 4)
         .padding(.vertical, 4)
     }
 
@@ -201,13 +205,11 @@ struct ChangeGraphView: View {
 }
 
 struct ChangeRow: View {
-    let graph: String
     let change: SCMService.Change
     let kind: VCSKind
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(graph).font(.system(size: 11, design: .monospaced)).foregroundStyle(change.isWorkingCopy ? Color.green : .secondary)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(kind == .jj ? change.changeId : change.commitId)
@@ -337,5 +339,70 @@ struct PRRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Draws one row's slice of the commit graph at the row's full height, so lanes join the rows
+/// above and below. The node sits level with the row's first line.
+struct GraphLanes: View {
+    let layout: GraphLayout
+    var workingCopy = false
+    var immutable = false
+
+    static let lane: CGFloat = 12
+    static let nodeY: CGFloat = 11
+    static func width(_ l: GraphLayout) -> CGFloat { CGFloat(max(1, l.width)) * lane + 2 }
+    static func x(_ i: Int) -> CGFloat { CGFloat(i) * lane + lane / 2 }
+
+    static let palette: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .yellow, .indigo]
+    static func color(_ i: Int) -> Color { palette[i % palette.count].opacity(0.75) }
+
+    var body: some View {
+        Canvas { ctx, size in
+            let h = size.height, y0 = Self.nodeY, nx = Self.x(layout.node)
+            func stroke(_ p: Path, _ lane: Int, dashed: Bool = false) {
+                ctx.stroke(p, with: .color(Self.color(lane)),
+                           style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: dashed ? [3, 3] : []))
+            }
+            for t in layout.through {
+                stroke(Path { $0.move(to: CGPoint(x: Self.x(t), y: 0)); $0.addLine(to: CGPoint(x: Self.x(t), y: h)) }, t)
+            }
+            if layout.incoming {
+                stroke(Path { $0.move(to: CGPoint(x: nx, y: 0)); $0.addLine(to: CGPoint(x: nx, y: y0)) }, layout.node)
+            }
+            for m in layout.merges {
+                stroke(Path { p in
+                    p.move(to: CGPoint(x: Self.x(m), y: 0))
+                    p.addCurve(to: CGPoint(x: nx, y: y0), control1: CGPoint(x: Self.x(m), y: y0 * 0.7), control2: CGPoint(x: nx, y: y0 * 0.3))
+                }, m)
+            }
+            for e in layout.outgoing {
+                let ex = Self.x(e.lane)
+                stroke(Path { p in
+                    p.move(to: CGPoint(x: nx, y: y0))
+                    if e.lane == layout.node {
+                        p.addLine(to: CGPoint(x: nx, y: h))
+                    } else {
+                        let bend = min(h, y0 + 14)
+                        p.addCurve(to: CGPoint(x: ex, y: bend), control1: CGPoint(x: nx, y: y0 + 8), control2: CGPoint(x: ex, y: bend - 8))
+                        p.addLine(to: CGPoint(x: ex, y: h))
+                    }
+                }, e.lane, dashed: e.elided)
+            }
+            if layout.stub {
+                stroke(Path { $0.move(to: CGPoint(x: nx, y: y0)); $0.addLine(to: CGPoint(x: nx, y: min(h, y0 + 14))) }, layout.node, dashed: true)
+            }
+            let r: CGFloat = workingCopy ? 4.5 : 3.5
+            let dot = Path(ellipseIn: CGRect(x: nx - r, y: y0 - r, width: r * 2, height: r * 2))
+            if workingCopy {
+                ctx.fill(dot, with: .color(.green))
+            } else if immutable {
+                ctx.fill(Path(CGRect(x: nx - 3, y: y0 - 3, width: 6, height: 6)).applying(
+                    CGAffineTransform(translationX: nx, y: y0).rotated(by: .pi / 4).translatedBy(x: -nx, y: -y0)), with: .color(.secondary))
+            } else {
+                ctx.fill(dot, with: .color(Color(nsColor: .windowBackgroundColor)))
+                ctx.stroke(dot, with: .color(Self.color(layout.node)), lineWidth: 1.5)
+            }
+        }
     }
 }

@@ -28,7 +28,7 @@ final class SCMService {
 
     struct GraphRow: Identifiable, Hashable {
         var id: Int
-        var graph: String
+        var layout: GraphLayout
         var change: Change?
     }
 
@@ -61,6 +61,7 @@ final class SCMService {
         "change_id.short(8)", "commit_id.short(10)", "description.first_line()", "author.email()",
         "committer.timestamp().ago()", "bookmarks.join(\" \")", "if(current_working_copy, \"@\")",
         "if(empty, \"empty\")", "if(conflict, \"conflict\")", "if(immutable, \"immutable\")",
+        "commit_id.short(12)", "parents.map(|c| c.commit_id().short(12)).join(\",\")",
     ].map { "\"\(sep)\" ++ \($0)" }.joined(separator: " ++ ") + " ++ \"\\n\""
 
     func refresh(kind: VCSKind) async {
@@ -75,26 +76,39 @@ final class SCMService {
     }
 
     private func refreshJJ() async {
-        var args = ["log", "--color", "never", "--limit", "300", "-T", Self.jjTemplate]
+        var args = ["log", "--no-graph", "--color", "never", "--limit", "300", "-T", Self.jjTemplate]
         if !revset.isEmpty { args += ["-r", revset] }
         do {
             let out = try await Shell.output("jj", args, cwd: root)
-            rows = parseGraph(out) { fields in
-                guard fields.count >= 10 else { return nil }
-                return Change(changeId: fields[0], commitId: fields[1], description: fields[2], author: fields[3], ago: fields[4],
-                              bookmarks: fields[5].split(separator: " ").map(String.init), isWorkingCopy: fields[6] == "@",
-                              isEmpty: fields[7] == "empty", hasConflict: fields[8] == "conflict", isImmutable: fields[9] == "immutable")
+            var entries: [(Change, String, [String])] = []
+            for line in out.split(separator: "\n") {
+                let f = line.components(separatedBy: Self.sep).dropFirst().map { $0 }
+                guard f.count >= 12 else { continue }
+                let c = Change(changeId: f[0], commitId: f[1], description: f[2], author: f[3], ago: f[4],
+                               bookmarks: f[5].split(separator: " ").map(String.init), isWorkingCopy: f[6] == "@",
+                               isEmpty: f[7] == "empty", hasConflict: f[8] == "conflict", isImmutable: f[9] == "immutable")
+                entries.append((c, f[10], f[11].split(separator: ",").map(String.init)))
             }
+            let elided = await nearestVisibleAncestors(entries.map { ($0.1, $0.2) })
+            let nodes = entries.map { e -> CommitGraph.Node in
+                let visible = Set(entries.map(\.1))
+                var ps: [(id: String, elided: Bool)] = e.2.filter { visible.contains($0) }.map { ($0, false) }
+                for a in elided[e.1] ?? [] where !ps.contains(where: { $0.id == a }) { ps.append((a, true)) }
+                if ps.isEmpty && !e.2.isEmpty { ps = e.2.map { ($0, false) } }
+                return CommitGraph.Node(id: e.1, parents: ps)
+            }
+            rows = zip(entries, CommitGraph.layout(nodes)).enumerated().map { i, pair in GraphRow(id: i, layout: pair.1, change: pair.0.0) }
             lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
         workingCopy = rows.compactMap(\.change).first { $0.isWorkingCopy }
         if workingCopy == nil, let wc = try? await Shell.output("jj", ["log", "--no-graph", "--color", "never", "-r", "@", "-T", Self.jjTemplate], cwd: root) {
-            workingCopy = parseGraph(wc) { f in
-                f.count >= 10 ? Change(changeId: f[0], commitId: f[1], description: f[2], author: f[3], ago: f[4], bookmarks: [],
-                                       isWorkingCopy: true, isEmpty: f[7] == "empty", hasConflict: f[8] == "conflict", isImmutable: false) : nil
-            }.first?.change
+            let f = wc.components(separatedBy: Self.sep).dropFirst().map { $0 }
+            if f.count >= 10 {
+                workingCopy = Change(changeId: f[0], commitId: f[1], description: f[2], author: f[3], ago: f[4], bookmarks: [],
+                                     isWorkingCopy: true, isEmpty: f[7] == "empty", hasConflict: f[8] == "conflict", isImmutable: false)
+            }
         }
         if !focusDescription { await loadDescription() }
         workingCopyFiles = parseSummary((try? await Shell.output("jj", ["diff", "--summary", "--color", "never", "-r", "@"], cwd: root)) ?? "")
@@ -107,17 +121,45 @@ final class SCMService {
         }
     }
 
-    private func refreshGit() async {
-        let fmt = ["%H", "%h", "%s", "%ae", "%ar", "%D"].map { Self.sep + $0 }.joined() + "%n"
-        do {
-            let out = try await Shell.output("git", ["log", "--graph", "--color=never", "-n", "300", "--format=\(fmt)"] + (revset.isEmpty ? ["--all"] : revset.split(separator: " ").map(String.init)), cwd: root)
-            let head = (try? await Shell.output("git", ["rev-parse", "HEAD"], cwd: root))?.trimmingCharacters(in: .whitespacesAndNewlines)
-            rows = parseGraph(out) { f in
-                guard f.count >= 6 else { return nil }
-                let refs = f[5].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                return Change(changeId: "", commitId: f[1], description: f[2], author: f[3], ago: f[4], bookmarks: refs,
-                              isWorkingCopy: f[0] == head, isEmpty: false, hasConflict: false, isImmutable: false)
+    /// For commits whose parents the log leaves out, the nearest ancestors it does show, so the
+    /// graph can connect them with an elided edge as `jj log` does.
+    private func nearestVisibleAncestors(_ commits: [(id: String, parents: [String])]) async -> [String: [String]] {
+        let visible = Set(commits.map(\.id))
+        let missing = commits.filter { c in c.parents.contains { !visible.contains($0) } }
+        guard !missing.isEmpty, visible.count <= 400 else { return [:] }
+        let set = visible.joined(separator: "|")
+        let root = self.root
+        return await withTaskGroup(of: (String, [String]).self) { group in
+            for c in missing {
+                let hidden = c.parents.filter { !visible.contains($0) }.joined(separator: "|")
+                group.addTask {
+                    let out = try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "--color", "never",
+                                                             "-r", "heads(::(\(hidden)) & (\(set)))", "-T", "commit_id.short(12) ++ \"\\n\""], cwd: root)
+                    return (c.id, (out ?? "").split(separator: "\n").map(String.init))
+                }
             }
+            var result: [String: [String]] = [:]
+            for await (id, ancestors) in group where !ancestors.isEmpty { result[id] = ancestors }
+            return result
+        }
+    }
+
+    private func refreshGit() async {
+        let fmt = ["%H", "%h", "%s", "%ae", "%ar", "%D", "%P"].map { Self.sep + $0 }.joined() + "%n"
+        do {
+            let out = try await Shell.output("git", ["log", "--topo-order", "--color=never", "-n", "300", "--format=\(fmt)"] + (revset.isEmpty ? ["--all"] : revset.split(separator: " ").map(String.init)), cwd: root)
+            let head = (try? await Shell.output("git", ["rev-parse", "HEAD"], cwd: root))?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var entries: [(Change, String, [String])] = []
+            for line in out.split(separator: "\n") {
+                let f = line.components(separatedBy: Self.sep).dropFirst().map { $0 }
+                guard f.count >= 7 else { continue }
+                let refs = f[5].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                let c = Change(changeId: "", commitId: f[1], description: f[2], author: f[3], ago: f[4], bookmarks: refs,
+                               isWorkingCopy: f[0] == head, isEmpty: false, hasConflict: false, isImmutable: false)
+                entries.append((c, f[0], f[6].split(separator: " ").map(String.init)))
+            }
+            let layout = CommitGraph.layout(entries.map { CommitGraph.Node(id: $0.1, parents: $0.2.map { ($0, false) }) })
+            rows = zip(entries, layout).enumerated().map { i, pair in GraphRow(id: i, layout: pair.1, change: pair.0.0) }
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -130,18 +172,6 @@ final class SCMService {
         }
     }
 
-    private func parseGraph(_ out: String, _ make: ([String]) -> Change?) -> [GraphRow] {
-        var rows: [GraphRow] = []
-        for (i, line) in out.split(separator: "\n", omittingEmptySubsequences: false).enumerated() where !line.isEmpty {
-            let parts = line.components(separatedBy: Self.sep)
-            if parts.count > 1 {
-                rows.append(GraphRow(id: i, graph: parts[0], change: make(Array(parts.dropFirst()))))
-            } else {
-                rows.append(GraphRow(id: i, graph: String(line), change: nil))
-            }
-        }
-        return rows
-    }
 
     private func parseSummary(_ out: String) -> [FileStatus] {
         out.split(separator: "\n").compactMap { l in

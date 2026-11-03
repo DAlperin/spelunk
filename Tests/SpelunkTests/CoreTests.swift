@@ -374,3 +374,23 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(jobs.map { String(decoding: $0, as: UTF8.self) }, ["{\"x\":1}", "{\"x\":2}"])
     }
 }
+
+final class CommitGraphTests: XCTestCase {
+    /// a has two parents b and c; both descend from d. Lanes stay in their column and rejoin.
+    func testMergeAndRejoin() {
+        let l = CommitGraph.layout([
+            .init(id: "a", parents: [("b", false), ("c", false)]),
+            .init(id: "b", parents: [("d", false)]),
+            .init(id: "c", parents: [("d", true)]),
+            .init(id: "d", parents: [("x", false)]),
+        ])
+        XCTAssertEqual(l[0].node, 0)
+        XCTAssertEqual(l[0].outgoing.map(\.lane), [0, 1])
+        XCTAssertEqual(l[1].node, 0)
+        XCTAssertEqual(l[1].through, [1])
+        XCTAssertEqual(l[2].node, 1)
+        XCTAssertEqual(l[2].outgoing, [.init(lane: 0, elided: true)])
+        XCTAssertEqual(l[3].node, 0)
+        XCTAssertTrue(l[3].stub)
+    }
+}
