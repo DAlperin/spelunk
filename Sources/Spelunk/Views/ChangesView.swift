@@ -145,7 +145,7 @@ struct ChangesView: View {
             }
             .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             if !review.ruleErrors.isEmpty {
-                Label("\(review.ruleErrors.count) rule errors", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+                Label(review.ruleErrors.count == 1 ? "1 rule error" : "\(review.ruleErrors.count) rule errors", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                     .onTapGesture { RulesFiles.openUserRules() }
                     .help(review.ruleErrors.joined(separator: "\n"))
             }

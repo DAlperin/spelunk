@@ -25,13 +25,17 @@ private struct Note: View {
 }
 
 private struct GeneralSettings: View {
+    @State private var convertResult: String?
+
     var body: some View {
         Form {
             Section("Review rules") {
                 HStack {
                     Button("Edit My Rules…") { RulesFiles.openUserRules() }
                     Button("View Default Rules") { RulesFiles.openDefaults() }
+                    Button("Convert Old Rules Files") { convertResult = RulesFiles.convertLegacy(root: nil) }
                 }
+                if let convertResult { Note(convertResult) }
                 Note("Rules decide each hunk's tier. Your rules run first, then a repository's .spelunk/review.rules, then the defaults; the first match wins.")
             }
             Section("Windows") {

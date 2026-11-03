@@ -14,7 +14,8 @@ material (a command's output, a plot, a Claude summary) to matching hunks.
 
 Opening a rules file that does not exist creates it from a commented template that lists the syntax.
 Files are re-read when their modification time changes. Parse errors appear above the review list as
-"N rule errors"; hover for the messages, each prefixed with the file and line.
+"N rule errors"; hover for the messages, each prefixed with the file and line. A file still in the
+old line-based format also shows a note there (see [Old rule files](#old-rule-files)).
 
 ## Precedence
 
@@ -23,31 +24,43 @@ first matching rule that sets a tier decides the hunk's tier, so your rules can 
 repository's and both can override the defaults. A hunk no rule matches is Behavior, with the reason
 "code change".
 
-`disable "<reason>"` removes every rule whose reason is exactly that text from the files loaded
+`(disable "<reason>")` removes every rule whose reason is exactly that text from the files loaded
 after the one it appears in. A `disable` in your file affects the repository's file and the
 defaults; one in the repository's file affects the defaults. It does not affect rules in its own
 file, and it does not remove `attach` rules. Match the reason as written in the rule, before
 placeholders such as `{name}` are filled in.
 
-```
-disable "comment wording"
-disable "public API: {name}"
+```scheme
+(disable "comment wording")
+(disable "public API: {name}")
 ```
 
 ## File format
 
-A rule is a header line followed by indented condition lines (indent with spaces or a tab). All
-conditions must hold for the rule to match; `not` in front of a condition negates it.
+A rules file is a list of s-expressions. `;` starts a comment that runs to the end of the line.
 
-```
-rule <tier> "<reason>" [settled] [collect]
-  <condition>
-  not <condition>
+```scheme
+(rule <tier> "<reason>" [:settled] [:collect]
+  <condition>...)
+
+(define <name> <condition>)
+
+(disable "<reason>")
+
+(attach "<title>" [:auto] [:per file|hunk|change] [:model <alias>]
+  <condition>...
+  (run "<shell command>"))      ; or (claude "<prompt>")
 ```
 
-Top-level lines are `rule`, `attach` or `disable`. `#` starts a comment at the start of a line or
-after whitespace, except inside a `/regex/`, a `"string"` or a parenthesized tree-sitter query, so
-`#[cfg(test)]` in a regex and `#eq?` in a query are safe.
+A rule matches when all of its conditions hold. Values are written as:
+
+| Value | Written as |
+|---|---|
+| Strings: reasons, titles, globs, commands, prompts, `llm` questions, tree-sitter queries | `"double quoted"`, with `\"` for a quote and `\\` for a backslash. Any other backslash is kept, so `"\."` is backslash-dot. |
+| Regexes | `/like this/` on one line, with `\/` for a slash inside. Add `i` after the closing slash for case-insensitive matching. `^` and `$` match at line boundaries. |
+| Names: tiers, file kinds, hunk facts, languages, tree-sitter node kinds, operators | bare words: `critical`, `added`, `comments-only`, `rust`, `await_expression`, `>=` |
+| Numbers | `10` |
+| Options | words starting with a colon: `:settled`, `:collect`, `:auto`, `:per hunk`, `:model sonnet`, `:depth 2` |
 
 ### Tiers
 
@@ -64,12 +77,12 @@ after whitespace, except inside a `/regex/`, a `"string"` or a parenthesized tre
 Important tiers are reviewed one hunk at a time and count toward review progress. Low-signal hunks
 are listed together in a "Low signal" box with a Mark viewed button.
 
-### Flags
+### Options
 
-| Flag | Effect |
+| Option | Effect |
 |---|---|
-| `settled` | The hunk is kept out of Claude's quick classification pass, so the rule's tier stands unless you run deep triage. |
-| `collect` | When an earlier rule already decided the hunk's tier and this rule matches with the same tier, its reason is added. This is how several critical risk signals are listed together. |
+| `:settled` | The hunk is kept out of Claude's quick classification pass, so the rule's tier stands unless you run deep triage. |
+| `:collect` | When an earlier rule already decided the hunk's tier and this rule matches with the same tier, its reason is added. This is how several critical risk signals are listed together. |
 
 ### Reason placeholders
 
@@ -83,18 +96,44 @@ are listed together in a "Low signal" box with a Mark viewed button.
 
 ## Conditions
 
+### Combining conditions
+
+| Condition | Holds when |
+|---|---|
+| `(all c...)` | Every condition holds. A rule's own condition list is an `all`. |
+| `(any c...)` | At least one condition holds. |
+| `(not c)` | The condition does not hold. |
+| a defined name | The condition given to `define` under that name holds. |
+
+`(define <name> <condition>)` names a condition for the rest of the file it is in. A name has to be
+defined before it is used, and cannot be the name of a built-in condition.
+
+```scheme
+(define risky (any (code touches /\bunsafe\b/) (path "**/ffi/**")))
+
+(rule critical "unsafe or FFI code outside tests"
+  risky
+  (not (file test)))
+```
+
+Conditions that need an answer Spelunk does not have yet (code intelligence and `llm` conditions,
+below) are three-valued: true, false or not yet known. `all` is false as soon as one part is false,
+`any` is true as soon as one part is true, and `not` of an unknown is unknown. Spelunk only asks
+for an answer when it could still change whether the rule matches, so in
+`(any (lang rust) (refs > 5))` a Rust file never waits for references.
+
 ### Paths, files and hunk shape
 
 | Condition | Holds when |
 |---|---|
-| `path ~ <glob>` | The repository-relative path matches the whole glob. `*` matches within one path segment, `**` across segments (`**/` also matches no directory), `?` one character, `{a,b}` either alternative. |
-| `lang <name>[,<name>…]` | The file's language is one of these (`rust`, `markdown`, `toml`, `swift`, …, or an installed grammar's name). |
-| `file added\|deleted\|renamed\|modified` | The file has that status in the diff. |
-| `file generated` | The path looks generated or vendored: `Cargo.lock`, `*.snap`, `*.pb.rs`, `*.generated.rs`, a `generated/` or `vendor/` directory, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`. |
-| `file test` | The path looks like a test: a `tests`, `test`, `benches`, `testdata` or `fixtures` directory, or a name ending `_test.rs`, `_tests.rs`, `.snap`, `.slt`, `.td`, or `tests.rs`. |
-| `hunk <fact>` | The hunk has that fact (table below). |
-| `lines <op> N` | Added plus removed lines compare to N. |
-| `comment-words <op> N` | The number of words that differ between added and removed comments compares to N. |
+| `(path "<glob>"...)` | The repository-relative path matches the whole of one of the globs. `*` matches within one path segment, `**` across segments (`**/` also matches no directory), `?` one character, `{a,b}` either alternative. |
+| `(lang <name>...)` | The file's language is one of these (`rust`, `markdown`, `toml`, `swift`, …, or an installed grammar's name). |
+| `(file added\|deleted\|renamed\|modified)` | The file has that status in the diff. |
+| `(file generated)` | The path looks generated or vendored: `Cargo.lock`, `*.snap`, `*.pb.rs`, `*.generated.rs`, a `generated/` or `vendor/` directory, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`. |
+| `(file test)` | The path looks like a test: a `tests`, `test`, `benches`, `testdata` or `fixtures` directory, or a name ending `_test.rs`, `_tests.rs`, `.snap`, `.slt`, `.td`, or `tests.rs`. |
+| `(hunk <fact>)` | The hunk has that fact (table below). |
+| `(lines <op> N)` | Added plus removed lines compare to N. |
+| `(comment-words <op> N)` | The number of words that differ between added and removed comments compares to N. |
 
 `<op>` is one of `<`, `<=`, `>`, `>=`, `==`.
 
@@ -119,35 +158,33 @@ Hunk facts. Most rely on the Rust lexer and parse, so they only hold in Rust fil
 
 | Condition | Holds when |
 |---|---|
-| `code touches /regex/` | The regex matches changed code with comments removed and string contents blanked, so prose cannot trigger it. Tokens are joined without spaces except between adjacent words, so `/\.unwrap\(\)/` matches `x.unwrap()`. |
-| `code adds /regex/` | The regex matches more often in added code than in removed code. |
-| `code removes /regex/` | The regex matches more often in removed code than in added code. |
-| `comment touches /regex/` | The regex matches the changed comment text. |
-| `text touches /regex/` | The regex matches the raw changed lines. |
-| `ts touches <kind>[,<kind>…]` | A tree-sitter node of one of these kinds overlaps the changed lines, on either side. |
-| `ts query <query>` | A capture of the tree-sitter query overlaps the changed lines, on either side. |
+| `(code touches /regex/)` | The regex matches changed code with comments removed and string contents blanked, so prose cannot trigger it. Tokens are joined without spaces except between adjacent words, so `/\.unwrap\(\)/` matches `x.unwrap()`. |
+| `(code adds /regex/)` | The regex matches more often in added code than in removed code. |
+| `(code removes /regex/)` | The regex matches more often in removed code than in added code. |
+| `(comment touches /regex/)` | The regex matches the changed comment text. |
+| `(text touches /regex/)` | The regex matches the raw changed lines. |
+| `(ts touches <kind>...)` | A tree-sitter node of one of these kinds overlaps the changed lines, on either side. |
+| `(ts query "<query>")` | A capture of the tree-sitter query overlaps the changed lines, on either side. |
 
-Regexes are written `/like this/`. Add `i` after the closing slash for case-insensitive matching.
-`^` and `$` match at line boundaries.
 
 ### Code intelligence conditions
 
 These ask about the item the hunk changes (its enclosing function or type), using rust-analyzer when
 it is ready, otherwise the SCIP index, tree-sitter and text search, in the same order as navigation.
-They are evaluated in a second pass after the review loads, and only for hunks whose other
-conditions already hold, so pairing them with a cheap condition such as `path` or `hunk` limits how
-many hunks are looked up. They apply to Rust files only. When no provider can resolve the item, the rule does not match, whether or not the condition
+They are evaluated in a second pass after the review loads, and only where the answer could still
+decide the rule, so pairing them with a cheap condition such as `path` or `hunk` limits how many
+hunks are looked up. They apply to Rust files only. When no provider can resolve the item, the rule does not match, whether or not the condition
 is negated.
 
 | Condition | Holds when |
 |---|---|
-| `refs <op> N` | The number of references to the item compares to N. |
-| `callers <op> N` | The number of direct callers compares to N. |
-| `callers in <glob>` | A direct caller is in a file matching the glob. |
-| `called-from /regex/ [depth N]` | A caller up to N levels away (default 3, at most 6) has a name matching the regex. |
-| `calls /regex/` | The changed function calls something whose name matches. |
-| `signature /regex/` | The item's signature, from hover, matches. |
-| `llm "<yes/no question>"` | A model answers yes for this hunk. |
+| `(refs <op> N)` | The number of references to the item compares to N. |
+| `(callers <op> N)` | The number of direct callers compares to N. |
+| `(callers in "<glob>")` | A direct caller is in a file matching the glob. |
+| `(called-from /regex/ [:depth N])` | A caller up to N levels away (default 3, at most 6) has a name matching the regex. |
+| `(calls /regex/)` | The changed function calls something whose name matches. |
+| `(signature /regex/)` | The item's signature, from hover, matches. |
+| `(llm "<yes/no question>")` | A model answers yes for this hunk. |
 
 `llm` questions go to the model set for rule questions (default `sonnet`, low effort; change it in
 Settings › Claude or the Triage menu). Each question is sent in batches covering the hunks that need
@@ -158,48 +195,50 @@ same question twice.
 
 From the defaults:
 
-```
-rule mechanical "lockfile" settled
-  path ~ **/{Cargo.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,go.sum,poetry.lock,Gemfile.lock}
+```scheme
+(rule mechanical "lockfile" :settled
+  (path "**/{Cargo.lock,package-lock.json,yarn.lock,pnpm-lock.yaml,go.sum,poetry.lock,Gemfile.lock}"))
 
-rule critical "safety / invariant comment changed"
-  hunk comments-only
-  comment touches /SAFETY|INVARIANT|#\s*(Safety|Panics)|\bunsafe\b|\bmust (not|never|always|only)\b/
+(rule critical "safety / invariant comment changed"
+  (hunk comments-only)
+  (comment touches /SAFETY|INVARIANT|#\s*(Safety|Panics)|\bunsafe\b|\bmust (not|never|always|only)\b/))
 
-rule critical "adds panic path" collect
-  code adds /\.unwrap\(\)|\.expect\(|panic!|unreachable!|todo!|unimplemented!/
+(rule critical "adds panic path" :collect
+  (code adds /\.unwrap\(\)|\.expect\(|panic!|unreachable!|todo!|unimplemented!/))
 
-rule critical "used in {callers} places" collect
-  hunk public-signature
-  lang rust
-  callers > 10
+(rule critical "used in {callers} places" :collect
+  (hunk public-signature)
+  (lang rust)
+  (callers > 10))
 
-rule note "panic replaced with error"
-  code removes /\.unwrap\(\)|\.expect\(|panic!|unreachable!/
-  code adds /\?/
+(rule note "panic replaced with error"
+  (code removes /\.unwrap\(\)|\.expect\(|panic!|unreachable!/)
+  (code adds /\?/))
 ```
 
 Your own, following the template's examples:
 
-```
-rule critical "design doc" collect
-  path ~ doc/developer/design/**
+```scheme
+(rule critical "design doc" :collect
+  (path "doc/developer/design/**"))
 
-rule critical "lock held across await"
-  ts query (await_expression) @a
-  code touches /\.lock\(\)/
+(define takes-lock (code touches /\.lock\(\)/))
 
-rule critical "widely used: {refs} references" collect
-  hunk public-signature
-  refs > 25
+(rule critical "lock held across await"
+  (ts query "(await_expression) @a")
+  takes-lock)
 
-rule critical "reachable from the peek path"
-  lang rust
-  called-from /sequence_peek|handle_command/ depth 3
+(rule critical "widely used: {refs} references" :collect
+  (hunk public-signature)
+  (any (refs > 25) (callers in "src/adapter/**")))
 
-rule critical "lock release changes"
-  code touches /\.lock\(\)|drop\(/
-  llm "Does this change when a lock is released?"
+(rule critical "reachable from the peek path"
+  (lang rust)
+  (called-from /sequence_peek|handle_command/ :depth 3))
+
+(rule critical "lock release changes"
+  (any takes-lock (code touches /drop\(/))
+  (llm "Does this change when a lock is released?"))
 ```
 
 ## Attachments
@@ -208,24 +247,22 @@ An `attach` rule adds a review artifact to matching hunks instead of setting a t
 appear in the change context pane for the selected hunk, and hunks that have one show a paperclip in
 the list.
 
-```
-attach "<title>" [auto] [per file|hunk|change]
-  <conditions>
-  run <shell command>
-  claude "<prompt>"
-  model <alias>
+```scheme
+(attach "<title>" [:auto] [:per file|hunk|change] [:model <alias>]
+  <condition>...
+  (run "<shell command>"))      ; or (claude "<prompt>")
 ```
 
-An attachment needs either `run` or `claude`. Its conditions are the same as a rule's, including
+An attachment needs one `(run ...)` or `(claude ...)`. Its conditions are the same as a rule's, including
 code intelligence and `llm` conditions.
 
 | Part | Meaning |
 |---|---|
-| `per file` | One attachment per matching file (the default). |
-| `per hunk` | One per matching hunk, labeled with the hunk's enclosing item. |
-| `per change` | One for all matching hunks together. |
-| `auto` | Runs without a click when Settings › Review › "Run attachments marked auto" is on. Otherwise the card has a Run (or Generate) button. |
-| `model <alias>` | The model for a `claude` attachment; defaults to the Attachments model in Settings › Claude (`sonnet`). |
+| `:per file` | One attachment per matching file (the default). |
+| `:per hunk` | One per matching hunk, labeled with the hunk's enclosing item. |
+| `:per change` | One for all matching hunks together. |
+| `:auto` | Runs without a click when Settings › Review › "Run attachments marked auto" is on. Otherwise the card has a Run (or Generate) button. |
+| `:model <alias>` | The model for a `claude` attachment; defaults to the Attachments model in Settings › Claude (`sonnet`). |
 
 ### `run` commands
 
@@ -249,14 +286,14 @@ Files the command writes to `{out}` are shown on the card: images and PDFs inlin
 open), Markdown, text, CSV, log and JSON files inline, and anything else as a link that opens it. Standard output is shown as text, unless it is structured
 output (below).
 
-```
-attach "Benchmark plot" per file
-  path ~ **/benches/**
-  run scripts/bench-boxplot.sh {file} {out}
+```scheme
+(attach "Benchmark plot" :per file
+  (path "**/benches/**")
+  (run "scripts/bench-boxplot.sh {file} {out}"))
 
-attach "Component render" per file
-  path ~ **/*.tsx
-  run npx tsx scripts/render-component.ts {file} {out}/render.png
+(attach "Component render" :per file
+  (path "**/*.tsx")
+  (run "npx tsx scripts/render-component.ts {file} {out}/render.png"))
 ```
 
 ### `claude` prompts
@@ -265,11 +302,11 @@ The prompt runs as a read-only Claude session (Read, Grep and Glob) in the head 
 adds the change title, the list of changed files, the matched hunks and the path of a file holding
 the full diff. `{name}` and `{file}` in the prompt are replaced as for commands.
 
-```
-attach "Usage examples" per hunk
-  path ~ **/graphql/**
-  llm "Does this hunk add a new GraphQL resolver?"
-  claude "Show a basic query for each new resolver and two edge cases, with the expected response shape."
+```scheme
+(attach "Usage examples" :per hunk
+  (path "**/graphql/**")
+  (llm "Does this hunk add a new GraphQL resolver?")
+  (claude "Show a basic query for each new resolver and two edge cases, with the expected response shape."))
 ```
 
 ### Structured output
@@ -304,14 +341,14 @@ its standard output is a JSON object of this shape, the card renders it instead 
 
 ### Caching
 
-An attachment's result is keyed by the rule's text and the content of the hunks it matched. It is
+An attachment's result is keyed by the text of its `(attach ...)` form and the content of the hunks it matched. It is
 reused, across reopens and between reviews, until either changes. Use Regenerate in the card's menu
 to run it again. Failed runs are not cached.
 
 ## Trusting repository commands
 
 A `run` command in `.spelunk/review.rules` comes with the code under review, so whoever wrote that
-code controls it. Spelunk does not run one, even when marked `auto`, until you trust the repository:
+code controls it. Spelunk does not run one, even when marked `:auto`, until you trust the repository:
 the card shows "Run Repository Command…", and clicking it shows the command and offers "Trust This
 Repository's Rule Commands". Trust is recorded per repository path (in the `rules.trustedRepos`
 user default) and covers every command in that file from then on, including later edits.
@@ -324,3 +361,19 @@ Commands in your own rules file, and `claude` attachments from either file, do n
 from a sentence. It can read the repository and is given this syntax and the defaults. The draft is
 checked with the real parser before you can add it to your rules or to the repository's file, and
 the review re-classifies once it is added.
+
+## Old rule files
+
+Rules used to be written one condition per line:
+
+```text
+rule critical "design doc" collect
+  path ~ doc/developer/design/**
+  not hunk in-test
+```
+
+A file in that format still loads: it is converted as it is read, and "N rule errors" includes a
+note saying so. The palette's Convert Rules Files (or Settings › General › Convert Old Rules Files)
+rewrites it. Your file keeps the old text beside it as `review.rules.old`; a repository's file is
+rewritten in place, since version control has the old text. Comments are kept, and a line that
+cannot be converted becomes a comment and is reported.

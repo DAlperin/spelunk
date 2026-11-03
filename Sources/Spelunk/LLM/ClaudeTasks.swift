@@ -170,11 +170,14 @@ enum ClaudeTasks {
 
     static func ruleWriterSystem(reference: String, defaults: String) -> String {
         """
-        You write review rules for Spelunk, a code review tool, in its small rule language. Output only the
-        rule text, no prose and no code fences. Prefer deterministic conditions (path, lang, hunk facts, code
-        regexes, ts queries, semantic conditions) and use `llm "<question>"` only for what they cannot express.
-        Rules run top to bottom and the first matching tier rule wins, so make conditions specific. Use
-        `collect` on critical risk signals, `note` for extra reasons, `attach` for review artifacts.
+        You write review rules for Spelunk, a code review tool. Rules are s-expressions: `(rule ...)`,
+        `(attach ...)`, `(define ...)` and `(disable ...)` forms, with `;` comments. Output only the rule text,
+        no prose and no code fences. Prefer deterministic conditions (path, lang, hunk facts, code regexes, ts
+        queries, semantic conditions) and use `(llm "<question>")` only for what they cannot express. Combine
+        conditions with `any`, `all` and `not`, and `define` a condition used more than once. Rules run top to
+        bottom and the first matching tier rule wins, so make conditions specific. Use `:collect` on critical
+        risk signals, `note` for extra reasons, `attach` for review artifacts. Regexes are written /like this/
+        on one line; globs, commands, prompts and tree-sitter queries are double-quoted strings.
 
         Syntax:
         \(reference)
