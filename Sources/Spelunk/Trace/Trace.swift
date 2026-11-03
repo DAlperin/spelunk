@@ -79,16 +79,15 @@ final class TraceStore {
         get { currentStepID.flatMap { id in active?.steps.firstIndex { $0.id == id } } }
         set { currentStepID = newValue.flatMap { active?.steps[safe: $0]?.id } }
     }
-    private let url: URL
+    @ObservationIgnored private let sync: ItemSync<Trace>
 
     init(root: URL) {
-        url = AppPaths.support(for: root).appendingPathComponent("traces.json")
-        if let d = try? Data(contentsOf: url) {
-            let dec = JSONDecoder()
-            dec.dateDecodingStrategy = .iso8601
-            traces = (try? dec.decode([Trace].self, from: d)) ?? []
+        sync = ItemSync(kind: "trace", root: root, legacyFile: "traces.json")
+        Task {
+            let loaded = await sync.load()
+            traces = loaded + traces.filter { t in !loaded.contains { $0.id == t.id } }
+            if activeID == nil { activeID = traces.first?.id }
         }
-        activeID = traces.first?.id
     }
 
     var active: Trace? {
@@ -114,10 +113,8 @@ final class TraceStore {
     @ObservationIgnored private var pendingSave: Task<Void, Never>?
 
     func writeNow() {
-        let enc = JSONEncoder()
-        enc.dateEncodingStrategy = .iso8601
-        enc.outputFormatting = [.prettyPrinted]
-        if let d = try? enc.encode(traces) { try? d.write(to: url, options: .atomic) }
+        pendingSave?.cancel()
+        sync.sync(traces)
     }
 
     @discardableResult
@@ -218,11 +215,14 @@ struct Bookmark: Codable, Identifiable, Hashable, Sendable {
 @MainActor @Observable
 final class BookmarkStore {
     var items: [Bookmark] = []
-    private let url: URL
+    @ObservationIgnored private let sync: ItemSync<Bookmark>
 
     init(root: URL) {
-        url = AppPaths.support(for: root).appendingPathComponent("bookmarks.json")
-        if let d = try? Data(contentsOf: url) { items = (try? JSONDecoder().decode([Bookmark].self, from: d)) ?? [] }
+        sync = ItemSync(kind: "bookmark", root: root, legacyFile: "bookmarks.json")
+        Task {
+            let loaded = await sync.load()
+            items = items + loaded.filter { b in !items.contains { $0.id == b.id } }
+        }
     }
 
     func toggle(_ b: Bookmark) {
@@ -238,5 +238,5 @@ final class BookmarkStore {
 
     func contains(path: String, line: Int) -> Bool { items.contains { $0.location.path == path && $0.location.line == line } }
 
-    private func save() { if let d = try? JSONEncoder().encode(items) { try? d.write(to: url, options: .atomic) } }
+    private func save() { sync.sync(items) }
 }

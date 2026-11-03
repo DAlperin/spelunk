@@ -10,6 +10,7 @@ import SQLite3
 ///   resolved review identity (a PR number, a jj change id, a commit), never by a relative name.
 /// - `drafts`: pending review comments, stamped with the pull request and commit they were written for.
 /// - `jobs`: finished Claude asks and traces.
+/// - `items`: code paths and bookmarks, one row each, ordered by position.
 actor Store {
     private var db: OpaquePointer?
     let url: URL
@@ -48,6 +49,10 @@ actor Store {
                              created REAL NOT NULL);
         CREATE INDEX drafts_review ON drafts(review);
         CREATE TABLE jobs (id TEXT PRIMARY KEY, value TEXT NOT NULL, created REAL NOT NULL);
+        """,
+        """
+        CREATE TABLE items (kind TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, position REAL NOT NULL,
+                            PRIMARY KEY (kind, id));
         """,
     ]
 
@@ -226,6 +231,26 @@ actor Store {
 
     func deleteDrafts(_ ids: [String]) {
         transaction { for id in ids { exec("DELETE FROM drafts WHERE id = ?", [.text(id)]) } }
+    }
+
+    // MARK: Items
+
+    func items(_ kind: String) -> [Data] {
+        var out: [Data] = []
+        query("SELECT value FROM items WHERE kind = ? ORDER BY position", [.text(kind)]) { st in out.append(Data(Self.text(st, 0).utf8)) }
+        return out
+    }
+
+    /// Writes changed items and deletes removed ones in one transaction.
+    func syncItems(_ kind: String, upsert: [(id: String, value: Data, position: Double)], delete: [String]) {
+        transaction {
+            for u in upsert {
+                exec("INSERT INTO items(kind, id, value, position) VALUES (?,?,?,?) " +
+                     "ON CONFLICT(kind, id) DO UPDATE SET value = excluded.value, position = excluded.position",
+                     [.text(kind), .text(u.id), .text(String(decoding: u.value, as: UTF8.self)), .real(u.position)])
+            }
+            for id in delete { exec("DELETE FROM items WHERE kind = ? AND id = ?", [.text(kind), .text(id)]) }
+        }
     }
 
     // MARK: Jobs
