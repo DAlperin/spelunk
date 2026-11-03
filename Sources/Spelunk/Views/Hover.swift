@@ -12,6 +12,9 @@ extension Workspace {
     /// equivalent working-copy position. Cached per document, symbol and line.
     func hoverInfo(in d: SourceDocument, at p: SourcePos) async -> HoverInfo? {
         guard let (name, range) = d.word(at: p), name.first?.isLetter == true || name.first == "_" else { return nil }
+        // Keywords get the language's own documentation, which is noise while reading.
+        let off = d.lines.offset(of: range.start)
+        if let t = d.syntax.tokens.first(where: { NSLocationInRange(off, $0.range) }), t.kind == .keyword || t.kind == .selfKeyword { return nil }
         let key = "\(d.id)|\(name)|\(range.start.line)|\(range.start.col)"
         if let hit = hoverCache[key] { return hit }
         let target = intelTarget(d, name: name, range: range)
@@ -110,6 +113,8 @@ final class HoverController: NSObject, NSPopoverDelegate {
 
     func mouseMoved(at point: NSPoint) {
         guard Self.enabled, let tv = textView else { return }
+        // Nothing for code under the palette or another overlay, or while a sheet is up.
+        if tv.coordinator?.ws.palette != nil || tv.window?.attachedSheet != nil { hide(); return }
         // While a card is up, the watcher decides when it goes.
         if popover != nil { return }
         let idx = tv.characterIndexForInsertion(at: point)

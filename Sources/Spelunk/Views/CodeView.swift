@@ -25,7 +25,18 @@ struct CodeView: NSViewRepresentable {
         layout.addTextContainer(container)
         let tv = SourceTextView(frame: .zero, textContainer: container)
         tv.coordinator = context.coordinator
-        tv.isEditable = false
+        // Editable so the insertion point shows and moves with the keyboard; every edit is refused
+        // in `shouldChangeText`, so the text never changes.
+        tv.isEditable = true
+        tv.allowsUndo = false
+        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.isContinuousSpellCheckingEnabled = false
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.isGrammarCheckingEnabled = false
+        tv.insertionPointColor = NSColor.controlAccentColor
+        tv.delegate = context.coordinator
         tv.isSelectable = true
         tv.isRichText = false
         tv.usesFindBar = true
@@ -113,6 +124,7 @@ struct CodeView: NSViewRepresentable {
             c.display = display
             c.load(display, into: tv, keepScroll: true)
         }
+        if ws.palette != nil { c.hover.hide() }
         c.diffMarkers = ws.diffMarkers(for: document)
         c.diagnostics = !secondary && document.isWorkingCopy ? (ws.clippy.byFile[document.path] ?? []) : []
         let markers = secondary ? (badges: [Int: Int](), pills: [Int: Int]()) : ws.pathMarkers(for: document)
@@ -133,7 +145,7 @@ struct CodeView: NSViewRepresentable {
             c.applyBackgrounds(selection: ws.selection, highlights: ws.highlightRanges)
             if c.revealToken != ws.revealRequest {
                 c.revealToken = ws.revealRequest
-                if let sel = ws.selection { c.reveal(sel) }
+                if let sel = ws.selection { c.reveal(sel); c.placeCaret(sel) }
             }
         }
         c.layoutBlocks()
@@ -155,7 +167,7 @@ struct CodeView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         /// Embedded views (threads, composer) and the display lines reserved for each.
         var blockSpecs: [(id: String, afterLine: Int)] = []
         private var blockHeights: [String: Int] = [:]
@@ -242,6 +254,29 @@ struct CodeView: NSViewRepresentable {
             self.secondary = secondary
         }
 
+        /// Set while the code moves the caret, so that does not count as the user moving it.
+        var movingCaret = false
+
+        /// The caret moved by keyboard or click: it becomes the workspace cursor.
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !secondary, !movingCaret, let tv = textView, let display else { return }
+            let r = tv.selectedRange()
+            guard r.location <= display.ns.length, let pos = display.realPos(display.lines.position(of: r.location)) else { return }
+            if ws.cursor != pos { ws.cursor = pos }
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool { false }
+
+        /// Puts the caret at a range's start without reporting it back as a user move.
+        func placeCaret(_ range: SourceRange) {
+            guard let tv = textView, let display else { return }
+            let off = display.displayOffset(range.start)
+            guard off <= (tv.textStorage?.length ?? 0) else { return }
+            movingCaret = true
+            tv.setSelectedRange(NSRange(location: off, length: 0))
+            movingCaret = false
+        }
+
         /// Split view: the main pane reports its top line; the old-side pane scrolls to match.
         func observeScrolling(_ clip: NSClipView) {
             if secondary {
@@ -317,7 +352,9 @@ struct CodeView: NSViewRepresentable {
                 lm.ensureLayout(for: tc)
                 tv.sizeToFit()
             }
+            movingCaret = true
             tv.setSelectedRange(NSRange(location: 0, length: 0))
+            movingCaret = false
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
             if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
@@ -508,6 +545,20 @@ final class SourceTextView: NSTextView {
             p.setLineDash([4, 3], count: 2, phase: 0)
             p.stroke()
         }
+    }
+
+    /// A 2 pt caret, easier to find in a read-mostly view than the default hairline.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        var r = rect
+        r.size.width = 2
+        super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
+        // The wider caret needs its extra column redrawn when it blinks off.
+        var r = invalidRect
+        r.size.width += 1
+        super.setNeedsDisplay(r, avoidAdditionalLayout: flag)
     }
 
     private var hoverArea: NSTrackingArea?

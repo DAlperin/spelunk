@@ -330,7 +330,8 @@ enum ReviewKeys {
     /// Whether the key window's focus accepts typing, in which case letters must go to it.
     @MainActor static func focusIsTextInput() -> Bool {
         guard let r = (NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible })?.firstResponder else { return false }
-        if let tv = r as? NSTextView { return tv.isEditable }
+        // The code view takes a caret but refuses edits, so review keys still apply there.
+        if let tv = r as? NSTextView { return tv.isEditable && !(tv is SourceTextView) }
         return r is NSTextField
     }
 }

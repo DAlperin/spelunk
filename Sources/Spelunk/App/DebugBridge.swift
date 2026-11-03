@@ -187,6 +187,28 @@ final class DebugBridge {
                 let h = NSScreen.screens.first?.frame.height ?? 0
                 Log.debug("screenpos: \(Int(sr.midX)) \(Int(h - sr.midY))")
             }
+        case "windowpos":
+            // windowpos <line>:<col>: the glyph's centre in points from the window's top-left, for clickat
+            if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let c = tv.coordinator, let d = c.display,
+               let lm = tv.layoutManager, let tc = tv.textContainer, let w = tv.window {
+                let off = d.displayOffset(pos(arg))
+                var r = lm.boundingRect(forGlyphRange: NSRange(location: lm.glyphIndexForCharacter(at: off), length: 1), in: tc)
+                r.origin.x += tv.textContainerInset.width; r.origin.y += tv.textContainerInset.height
+                let wr = tv.convert(r, to: nil)
+                Log.debug("windowpos: \(Int(wr.minX + 1)) \(Int(w.frame.height - wr.midY))")
+            }
+        case "keycode":
+            // keycode <n>: a key press by virtual key code (123 left, 124 right, 125 down, 126 up)
+            guard let w = mainWindow, let code = UInt16(arg) else { break }
+            let chars: [UInt16: Int] = [123: NSLeftArrowFunctionKey, 124: NSRightArrowFunctionKey, 125: NSDownArrowFunctionKey, 126: NSUpArrowFunctionKey]
+            let ch = String(Character(UnicodeScalar(chars[code] ?? 0) ?? " "))
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [.function, .numericPad], timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: w.windowNumber, context: nil, characters: ch, charactersIgnoringModifiers: ch,
+                                            isARepeat: false, keyCode: code) {
+                    NSApp.postEvent(e, atStart: false)
+                }
+            }
         case "hovershown":
             let shown = NSApp.windows.contains { $0.isVisible && $0.className.contains("Popover") }
             Log.debug("hovershown: \(shown)")
