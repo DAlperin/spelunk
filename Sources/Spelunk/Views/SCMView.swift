@@ -77,7 +77,7 @@ struct ChangeGraphView: View {
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 12)
         }
-        .task { await scm.refresh(kind: ws.vcs.kind) }
+        .task(id: ws.sidebarTab == .scm) { if ws.sidebarTab == .scm { await scm.refresh(kind: ws.vcs.kind) } }
         .onChange(of: scm.focusDescription) { if scm.focusDescription { descriptionFocused = true } }
         .alert(item: $confirm) { c in
             Alert(title: Text(c.title), message: Text(c.message),

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var ws: Workspace
+    @Environment(AppModel.self) var model
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,16 +12,21 @@ struct SidebarView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(8)
-            switch ws.sidebarTab {
-            case .changes:
-                ReviewTabsView(ws: ws)
-            case .files: FileTreeView(ws: ws)
-            case .search: SearchView(ws: ws)
-            case .scm: SCMView(ws: ws)
+            KeptTabs(selection: ws.sidebarTab, owner: ws, model: model) { [ws] tab in
+                // Content that does not fill the column stays at the top instead of centering.
+                AnyView(Self.content(tab, ws).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
             }
         }
-        // Content that does not fill the column stays at the top instead of centering.
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder static func content(_ tab: SidebarTab, _ ws: Workspace) -> some View {
+        switch tab {
+        case .changes: ReviewTabsView(ws: ws)
+        case .files: FileTreeView(ws: ws)
+        case .search: SearchView(ws: ws)
+        case .scm: SCMView(ws: ws)
+        }
     }
 }
 
@@ -88,6 +94,7 @@ struct FileTreeView: View {
                     .listStyle(.sidebar)
                     .onAppear { if follow || ws.revealInTreePending { reveal(proxy) } }
                     .onChange(of: ws.document?.path) { if follow { reveal(proxy) } }
+                    .onChange(of: ws.sidebarTab) { if ws.sidebarTab == .files, follow { reveal(proxy) } }
                     .onChange(of: follow) { if follow { reveal(proxy) } }
                     .onChange(of: ws.revealInTreePending) { if ws.revealInTreePending { reveal(proxy) } }
                 }
