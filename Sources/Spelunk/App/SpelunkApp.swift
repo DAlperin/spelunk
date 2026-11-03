@@ -6,6 +6,11 @@ struct SpelunkApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var model = AppModel()
 
+    init() {
+        // A child process launched to check a third-party grammar does only that.
+        GrammarProbe.runIfRequested()
+    }
+
     var body: some Scene {
         // One repository per window; opening a repository that already has a window brings it
         // forward. AppModel reopens the repositories that were open at quit, so SwiftUI's own

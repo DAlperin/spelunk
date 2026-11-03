@@ -163,6 +163,7 @@ enum SyntaxAnalyzer {
             return nil
         }
         let parser = Parser()
+        parser.timeout = GrammarProbe.parseTimeout
         guard (try? parser.setLanguage(lang)) != nil, let tree = parser.parse(text) else { return nil }
         return ParsedTree(tree: tree, language: lang, key: key)
     }

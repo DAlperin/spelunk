@@ -85,6 +85,10 @@ final class GrammarRegistry: @unchecked Sendable {
         let path = g.dylib.path
         let handle: UnsafeMutableRawPointer
         if let h = handles[path] { handle = h } else {
+            if let problem = GrammarProbe.check(dylib: g.dylib, symbol: g.spec.symbol, in: g.directory) {
+                g.error = "not loaded: \(problem)"
+                return
+            }
             guard let h = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
                 g.error = "dlopen failed: \(String(cString: dlerror()))"
                 return
@@ -271,6 +275,7 @@ enum DynamicSyntax {
     static func analyze(_ text: String, grammar g: LoadedGrammar) -> SyntaxInfo? {
         guard let lang = g.language else { return nil }
         let parser = Parser()
+        parser.timeout = GrammarProbe.parseTimeout
         guard (try? parser.setLanguage(lang)) != nil, let tree = parser.parse(text), let root = tree.rootNode else { return nil }
         var info = SyntaxInfo()
         info.parsedWithTreeSitter = true
