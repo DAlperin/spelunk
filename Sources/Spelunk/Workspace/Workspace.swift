@@ -92,6 +92,7 @@ final class Workspace {
     var showGenerateTrace = false
     var showRuleWriter = false
     @ObservationIgnored var navGeneration = 0
+    @ObservationIgnored var phantomCache: (key: String, value: [Int: [PhantomLine]])?
     var navReason: NavReason = .manual
     /// A description to draft a rule from as soon as the rule writer opens.
     var ruleWriterSeed: String?
@@ -209,7 +210,15 @@ final class Workspace {
         }
     }
 
-    func shutdown() { ra.stop(); clippy.cancel(); scip.cancel(); watcher?.stop() }
+    /// Stops everything this workspace started, so nothing keeps it alive or writes after it closes.
+    func shutdown() {
+        traces.writeNow()
+        for t in jobTasks.values { t.cancel() }
+        jobTasks = [:]
+        contextTask?.cancel()
+        refreshTask?.cancel()
+        ra.stop(); clippy.cancel(); scip.cancel(); watcher?.stop()
+    }
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -737,6 +746,15 @@ final class Workspace {
         let isOld = doc.side == .old
         if f.status == (isOld ? .deleted : .added) { return [:] }
         let other = r.cachedDocument(isOld ? f.newPath : f.oldPath, side: isOld ? .new : .old)
+        // The editor asks on every update; the answer only changes with the documents and hunks.
+        let key = "\(doc.id)|\(other.map { "\($0.id)" } ?? "-")|\(f.hunks.map(\.id).joined(separator: ","))"
+        if let c = phantomCache, c.key == key { return c.value }
+        let value = computePhantomLines(f, isOld: isOld, other: other)
+        phantomCache = (key, value)
+        return value
+    }
+
+    private func computePhantomLines(_ f: FileDiff, isOld: Bool, other: SourceDocument?) -> [Int: [PhantomLine]] {
         let phantomKind: DiffLineKind = isOld ? .added : .removed
         var out: [Int: [PhantomLine]] = [:]
         func phantom(_ l: DiffLine) -> PhantomLine {
@@ -744,7 +762,20 @@ final class Workspace {
             var tokens: [Token] = []
             if let other, otherLine < other.lines.lineCount {
                 let range = other.lines.lineRange(otherLine)
-                for t in other.syntax.tokens where t.range.location < NSMaxRange(range) && NSMaxRange(t.range) > range.location {
+                let all = other.syntax.tokens
+                // Tokens are sorted by start: find the first starting at or after the line, then step
+                // back over earlier tokens that may span into it (multi-line strings and comments).
+                var lo = 0, hi = all.count
+                while lo < hi {
+                    let mid = (lo + hi) / 2
+                    if all[mid].range.location < range.location { lo = mid + 1 } else { hi = mid }
+                }
+                var i = lo
+                while i > 0, lo - i < 64 { i -= 1 }
+                while i < all.count, all[i].range.location < NSMaxRange(range) {
+                    let t = all[i]
+                    i += 1
+                    guard NSMaxRange(t.range) > range.location else { continue }
                     let start = max(t.range.location, range.location)
                     let end = min(NSMaxRange(t.range), NSMaxRange(range))
                     tokens.append(Token(range: NSRange(location: start - range.location, length: end - start), kind: t.kind))

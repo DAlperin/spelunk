@@ -46,11 +46,26 @@ final class ReviewSession {
     var state: State = .idle
     var title: String = ""
     var body: String = ""
-    var files: [FileDiff] = []
+    var files: [FileDiff] = [] {
+        didSet {
+            var idx: [String: Int] = [:]
+            for (i, f) in files.enumerated() { for h in f.hunks { idx[h.id] = i } }
+            fileIndex = idx
+            layoutCache = nil
+        }
+    }
+    /// Hunk id to index in `files`.
+    @ObservationIgnored private var fileIndex: [String: Int] = [:]
     var analyses: [String: HunkAnalysis] = [:] { didSet { layoutCache = nil } }
     var llm: [String: LLMTriage] = [:] { didSet { layoutCache = nil } }
     var overview: String?
-    var reviewOrder: [String] = [] { didSet { layoutCache = nil } }
+    var reviewOrder: [String] = [] {
+        didSet {
+            orderRank = Dictionary(reviewOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+            layoutCache = nil
+        }
+    }
+    @ObservationIgnored private var orderRank: [String: Int] = [:]
     var triageState: String?
     var triaging = false
     var overviewIsStale = false
@@ -497,11 +512,8 @@ final class ReviewSession {
 
     func hunks(in tier: ChangeTier) -> [Hunk] {
         let hs = allHunks.filter { self.tier(of: $0) == tier }
-        guard !reviewOrder.isEmpty else { return hs }
-        return hs.sorted { a, b in
-            let ia = reviewOrder.firstIndex(of: a.contentKey) ?? Int.max, ib = reviewOrder.firstIndex(of: b.contentKey) ?? Int.max
-            return ia < ib
-        }
+        guard !orderRank.isEmpty else { return hs }
+        return hs.sorted { (orderRank[$0.contentKey] ?? Int.max) < (orderRank[$1.contentKey] ?? Int.max) }
     }
 
     func fileTier(_ f: FileDiff) -> ChangeTier { f.hunks.map(tier(of:)).min() ?? .mechanical }
@@ -522,7 +534,7 @@ final class ReviewSession {
         save()
     }
 
-    func file(for hunk: Hunk) -> FileDiff? { files.first { $0.hunks.contains { $0.id == hunk.id } } }
+    func file(for hunk: Hunk) -> FileDiff? { fileIndex[hunk.id].flatMap { files[safe: $0] } }
 
     // MARK: Check out
 

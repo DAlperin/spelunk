@@ -92,3 +92,18 @@ Each phase lands, builds and tests on its own.
    authority over the quick pass.
 7. **Performance and concurrency.** Memoized editor display pipeline; off-main document store with
    LRU; index maps per review load; Swift 6 language mode module by module.
+
+## Status
+
+Phases 1 to 7 have landed, plus a storage phase that replaced the ad hoc JSON files with a
+per-repository SQLite store (results by content, review state by resolved identity, drafts, jobs).
+Not done yet:
+
+- Swift 6 language mode. Both targets still build in Swift 5 mode, so `@unchecked Sendable` and
+  `assumeIsolated` claims are unchecked; turning it on file by file is the next concurrency step.
+- A code-intelligence instance for review heads. Answers for a pull request's head are still asked
+  of the working copy at the mapped position; a second rust-analyzer rooted at the head worktree
+  would make them exact.
+- Moving traces and bookmarks into the store (they still use JSON files, now with versioned
+  locations and debounced writes).
+- Out-of-process parsing for third-party grammars.

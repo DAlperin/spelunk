@@ -194,16 +194,28 @@ final class DocumentCache {
 
     init(root: URL) { self.root = root }
 
+    /// Paths by last use, oldest first.
+    private var recent: [String] = []
+    private func touch(_ path: String) {
+        if let i = recent.lastIndex(of: path) { recent.remove(at: i) }
+        recent.append(path)
+    }
+
     func url(for path: String) -> URL { path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path) }
 
     func document(_ path: String) -> SourceDocument? {
         let u = url(for: path)
         let mtime = (try? FileManager.default.attributesOfItem(atPath: u.path)[.modificationDate] as? Date) ?? .distantPast
-        if let (t, d) = cache[path], t == mtime { return d }
+        if let (t, d) = cache[path], t == mtime { touch(path); return d }
         guard let data = try? Data(contentsOf: u), data.count < 8_000_000 else { return nil }
         let doc = SourceDocument(path: path, text: String(decoding: data, as: UTF8.self))
         cache[path] = (mtime, doc)
-        if cache.count > 300 { cache.removeAll() }
+        touch(path)
+        // Evict the least recently used documents rather than dropping the whole cache.
+        while cache.count > 300, let oldest = recent.first {
+            recent.removeFirst()
+            cache[oldest] = nil
+        }
         return doc
     }
 

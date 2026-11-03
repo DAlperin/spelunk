@@ -135,10 +135,16 @@ struct CodeView: NSViewRepresentable {
             }
         }
         c.layoutBlocks()
-        if !secondary, let display = c.display {
-            c.hunkRegions = c.computeHunkRegions(ws: ws, document: document, display: display)
+        if !secondary, let display = c.display, let r = ws.review {
+            // Regions change with the display, the selection and the tiers.
+            let key = "\(document.id)|\(display.fingerprint)|\(ws.selectedHunkID ?? "")|\(r.files.count)|\(r.llm.count)|\(r.analyses.count)"
+            if c.hunkRegionsKey != key {
+                c.hunkRegionsKey = key
+                c.hunkRegions = c.computeHunkRegions(ws: ws, document: document, display: display)
+            }
         } else {
             c.hunkRegions = []
+            c.hunkRegionsKey = ""
         }
         c.gutter?.needsDisplay = true
         c.minimap?.needsDisplay = true
@@ -202,6 +208,7 @@ struct CodeView: NSViewRepresentable {
         weak var gutter: GutterView?
         weak var minimap: MinimapView?
         var hunkRegions: [HunkRegion] = []
+        var hunkRegionsKey = ""
         var minimapWidths: [LineShape] = []
         var documentID: UUID?
         var document: SourceDocument?

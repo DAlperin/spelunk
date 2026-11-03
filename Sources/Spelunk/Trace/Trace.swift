@@ -101,7 +101,19 @@ final class TraceStore {
         }
     }
 
+    /// Coalesces bursts of edits (typing a note) into one write.
     func save() {
+        pendingSave?.cancel()
+        pendingSave = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            writeNow()
+        }
+    }
+
+    @ObservationIgnored private var pendingSave: Task<Void, Never>?
+
+    func writeNow() {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.prettyPrinted]

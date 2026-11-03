@@ -89,6 +89,9 @@ final class AppModel {
         signal(SIGPIPE, SIG_IGN)
         Log.debug("AppModel.init")
         DebugBridge.shared.install(self)
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.workspace?.shutdown() }
+        }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         if let p = args.first {
             let url = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
