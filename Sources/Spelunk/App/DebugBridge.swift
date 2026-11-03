@@ -251,7 +251,7 @@ final class DebugBridge {
         if let h = ws.review?.headIntel { s += "headintel: \(h.server.status.label) root=\(h.root.lastPathComponent)\n" }
         if let c = ws.context { s += "context: \(c.name) version=\(c.version.map { "\($0)" } ?? "wc") def=\(c.details?.definition.map { "\($0.path):\($0.line + 1)" } ?? "-") kind=\(c.details?.kindLabel ?? "-") source=\(c.details?.source.label ?? "-") callers=\(c.callers.count) refs=\(c.references.count) ra=\(ws.ra.status.label)\n" }
         if let cc = ws.changeContext { s += "changecontext: enclosing=\(cc.enclosing ?? "-") callers=\(cc.callers.map(\.name).prefix(4).joined(separator: ",")) loading=\(cc.loading)\n" }
-        if let r = ws.review { s += "state: identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
+        if let r = ws.review { s += "state: load=\(r.state) files=\(r.files.count) identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
         for a in ws.review?.attachments ?? [] { s += "attach: \(a.rule.title) [\(a.label)] result=\(ws.review?.attachmentResults[a.key] != nil)\n" }
         if let r = ws.review { for h in r.allHunks where r.analyses[h.id]?.reasons.contains(where: { $0.contains("join rendering") || $0.contains("places") }) == true { s += "semantic: \(h.id) \(r.analyses[h.id]!.reasons)\n" } }

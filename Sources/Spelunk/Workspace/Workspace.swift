@@ -260,19 +260,16 @@ final class Workspace {
 
     /// What "the current revision" means: @ when it has changes, otherwise the change below it
     /// (right after `jj new`). For git, uncommitted changes, or the last commit when clean.
+    /// The working copy's own changes: `@` against its parent for jj, uncommitted changes for git.
+    /// An empty working copy is an empty review.
     private func workingTarget() async -> ReviewTarget? {
         switch vcs.kind {
-        case .jj:
-            let empty = (try? await Shell.output("jj", ["log", "--no-graph", "-r", "@", "-T", "if(empty, \"1\", \"0\")"], cwd: root))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) == "1"
-            return empty ? .jj(from: "@--", to: "@-") : .jj(from: "@-", to: "@")
-        case .git:
-            let dirty = !((try? await Shell.output("git", ["status", "--porcelain", "--untracked-files=no"], cwd: root)) ?? "").isEmpty
-            return dirty ? .git(base: "HEAD", head: nil) : .git(base: "HEAD~1", head: "HEAD")
-        case .none:
-            return nil
+        case .jj: return .jj(from: "@-", to: "@")
+        case .git: return .git(base: "HEAD", head: nil)
+        case .none: return nil
         }
     }
+
 
     func refreshWorkingReview() async {
         guard let target = await workingTarget() else { workingReview = nil; return }

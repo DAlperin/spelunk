@@ -56,20 +56,20 @@ struct ChangesView: View {
             case .loading(let s):
                 ProgressView(s).frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let e):
-                ContentUnavailableView {
-                    Label("Could not load change", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(e)
-                } actions: {
-                    HStack {
-                        Button("Retry") { Task { await review.load() } }
-                        if !review.tracksWorkingCopy { Button("Close Review") { ws.closeReview(review.target.key) } }
-                    }
+                SidebarMessage(icon: "exclamationmark.triangle", title: "Could not load change", detail: e) {
+                    Button("Retry") { Task { await review.load() } }
+                    if !review.tracksWorkingCopy { Button("Close Review") { ws.closeReview(review.target.key) } }
                 }
-                .frame(maxHeight: .infinity)
             default:
                 if review.files.isEmpty {
-                    ContentUnavailableView("No changes", systemImage: "checkmark.circle").frame(maxHeight: .infinity)
+                    SidebarMessage(icon: "checkmark.circle", title: review.tracksWorkingCopy ? "Working copy has no changes" : "No changes",
+                                   detail: review.tracksWorkingCopy && ws.vcs.kind == .jj ? "@ is empty. Its parent change is not part of this review." : nil) {
+                        if review.tracksWorkingCopy {
+                            Button(ws.vcs.kind == .jj ? "Review the Parent Change (@-)" : "Review the Last Commit") {
+                                ws.startReview(ws.vcs.kind == .jj ? .jj(from: "@--", to: "@-") : .git(base: "HEAD~1", head: "HEAD"))
+                            }
+                        }
+                    }
                 } else {
                     switch review.listMode {
                     case .importance: tierList
@@ -121,6 +121,7 @@ struct ChangesView: View {
                 if let e = review.githubError { Text(e).font(.caption).foregroundStyle(.red).lineLimit(2) }
             }
             if !review.rangeCommits.isEmpty { CommitStepper(review: review) }
+            if !review.files.isEmpty {
             ImportanceBar(review: review)
             HStack(spacing: 8) {
                 let p = review.progress
@@ -134,6 +135,7 @@ struct ChangesView: View {
                 }
                 Spacer()
                 TriageMenu(ws: ws, review: review)
+            }
             }
             Picker("", selection: $review.listMode) {
                 ForEach(ReviewSession.ListMode.allCases) { m in Text(m.rawValue).tag(m) }
@@ -609,5 +611,25 @@ struct CommitStepper: View {
         .font(.caption)
         .padding(.horizontal, 6).padding(.vertical, 3)
         .background(index == nil ? Color.clear : Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+/// A message in the sidebar's list area: icon, title, detail and actions, at the top of the column.
+struct SidebarMessage<Actions: View>: View {
+    let icon: String
+    let title: String
+    var detail: String?
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon).font(.system(size: 28)).foregroundStyle(.secondary)
+            Text(title).font(.headline).multilineTextAlignment(.center)
+            if let detail { Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled) }
+            HStack { actions }.controlSize(.small).padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16).padding(.top, 40)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }

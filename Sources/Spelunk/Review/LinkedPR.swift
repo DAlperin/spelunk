@@ -10,7 +10,7 @@ extension ReviewSession {
         var names: [String] = []
         switch target {
         case .jj(_, let to):
-            let revs = to == "@" ? "@ | @-" : to
+            let revs = to
             let out = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", revs, "-T", "local_bookmarks.map(|b| b.name()).join(\"\\n\") ++ \"\\n\""], cwd: root)) ?? ""
             names = out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         case .git(_, let head):
