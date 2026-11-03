@@ -284,6 +284,12 @@ final class DebugBridge {
 
     private func dump(_ ws: Workspace) {
         var s = "doc=\(ws.document?.path ?? "-") cursor=\(String(describing: ws.cursor)) ra=\(ws.ra.status.label) scip=\(ws.scip.summary)\n"
+        if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let d = tv.coordinator?.display,
+           let lm = tv.layoutManager, let tc = tv.textContainer, d.ns.length > 0 {
+            let g = lm.glyphIndex(for: NSPoint(x: 0, y: max(0, tv.visibleRect.minY)), in: tc)
+            let top = d.lines.position(of: lm.characterIndexForGlyph(at: g)).line
+            s += "view top=\(top + 1) caret=\(d.lines.position(of: tv.selectedRange().location).line + 1) lines=\(d.lines.lineCount)\n"
+        }
         if let c = ws.context {
             s += "context \(c.name) kind=\(c.details?.kindLabel ?? "-") def=\(c.details?.definition?.id ?? "-") via=\(c.details?.source.label ?? "-")\n"
             s += "  refs=\(c.references.count) via \(c.referencesSource?.label ?? "-"); calls(\(c.callDirection.rawValue))=\(c.calls.map { "\($0.name)@\($0.location.shortDescription)" })\n"
@@ -301,7 +307,7 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
-        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") removed=\(ws.removedLineAtCaret.map(String.init) ?? "-") draft=\(ws.commentDraft.map { "\($0.side):\($0.startLine.map { "\($0)-" } ?? "")\($0.line)" } ?? "-") vim=\(ws.vimStatus ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
+        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") removed=\(ws.removedLineAtCaret.map(String.init) ?? "-") draft=\(ws.commentDraft.map { "\($0.side):\($0.startLine.map { "\($0)-" } ?? "")\($0.line)" } ?? "-") vim=\(ws.vimStatus ?? "-") review=\(ws.review?.shortLabel ?? "-") reviewing=\(ws.reviewing) bars=\(ws.document.map { ws.changeBars(for: $0).count } ?? 0) phantoms=\(ws.document.map { ws.phantomLines(for: $0).count } ?? 0)\n"
         if let h = ws.review?.headIntel { s += "headintel: \(h.server.status.label) root=\(h.root.lastPathComponent)\n" }
         if let c = ws.context { s += "context: \(c.name) version=\(c.version.map { "\($0)" } ?? "wc") def=\(c.details?.definition.map { "\($0.path):\($0.line + 1)" } ?? "-") kind=\(c.details?.kindLabel ?? "-") source=\(c.details?.source.label ?? "-") callers=\(c.callers.count) refs=\(c.references.count) ra=\(ws.ra.status.label)\n" }
         if let cc = ws.changeContext { s += "changecontext: enclosing=\(cc.enclosing ?? "-") callers=\(cc.callers.map(\.name).prefix(4).joined(separator: ",")) loading=\(cc.loading)\n" }

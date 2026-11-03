@@ -393,4 +393,22 @@ final class CommitGraphTests: XCTestCase {
         XCTAssertEqual(l[3].node, 0)
         XCTAssertTrue(l[3].stub)
     }
+
+    func testLineShiftFollowsAnEdit() {
+        let old = (0..<10).map { "line \($0)" }.joined(separator: "\n")
+        var lines = old.components(separatedBy: "\n")
+        lines.insert(contentsOf: ["new a", "new b"], at: 3)
+        let shift = LineShift(old: old, new: lines.joined(separator: "\n"))
+        XCTAssertEqual(shift.map(1), 1)
+        XCTAssertEqual(shift.map(3), 5)
+        XCTAssertEqual(shift.map(9), 11)
+
+        lines = old.components(separatedBy: "\n")
+        lines.removeSubrange(6...8)
+        let removed = LineShift(old: old, new: lines.joined(separator: "\n"))
+        XCTAssertEqual(removed.map(2), 2)
+        XCTAssertEqual(removed.map(7), 6)
+        XCTAssertEqual(removed.map(9), 6)
+        XCTAssertEqual(LineShift(old: old, new: old).map(4), 4)
+    }
 }

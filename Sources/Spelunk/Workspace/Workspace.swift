@@ -85,6 +85,8 @@ final class Workspace {
     }
     /// Folded function ids (first lines) per document; see `foldedRanges(for:)`.
     @ObservationIgnored var folds: [String: Set<Int>] = [:]
+    /// Per fold key, the changed lines last seen; a function that gains a change unfolds.
+    @ObservationIgnored var foldChanged: [String: Set<Int>] = [:]
     var foldsVersion = 0
     var cursor: SourcePos?
     var context: SymbolContext?
@@ -118,10 +120,27 @@ final class Workspace {
     /// Files tab shows only files that hold steps of the active path.
     var pathFilesOnly = false
 
-    /// Whether the open file is part of the review being shown (diff controls apply only then).
+    /// Review mode: the review being shown decorates its files with removed lines inline, hunk
+    /// tiers, review folds and comments. Pinned reviews are always in it; the working copy only while
+    /// the sidebar shows the Review tab, and otherwise is read as plain code with gutter change bars.
+    var reviewing: Bool {
+        guard let r = review else { return false }
+        return !r.tracksWorkingCopy || sidebarTab == .changes
+    }
+
+    /// The review's change to `doc`'s file, when `doc` is one of the review's two versions of it.
+    func reviewFile(for doc: SourceDocument) -> FileDiff? {
+        guard let r = review, doc.version == (doc.side == .old ? r.baseVersion : r.headVersion) else { return nil }
+        return r.files.first { (doc.side == .old ? $0.oldPath : $0.newPath) == doc.path }
+    }
+
+    /// `reviewFile(for:)` while in review mode.
+    func reviewedFile(_ doc: SourceDocument) -> FileDiff? { reviewing ? reviewFile(for: doc) : nil }
+
+    /// Whether the diff controls apply: in review mode, on the Review tab or a file of the review.
     var documentInReview: Bool {
-        guard let r = review, let d = document else { return false }
-        return sidebarTab == .changes || r.files.contains { $0.newPath == d.path || $0.oldPath == d.path }
+        guard reviewing, let d = document else { return false }
+        return sidebarTab == .changes || reviewFile(for: d) != nil
     }
     var palette: PaletteMode? { didSet { if palette != oldValue { paletteQuery = "" } } }
     var paletteQuery = ""
@@ -708,6 +727,12 @@ final class Workspace {
             statusMessage = "Comments go to a pull request, and this review has none linked"
             return
         }
+        guard reviewFile(for: d) != nil else {
+            statusMessage = "Comments go on files of the review, and \(d.path.lastPathComponent) is not one"
+            return
+        }
+        // The composer shows in review mode.
+        if !reviewing { sidebarTab = .changes }
         var side = d.side == .old ? "LEFT" : "RIGHT"
         let line: Int
         if let lines {
@@ -744,6 +769,7 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
+        if review?.tracksWorkingCopy == true, sidebarTab != .changes { sidebarTab = .changes }
         let gen = beginNavigation(.hunk)
         if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }
         if let r = review, r.tier(of: h).isLowSignal { r.showLowSignal = true }
@@ -871,8 +897,7 @@ final class Workspace {
 
     /// Lines from the other side of the diff to show inline, keyed by the real line they precede.
     func phantomLines(for doc: SourceDocument) -> [Int: [PhantomLine]] {
-        guard inlineDiff, let r = review,
-              let f = r.files.first(where: { $0.newPath == doc.path || $0.oldPath == doc.path }) else { return [:] }
+        guard inlineDiff, let r = review, let f = reviewedFile(doc) else { return [:] }
         let isOld = doc.side == .old
         if f.status == (isOld ? .deleted : .added) { return [:] }
         let other = r.cachedDocument(isOld ? f.newPath : f.oldPath, side: isOld ? .new : .old)
@@ -934,10 +959,9 @@ final class Workspace {
     /// and the comment composer. Each is (id, zero-based line it follows).
     /// Items on the other version's lines follow their inline phantom line (`otherSide`).
     func inlineBlocks(for doc: SourceDocument) -> [(id: String, afterLine: Int, otherSide: Bool)] {
-        guard let r = review, r.pullRequest != nil || commentDraft != nil else { return [] }
+        guard let r = review, r.pullRequest != nil || commentDraft != nil, let file = reviewedFile(doc) else { return [] }
         let side = doc.side == .old ? "LEFT" : "RIGHT"
-        let file = r.files.first { doc.side == .old ? $0.oldPath == doc.path : $0.newPath == doc.path }
-        let otherPath = doc.side == .old ? file?.newPath : file?.oldPath
+        let otherPath = doc.side == .old ? file.newPath : file.oldPath
         /// Whether an item at (path, side) shows in this document, and on which version's lines.
         func placement(_ path: String, _ s: String) -> Bool? {
             if path == doc.path, s == side { return false }
@@ -960,7 +984,7 @@ final class Workspace {
 
     /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.
     func commentLines(for doc: SourceDocument) -> [Int: Bool] {
-        guard let r = review else { return [:] }
+        guard let r = review, reviewedFile(doc) != nil else { return [:] }
         let side = doc.side == .old ? "LEFT" : "RIGHT"
         var out: [Int: Bool] = [:]
         for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
@@ -970,9 +994,9 @@ final class Workspace {
         return out
     }
 
-    /// Per-line diff markers for the document currently shown, when it belongs to the review.
+    /// Per-line diff markers for a document of the review, in review mode.
     func diffMarkers(for doc: SourceDocument) -> [Int: DiffLineKind] {
-        guard let r = review, let f = r.files.first(where: { $0.newPath == doc.path || $0.oldPath == doc.path }) else { return [:] }
+        guard let f = reviewedFile(doc) else { return [:] }
         let isOld = doc.side == .old
         var m: [Int: DiffLineKind] = [:]
         for h in f.hunks {
@@ -982,6 +1006,36 @@ final class Workspace {
             }
         }
         return m
+    }
+
+    /// Gutter change bars for a document of the review outside review mode: lines added, lines
+    /// that replace removed ones, and where lines were deleted.
+    func changeBars(for doc: SourceDocument) -> [Int: ChangeBar] {
+        guard !reviewing, doc.side != .old, let f = reviewFile(for: doc) else { return [:] }
+        var out: [Int: ChangeBar] = [:]
+        let last = max(0, doc.lines.lineCount - 1)
+        for h in f.hunks {
+            var removed = 0
+            var added: [Int] = []
+            func flush(before line: Int) {
+                if !added.isEmpty {
+                    for n in added { out[n] = removed > 0 ? .modified : .added }
+                } else if removed > 0 {
+                    out[min(line, last)] = out[min(line, last)] ?? .deletedAbove
+                }
+                removed = 0
+                added = []
+            }
+            for l in h.lines {
+                switch l.kind {
+                case .removed: removed += 1
+                case .added: if let n = l.newLine { added.append(n) }
+                case .context: flush(before: l.newLine ?? 0)
+                }
+            }
+            flush(before: h.newStart - 1 + h.newCount)
+        }
+        return out
     }
 
     // MARK: Claude

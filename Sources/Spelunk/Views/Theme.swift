@@ -21,6 +21,7 @@ enum Theme {
     static let removed = dynamic(hex(0xcf222e, 0.11), hex(0xf85149, 0.17))
     static let addedMarker = dynamic(hex(0x1a7f37), hex(0x3fb950))
     static let removedMarker = dynamic(hex(0xcf222e), hex(0xf85149))
+    static let modifiedMarker = dynamic(hex(0x0969da), hex(0x58a6ff))
     static let traceLine = dynamic(hex(0x8250df, 0.10), hex(0xa371f7, 0.16))
     static let testRegion = dynamic(hex(0x000000, 0.025), hex(0xffffff, 0.025))
 

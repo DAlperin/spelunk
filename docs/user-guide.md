@@ -117,18 +117,19 @@ Review aids.
 A function's body can be folded to one "⋯ N lines" line, leaving its signature and closing line
 visible. By default, files that belong to the review being shown open with every function folded
 that has no changes, inline removed lines, threads or comments, and the function you arrive in stays
-open; Settings › Editor › Folding can apply this to every file or turn it off. A fold that hides
+open (in review mode; see [Reviewing and browsing](#reviewing-and-browsing)). Settings › Editor ›
+Folding can apply this to every file or turn it off. A fold that hides
 changed lines keeps the change's color on its placeholder.
 
 Any jump to a line inside a fold (a hunk, a definition, a code path step, history) unfolds it.
 Click a placeholder to open it. Navigate › Fold Function (⌥⌘←) and Unfold Function (⌥⌘→) act on the
 function at the cursor, with ⇧ for every function in the file; in vim mode, `za`, `zo`, `zc`, `zR`
-and `zM` do the same. Folds are kept per file and version while the window is open, and the split
-diff view shows no folds so its two sides stay aligned.
+and `zM` do the same. Folds are kept per file and version while the window is open, separately for
+review mode and browsing, and the split diff view shows no folds so its two sides stay aligned.
 
 ### Diff modes
 
-While a file that belongs to the review is open, the toolbar's picker sets how it is shown:
+While a file of the review is open in review mode, the toolbar's picker sets how it is shown:
 
 | Mode | Shows |
 |---|---|
@@ -257,6 +258,23 @@ The working copy review is always open: `@` against its parent in a jj repositor
 changes against `HEAD` in git. It refreshes as files change on disk, after a short delay (0.6 s,
 Settings › Review › Live review). When `@` is empty, the Review tab offers to review the parent
 change instead.
+
+### Reviewing and browsing
+
+The working copy has two modes. While the sidebar shows the Review tab, it is reviewed like any other
+target: removed lines inline, tier bars on hunks, unchanged functions folded, comments, and the diff
+mode picker and whitespace button in the toolbar. On the Files, Search and History tabs the same
+files read as plain code, with change bars in the gutter: green for added lines, blue for lines that
+replace removed ones, and a red tick where lines were deleted. Selecting a hunk or moving between
+hunks (J and K, or the Navigate menu) switches to the Review tab. A jump from a hunk, such as Go to
+Definition, keeps the Review tab, so review mode stays on.
+
+A pinned review is always in review mode. Its diff appears only on its own versions of its files:
+opening the working copy of a file the review touches shows that file without the review's diff.
+
+While a file changes on disk (your editor, Claude, a checkout), the open view keeps its place. The
+line at the top and the caret follow the code around the edit, and in review mode a folded function
+that gains a change unfolds.
 
 Open other reviews from the review menu in the toolbar ("Compare Revisions…" and "Review a Pull
 Request…"), the History tab, or the command palette:

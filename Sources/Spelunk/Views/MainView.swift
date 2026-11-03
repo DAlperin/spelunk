@@ -209,7 +209,7 @@ struct MainToolbar: ToolbarContent {
                 .frame(width: 170)
                 .help("Inline: new version with removed lines in place. Split: old and new side by side.")
             }
-            if ws.review != nil {
+            if ws.reviewing {
                 Toggle(isOn: Binding(get: { ignoreWhitespace }, set: { Prefs.setIgnoreWhitespace($0) })) {
                     Image(systemName: "text.word.spacing")
                 }
@@ -336,7 +336,7 @@ struct EditorColumn: View {
         VStack(spacing: 0) {
             BreadcrumbBar(ws: ws)
             Divider()
-            if let r = ws.review, let id = ws.selectedHunkID, let h = r.allHunks.first(where: { $0.id == id }),
+            if ws.reviewing, let r = ws.review, let id = ws.selectedHunkID, let h = r.allHunks.first(where: { $0.id == id }),
                ws.document?.path == h.path || ws.document?.path == r.file(for: h)?.oldPath {
                 HunkStrip(ws: ws, review: r, hunk: h)
                 Divider()
@@ -346,7 +346,7 @@ struct EditorColumn: View {
                 Divider()
             }
             if let doc = ws.document {
-                if ws.review != nil && ws.diffMode == .split, let old = ws.splitDocument, old.path == (ws.review?.files.first { $0.newPath == doc.path }?.oldPath ?? doc.path) {
+                if ws.reviewing && ws.diffMode == .split, let old = ws.splitDocument, old.path == (ws.review?.files.first { $0.newPath == doc.path }?.oldPath ?? doc.path) {
                     HStack(spacing: 0) {
                         VStack(spacing: 0) {
                             SplitPaneHeader(title: "Before", color: .red)
@@ -478,7 +478,7 @@ struct StatusBar: View {
             else if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
             }
             .fixedSize()
-            if ws.review != nil {
+            if ws.reviewing {
                 ViewThatFits(in: .horizontal) {
                     keyHints(labels: true)
                     keyHints(labels: false)

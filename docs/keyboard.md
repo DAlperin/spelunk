@@ -57,7 +57,8 @@ the two sides are separate panes. The palette has Focus Code View, Focus Sidebar
 Single-letter keys act on the review shown in the window. They apply when no text field has focus,
 the palette and comment composer are closed, and, with vim mode on, the code view does not have
 focus (vim bindings apply there instead; see below). In a jj or git repository the working-copy
-review is always open, so these keys are always live in the code view when vim mode is off.
+review is always open, so these keys are always live in the code view when vim mode is off. Moving
+to a hunk from the Files, Search or History tab switches to the Review tab.
 
 Letters are case-insensitive except J.
 

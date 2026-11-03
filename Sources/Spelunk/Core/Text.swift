@@ -182,3 +182,29 @@ enum SourceLanguage: String, Codable, Sendable {
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }
+
+/// Maps line numbers from one version of a text to the next, treating the change as one region:
+/// lines before it keep their number, lines after it move by the change in line count, and lines
+/// inside it keep their number within the new text.
+struct LineShift: Sendable {
+    let prefix: Int, oldSuffixStart: Int, delta: Int, newCount: Int
+
+    init(old: String, new: String) {
+        let a = old.split(separator: "\n", omittingEmptySubsequences: false)
+        let b = new.split(separator: "\n", omittingEmptySubsequences: false)
+        var p = 0
+        while p < a.count, p < b.count, a[p] == b[p] { p += 1 }
+        var q = 0
+        while q < a.count - p, q < b.count - p, a[a.count - 1 - q] == b[b.count - 1 - q] { q += 1 }
+        prefix = p
+        oldSuffixStart = a.count - q
+        delta = b.count - a.count
+        newCount = b.count
+    }
+
+    func map(_ line: Int) -> Int {
+        if line < prefix { return line }
+        if line >= oldSuffixStart { return max(0, line + delta) }
+        return min(line, max(0, newCount - 1))
+    }
+}

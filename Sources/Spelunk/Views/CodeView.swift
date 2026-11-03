@@ -117,12 +117,15 @@ struct CodeView: NSViewRepresentable {
         c.foldRanges = secondary ? [] : ws.foldedRanges(for: document)
         let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs), folds: c.foldRanges)
         if c.documentID != document.id {
-            // A new instance of the text already shown (a review reload) keeps the scroll position and caret.
-            let same = c.document.map { $0.path == document.path && $0.version == document.version && $0.text == document.text } ?? false
+            // A new instance of the file already shown (a review reload, or the file edited on disk)
+            // keeps the scroll position and caret.
+            let previous = c.document
+            let same = previous.map { $0.path == document.path && $0.version == document.version && $0.side == document.side } ?? false
+            let shift = same && previous?.text != document.text ? previous.map { LineShift(old: $0.text, new: document.text) } : nil
             c.documentID = document.id
             c.document = document
             c.display = display
-            c.load(display, into: tv, keepScroll: same)
+            c.load(display, into: tv, keepScroll: same, shift: shift)
         } else if c.display?.fingerprint != display.fingerprint {
             // Same file, different inline diff (live refresh or toggled): keep the scroll position.
             c.display = display
@@ -130,6 +133,7 @@ struct CodeView: NSViewRepresentable {
         }
         if ws.palette != nil { c.hover.hide() }
         c.diffMarkers = ws.diffMarkers(for: document)
+        c.changeBars = secondary ? [:] : ws.changeBars(for: document)
         c.diagnostics = !secondary && document.isWorkingCopy ? (ws.clippy.byFile[document.path] ?? []) : []
         let markers = secondary ? (badges: [Int: Int](), pills: [Int: Int]()) : ws.pathMarkers(for: document)
         c.stepBadges = markers.badges
@@ -153,7 +157,7 @@ struct CodeView: NSViewRepresentable {
             }
         }
         c.layoutBlocks()
-        if !secondary, let display = c.display, let r = ws.review {
+        if !secondary, let display = c.display, let r = ws.review, ws.reviewedFile(document) != nil {
             // Regions change with the display, the selection and the tiers.
             let key = "\(document.id)|\(display.fingerprint)|\(ws.selectedHunkID ?? "")|\(r.files.count)|\(r.llm.count)|\(r.analyses.count)"
             if c.hunkRegionsKey != key {
@@ -245,6 +249,7 @@ struct CodeView: NSViewRepresentable {
         var display: DisplayDoc?
         var revealToken = -1
         var diffMarkers: [Int: DiffLineKind] = [:]
+        var changeBars: [Int: ChangeBar] = [:]
         var diagnostics: [Diagnostic] = []
         var traceLines: Set<Int> = []
         var bookmarkedLines: Set<Int> = []
@@ -346,7 +351,9 @@ struct CodeView: NSViewRepresentable {
             gutter?.needsDisplay = true
         }
 
-        func load(_ display: DisplayDoc, into tv: NSTextView, keepScroll: Bool) {
+        /// Shows `display`. With `keepScroll`, the line at the top and the caret stay where they were,
+        /// moved through `shift` when the text changed.
+        func load(_ display: DisplayDoc, into tv: NSTextView, keepScroll: Bool, shift: LineShift? = nil) {
             // Replacing the text moves the selection; that is not the user moving the caret.
             movingCaret = true
             defer { movingCaret = false }
@@ -391,7 +398,24 @@ struct CodeView: NSViewRepresentable {
             }
             attr.endEditing()
             let origin = tv.enclosingScrollView?.contentView.bounds.origin
-            let anchor = keepScroll ? shown.flatMap { topAnchor($0, tv) } : nil
+            var anchor = keepScroll ? shown.flatMap { topAnchor($0, tv) } : nil
+            if let shift, let a = anchor { anchor = (shift.map(a.line), a.offset) }
+            // The caret's line as shown now, whether the user or a jump put it there.
+            var at = caretAt
+            if keepScroll, let old = shown, tv.selectedRange().location <= old.ns.length {
+                let dpos = old.lines.position(of: tv.selectedRange().location)
+                if let e = old.entry(dpos.line) { at = (e, dpos.col) }
+            }
+            var movedCaret: SourcePos?
+            if let shift, let a = at {
+                switch a.line {
+                case .real(let l):
+                    at = (.real(shift.map(l)), a.col)
+                    if shift.map(l) != l { movedCaret = SourcePos(line: shift.map(l), col: a.col) }
+                case .fold(let f): at = (.fold(shift.map(f.lowerBound)...max(shift.map(f.lowerBound), shift.map(f.upperBound))), a.col)
+                default: break
+                }
+            }
             tv.textStorage?.setAttributedString(attr)
             shown = display
             minimapWidths = Self.shapes(display)
@@ -401,7 +425,7 @@ struct CodeView: NSViewRepresentable {
             }
             // A re-render of the same file keeps the caret on the same line, real or phantom.
             var caret = 0
-            if keepScroll, !secondary, let at = caretAt {
+            if keepScroll, !secondary, let at {
                 let line: Int? = switch at.line {
                 case .real(let l): display.displayLine(l)
                 case .phantom(let p): display.entries.firstIndex { if case .phantom(let q) = $0 { q == p } else { false } }
@@ -411,6 +435,13 @@ struct CodeView: NSViewRepresentable {
                 if let line { caret = min(display.lines.lineRange(line).location + at.col, NSMaxRange(display.lines.lineRange(line))) }
             }
             tv.setSelectedRange(NSRange(location: min(caret, display.ns.length), length: 0))
+            caretAt = keepScroll && !secondary ? at : nil
+            if let p = movedCaret, !secondary {
+                DispatchQueue.main.async { [ws] in
+                    ws.cursor = p
+                    ws.selection = SourceRange(start: p, end: p)
+                }
+            }
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
             if let r = revealed, r.path == display.doc.path, Date().timeIntervalSince(r.at) < 1.5 {
@@ -772,6 +803,7 @@ final class GutterView: NSView {
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
              coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
         let (badges, currentStep) = (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine)
+        let bars = coordinator?.changeBars ?? [:]
         let caretLine = tv.selectedRange().location <= (display?.ns.length ?? 0) ? display.map { $0.lines.position(of: tv.selectedRange().location).line } : nil
         guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
@@ -805,6 +837,20 @@ final class GutterView: NSView {
                 if let k = diff[line] {
                     (k == .added ? Theme.addedMarker : Theme.removedMarker).setFill()
                     NSRect(x: thickness - 3, y: y, width: 3, height: h).fill()
+                }
+                switch bars[line] {
+                case .added?, .modified?:
+                    (bars[line] == .added ? Theme.addedMarker : Theme.modifiedMarker).setFill()
+                    NSRect(x: thickness - 3, y: y, width: 3, height: h).fill()
+                case .deletedAbove?:
+                    Theme.removedMarker.setFill()
+                    let tick = NSBezierPath()
+                    tick.move(to: NSPoint(x: thickness - 6, y: y - 3))
+                    tick.line(to: NSPoint(x: thickness, y: y))
+                    tick.line(to: NSPoint(x: thickness - 6, y: y + 3))
+                    tick.close()
+                    tick.fill()
+                case nil: break
                 }
                 if let open = comments[line] {
                     let img = NSImage(systemSymbolName: open ? "bubble.left.fill" : "bubble.left", accessibilityDescription: nil)

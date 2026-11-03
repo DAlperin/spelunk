@@ -2,6 +2,9 @@ import Foundation
 
 enum DiffLineKind: String, Codable, Sendable { case context, added, removed }
 
+/// A gutter mark for a changed line outside review mode.
+enum ChangeBar: Sendable { case added, modified, deletedAbove }
+
 struct DiffLine: Hashable, Sendable {
     var kind: DiffLineKind
     var text: String

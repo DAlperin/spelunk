@@ -36,7 +36,7 @@ extension Workspace {
 
     /// The context pane shows the selected hunk's change context (rather than a symbol).
     var showsHunkContext: Bool {
-        review != nil && changeContext != nil && contextFocus == .hunk && !contextPinned
+        reviewing && changeContext != nil && contextFocus == .hunk && !contextPinned
     }
 
     /// Closes the review being shown and returns to the working copy: its head rust-analyzer stops,

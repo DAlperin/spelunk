@@ -33,13 +33,21 @@ extension Workspace {
         guard !(documentInReview && diffMode == .split) else { return [] }
         let key = foldKey(d)
         let regions = Self.foldRegions(d)
-        let ids: Set<Int>
+        var ids: Set<Int>
+        let changed = reviewedFile(d) != nil ? mustShow(d) : []
         if let s = folds[key] {
             ids = s
+            // Lines changed since the folds were set (the file is being edited) come into view.
+            let fresh = changed.subtracting(foldChanged[key] ?? [])
+            if !fresh.isEmpty {
+                ids.subtract(regions.filter { r in fresh.contains { r.hidden.contains($0) || $0 == r.hidden.upperBound + 1 } }.map(\.id))
+                folds[key] = ids
+            }
         } else {
-            ids = defaultFolds(d, regions)
+            ids = defaultFolds(d, regions, changed: changed)
             folds[key] = ids
         }
+        foldChanged[key] = changed
         // Nested functions inside a folded one are already hidden.
         var out: [ClosedRange<Int>] = []
         for r in regions.filter({ ids.contains($0.id) }).sorted(by: { $0.hidden.lowerBound < $1.hidden.lowerBound }) {
@@ -49,7 +57,8 @@ extension Workspace {
         return out
     }
 
-    func foldKey(_ d: SourceDocument) -> String { "\(d.path)|\(d.version)" }
+    /// Folds are kept per document version, and separately in review mode, where unchanged code folds.
+    func foldKey(_ d: SourceDocument) -> String { "\(d.path)|\(d.version)\(reviewedFile(d) != nil ? "|review" : "")" }
 
     nonisolated static func foldRegions(_ d: SourceDocument) -> [FoldRegion] {
         d.syntax.flatOutline.compactMap { i in
@@ -61,17 +70,18 @@ extension Workspace {
         }
     }
 
-    private func defaultFolds(_ d: SourceDocument, _ regions: [FoldRegion]) -> Set<Int> {
+    /// Lines of a reviewed document that folds must leave visible: changes, removed lines shown
+    /// inline, and comments.
+    private func mustShow(_ d: SourceDocument) -> Set<Int> {
+        Set(diffMarkers(for: d).keys).union(phantomLines(for: d).keys).union(commentLines(for: d).keys)
+    }
+
+    private func defaultFolds(_ d: SourceDocument, _ regions: [FoldRegion], changed: Set<Int>) -> Set<Int> {
         let mode = FoldMode(rawValue: Prefs.foldMode) ?? .review
-        let inReview = review?.files.contains { $0.newPath == d.path || $0.oldPath == d.path } ?? false
+        let inReview = reviewedFile(d) != nil
         guard mode == .all || (mode == .review && inReview) else { return [] }
-        // Lines that must stay visible: changes, removed lines shown inline, comments, and the arrival point.
-        var keep = Set<Int>()
-        if inReview {
-            keep.formUnion(diffMarkers(for: d).keys)
-            keep.formUnion(phantomLines(for: d).keys)
-            keep.formUnion(commentLines(for: d).keys)
-        }
+        // The arrival point stays visible too.
+        var keep = changed
         if let s = selection, document === d { keep.insert(s.start.line) }
         return Set(regions.filter { r in
             !keep.contains { r.hidden.contains($0) || $0 == r.hidden.upperBound + 1 }
