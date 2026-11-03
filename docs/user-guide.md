@@ -1,0 +1,499 @@
+# Spelunk user guide
+
+Spelunk is a code viewer: the editor is read-only. It changes a repository only through commands
+you run from it (jj operations in the History tab, checkouts, rules you add to
+`.spelunk/review.rules`), by fetching pull request commits, and by creating git worktrees for head
+checkouts outside the repository. It writes to GitHub only when you post a comment, reply, resolve a
+thread or submit a review.
+
+Keyboard shortcuts are collected in [keyboard.md](keyboard.md) and the review rule language in
+[rules.md](rules.md).
+
+## Repositories and windows
+
+- Open a repository with ⌘O (File › Open Repository…) or from the welcome screen, which lists the
+  ten most recently opened repositories.
+- Each repository opens in its own window. Opening a repository that already has a window brings
+  that window forward.
+- ⌘N opens a new window with the welcome screen.
+- Windows that were open when you quit come back on the next launch.
+- From the command line: `open dist/Spelunk.app --args -repo ~/path/to/repo`.
+
+If the folder is not a jj or git repository but contains repositories, the Files tab lists them so
+you can open one, or browse the folder anyway.
+
+When a repository opens, Spelunk lists its files, starts rust-analyzer if there is a `Cargo.toml` at
+the root (Settings › Code Intelligence › "Start language servers automatically"), loads the cached
+SCIP index if there is one, starts the working-copy review, and opens `README.md`, `src/main.rs` or
+`src/lib.rs`.
+
+## The window
+
+- The sidebar has four tabs: Review, Files, Search and History.
+- The editor in the middle shows one file, with a breadcrumb bar above it (path and enclosing item)
+  and a status bar below.
+- The context pane on the right (toggle it with the rightmost toolbar button) follows what you are
+  doing. Its Panes menu switches between Context, Claude, Conversation, Code Paths, Outline,
+  Bookmarks and Problems.
+- The toolbar has Back and Forward, a repository menu (restart the language server, run cargo
+  clippy, generate the SCIP index, reveal in Finder), the review menu, the diff mode picker while a
+  reviewed file is open, and Ask and Trace buttons.
+
+## Reading code
+
+### Files, Search and History
+
+Files is the repository's file tree. Type in the filter field (⌘P focuses it) and press Return to
+open the first match. The filter menu at the bottom toggles "Source files only" and "Show tests".
+While a code path is open, "Path files" limits the tree to files that hold its steps.
+
+Search runs ripgrep over the working copy. The buttons next to the field toggle regular expressions
+(`.*`), whole word (`W`), case sensitivity (`Aa`), Rust files only (`.rs`, on by default) and
+definitions only (`Defs`, which looks for `fn`, `struct`, `enum`, `trait` and similar followed by the
+query).
+
+History has two sections:
+
+- Changes shows the jj change graph (the default log, or any revset typed into the field; the menu
+  has presets such as `trunk()..@`), or for a git repository without jj, the git log. In a jj
+  repository the working-copy box lets you describe `@`, commit, start a new change, or review `@`.
+  Each change's context menu can review it, review from it to `@`, edit, start a new change on top,
+  squash into the parent, set or push bookmarks, abandon, or copy its id. Push and abandon ask for
+  confirmation first. Spelunk passes every jj command its message explicitly and sets `EDITOR` to
+  `true` for the tools it starts, so nothing waits on an editor.
+- Pull Requests lists the repository's open GitHub pull requests through `gh`: review requested,
+  mine, or all open, with a search field that takes GitHub search syntax or `#number`. Each row's
+  context menu has Review in Spelunk, Open on GitHub and Copy URL.
+
+### Going to a file
+
+⌘K opens the file palette: type fragments of a path separated by spaces. `path:42` opens a line,
+`:42` jumps within the open file, `@name` lists symbols in the open file, and `#name` searches
+workspace symbols. ⇧⌘K opens the command palette, which lists every action in the app.
+
+### The context pane
+
+Click a symbol to load it into the context pane: its kind, definition, signature and docs, callers
+(expandable up to entry points), callees in call order, implementations, references, and mentions in
+files of other languages. Test callers are hidden until you show them. Click any entry to go there.
+Pin keeps the current symbol while you click elsewhere.
+
+The footer names the provider that answered and has a Details button with the state of every
+provider (see [Code intelligence](#code-intelligence)).
+
+### Go to definition, back and forward
+
+⌘-click a symbol, press ⇧⌘D, or use the context menu's "Go to Definition of …". When there are
+several definitions the status bar says how many and the first is shown. ⌘[ and ⌘] (or the toolbar
+arrows) move back and forward through the places you have been, returning to the exact line and to
+the same version of the file.
+
+The editor's context menu also has Show Callers, Show Callees, code path and bookmark commands,
+"Add Review Comment…" when the review has a pull request, "Ask Claude About This…", and "Generate
+Code Path for … with Claude".
+
+### Hover cards
+
+Rest the pointer on a symbol to see its kind, signature, docs and a link to its definition. The
+card stays while the pointer is on the symbol or the card, so its link can be clicked. Keywords get
+no card. Turn hover off or change the delay (0.6 s by default) in Settings › Editor › Hover.
+
+### Outline
+
+The Outline pane lists the items of the open file from its tree-sitter parse, with their line
+counts and test items marked. Click one to go there. In the file palette, `@name` searches the same
+items.
+
+### Minimap
+
+The minimap at the right edge of the editor shows the whole file's line shapes and the visible
+area; click or drag to scroll. In a review it adds diff colors, every hunk tinted by its tier, and
+the selected hunk outlined. Hover a hunk on the minimap to see what it is. The editor also marks the selected
+hunk's extent with a tier-colored bar and dashed lines. Both can be turned off in Settings › Editor ›
+Review aids.
+
+### Diff modes
+
+While a file that belongs to the review is open, the toolbar's picker sets how it is shown:
+
+| Mode | Shows |
+|---|---|
+| Inline | The new version, with removed lines in place, numbered with their old line numbers |
+| Split | The old version on the left and the new on the right, scrolled together |
+| After | The new version only |
+| Before | The old version only (from the command palette, "Diff: Before") |
+
+### Whitespace
+
+Review diffs ignore whitespace by default (`git diff -w`, `jj diff --ignore-all-space`): hunks that
+only re-indent or change spacing are left out, and files with nothing else changed drop out of the
+review. The toolbar button next to the diff mode picker, the palette commands "Show Whitespace
+Changes" / "Ignore Whitespace Changes" and Settings › Review › Diff switch it for every open review.
+A pull request whose commits cannot be fetched locally uses GitHub's diff, which always includes
+whitespace.
+
+## Code intelligence
+
+Navigation asks the most precise provider available and falls back when it cannot answer:
+
+1. The file's language server: rust-analyzer for `.rs`, sourcekit-lsp for `.swift`. A server counts
+   as available while it is indexing as well as when ready.
+2. The SCIP index, for Rust. It is generated with `rust-analyzer scip` and cached per repository.
+   While rust-analyzer is still warming up, the SCIP index answers first (Settings › Code
+   Intelligence › "Answer from the SCIP index while rust-analyzer warms up"). A file modified after
+   the index was generated is not answered from it.
+3. tree-sitter: definitions found by searching for item keywords and confirming against the parsed
+   outline, callers found as call expressions grouped by enclosing function, callees from the
+   function body.
+4. Text search with ripgrep, for references, implementations (`impl … Name`) and callers.
+
+Every answer carries its source. Results from anything below a language server have a small tag:
+SCIP (it may trail the working copy), tree-sitter (types are not resolved), or text search (it may
+include false matches). Hover the tag for the caveat.
+
+Click the provider status in the status bar, or Details in the context pane footer, to see each
+provider's state. From there you can start, restart or stop a language server, generate or reindex
+the SCIP index (generation is never automatic), reveal the index cache, and set the extra arguments
+for `cargo clippy` (default `--workspace`).
+
+`cargo clippy` runs on request (palette, repository menu or that popover). Its diagnostics show as
+dots in the gutter and in the Problems pane.
+
+rust-analyzer starts when a Rust repository opens. sourcekit-lsp starts the first time a Swift file
+is opened. Each server keeps a limited number of files open (24 by default). Binary paths can be
+set in Settings › Code Intelligence; otherwise Spelunk looks on `PATH`, then (for rust-analyzer) in
+Zed's and VS Code's installs and Homebrew, and (for sourcekit-lsp) through `xcrun`.
+
+## Code paths and bookmarks
+
+A code path is a named, ordered list of locations with a note on each: how a request flows, how a
+value is built, where a bug travels. Paths are kept per repository.
+
+### Building a path
+
+- ⇧⌘T (or the toolbar's Trace button, or "Add to Code Path" in the context menu) adds the cursor
+  location after the current step, titled by its enclosing item, and opens its note for editing.
+  If no path is active, one is created.
+- Each step remembers how you got there: go to definition, reference, called from, calls,
+  implementation, or added by hand. Navigating never adds steps on its own.
+- New paths come from the Code Paths pane's menu or the palette: New Code Path, New Code Path from
+  Cursor, or Generate with Claude….
+- In the Code Paths pane, right-click a step to edit its note, move it up or down, set its location
+  to the cursor, or remove it. The path menu also has Rename…, Duplicate and Delete.
+
+### Following a path
+
+When the current step is in the open file, a banner above the editor shows the path's steps as
+numbered dots and its note. ⌥] and ⌥[ (or ⌥⌘↓ and ⌥⌘↑) move to the next and previous step. Steps are
+numbered in the gutter, and a "→ step N" marker follows a call site that leads to another step.
+Between steps, Spelunk looks for a call from one step's function to the next; a hop where it finds
+none (a channel, a trait object, an async boundary) is marked inferred.
+
+"Share as Markdown" in the pane, or "Copy Code Path as Markdown" in the palette, copies the path.
+
+### Paths from Claude
+
+Generate with Claude… (also the Claude pane's Trace button, ⇧⌘↩) turns a question into a path,
+anchored at the cursor if you leave that checked. Steps are matched against the parsed files to fix
+their line numbers; a step that cannot be matched to a symbol is marked unverified. A finished path
+does not move the editor; open it from its card in the Claude pane or from the path picker. Refine…
+and Regenerate start a new run from the same question.
+
+### Bookmarks
+
+⇧⌘B or a double-click in the gutter toggles a bookmark on the cursor line. The Bookmarks pane lists
+them with the review or revision they were made in; while it is open, ⌘0 to ⌘9 jump to the first
+ten. Right-click to remove one.
+
+## Reviewing
+
+### Review targets
+
+The working copy review is always open: `@` against its parent in a jj repository, or uncommitted
+changes against `HEAD` in git. It refreshes as files change on disk, after a short delay (0.6 s,
+Settings › Review › Live review). When `@` is empty, the Review tab offers to review the parent
+change instead.
+
+Open other reviews from the review menu in the toolbar ("Compare Revisions…" and "Review a Pull
+Request…"), the History tab, or the command palette:
+
+| Target | How to open it |
+|---|---|
+| A jj change | History › Changes › Review This Change (diffed against its parent) |
+| A jj range | Compare Revisions… with from and to revsets, "Stack since trunk()", or Review from Here to @ |
+| Uncommitted git changes | Compare Revisions… › Uncommitted git changes |
+| A git base to the working tree | Compare Revisions… with a base (default `origin/main`); Spelunk diffs from its merge base with `HEAD` |
+| A git commit | History › Changes › Review This Change in a git repository |
+| A GitHub pull request | History › Pull Requests › Review in Spelunk, or a PR number in Compare Revisions… |
+
+Each review you open is pinned in the review menu beside the working copy; ⌃1 to ⌃9 switch between
+them.
+
+For a pull request, Spelunk fetches the PR's head from a remote that points at the GitHub repository
+(`git fetch <remote> pull/N/head`) the first time, then diffs locally from the merge base. If the
+commits cannot be fetched, it uses `gh pr diff` and reads file contents from the GitHub API. When
+you reopen a review, the last result is shown immediately while it refreshes.
+
+### Linking a local change to its pull request
+
+A local review (the working copy, a jj change or a git branch) looks for an open pull request whose
+head branch is one of the reviewed revision's local jj bookmarks, or the git branch name. When it
+finds one, the review header shows the pull request, and the review gets the PR's threads, checks,
+the Conversation pane and the comment composer, while the diff is still computed locally. Threads
+anchor to the PR's pushed head, so their line numbers may not match a local change that is ahead of
+it until you push.
+
+### Tiers and the review list
+
+Each hunk is sorted into a tier by the [review rules](rules.md):
+
+| Tier | Typical contents |
+|---|---|
+| Critical | unsafe code, atomics and locking, concurrency and channels, new panic paths, serialization, Drop/Send/Sync, public signatures, changed safety comments |
+| Behavior | control flow and logic, added or removed code, changes in languages other than Rust |
+| Plumbing | values threaded through calls, module declarations, manifest and dependency changes |
+| Docs | Markdown and comment changes |
+| Tests | test files and `#[cfg(test)]` / `#[test]` regions |
+| Mechanical | formatting-only and comment-wording changes, imports, complete renames, lockfiles, generated files |
+
+The list has two modes. Importance lists the Critical, Behavior and Plumbing tiers, then a "Low
+signal" box holding Docs, Tests and Mechanical hunks, which you can mark viewed together. Files lists
+files ordered by their most important hunk. The importance bar and the "x/y important reviewed"
+count above the list cover the important tiers only.
+
+The strip above the editor shows the selected hunk's tier, enclosing item, size and summary; hover
+the summary to see which rule decided it and what Claude said. In the context pane, the change
+context shows why the hunk got its tier, the callers of the item it changes, the remaining callers
+of functions whose calls it removes, the tests that reach it, its attachments, and other hunks in
+its group. Esc returns the pane to the hunk after you click a symbol.
+
+### Groups
+
+Related hunks are kept together inside the importance list. Every identifier (including those in
+string literals, so a config flag and its name match) that the change removes everywhere, adds
+fresh, or edits across several files forms a group, filed under the tier of its most important
+member. Spelling variants such as `ENABLE_FOO`, `enable_foo` and `EnableFoo` count as one.
+
+Triage › Group with Claude asks a cheaper model (Hunk grouping, `sonnet` by default) for logical
+groups too; those are listed first. "Keep Related Hunks Together" in the Triage menu turns grouping
+in the list off and on. Settings › Review › Grouping sets the maximum number of groups, how much
+overlap merges two groups, and how long a plain word must be to count.
+
+### Quick pass and deep triage
+
+After the rules run, a quick pass sends every hunk the rules did not mark `settled` to the Quick
+classification model (`sonnet`, low effort by default) with the diff text only and no tools, in
+batches of 120 hunks. The model may move a hunk to another tier, except that the quick pass cannot
+lower a hunk the rules call Critical. Each result is cached by hunk content, so reopening a review
+or refreshing the working copy only sends hunks never seen before. Turn the automatic pass off in
+Settings › Review, or run it from Triage › Classify New Hunks Now.
+
+Deep triage (Triage › Deep Triage with Claude, or "Triage Review with Claude" in the palette) runs
+the Review triage model (`opus` by default) in a checkout of the change's head with read-only tools.
+It re-checks every hunk, can change any tier, writes a summary for each hunk and an overview of the
+change, and proposes a reading order that the list then follows. The overview appears in the change
+context pane and is marked "(before latest edits)" once the diff changes.
+
+A sparkle on a hunk means Claude classified it (one sparkle for the quick pass, several for deep
+triage).
+
+### Attachments
+
+Rules can attach extra material to matching hunks: a command's output or files (a plot, a rendered
+component), or a Claude answer with findings, examples and suggested actions. Attachments appear in
+the change context pane. See [rules.md](rules.md#attachments).
+
+### Commit-by-commit review
+
+When a review's range has more than one commit, a commit stepper appears in the review header. Pick
+"All N commits" or one commit from its menu, or step with its arrows or the palette's Next Commit in
+Review and Previous Commit in Review. One commit is diffed against its first parent. Viewed marks
+are kept by hunk content, so a hunk you viewed in one commit stays viewed wherever the same hunk
+appears.
+
+### PR head indexing
+
+Code intelligence normally answers about the working copy, mapping positions from the reviewed
+version to the same identifier there. For a pull request review whose after side is not the
+working copy, "Index head" in the pull request header starts a second rust-analyzer in a worktree
+at the head commit, so symbols in head files are answered about that code. It costs a second full
+index. Settings › Code Intelligence › "Index pull request heads with their own rust-analyzer"
+starts it automatically for any opened review whose after side is not the working copy and that
+touches Rust files.
+
+Head checkouts are detached git worktrees under the repository's application support folder; the
+three most recently used are kept.
+
+### Viewed state
+
+Mark a hunk viewed with V, ⇧⌘V, Space v in vim mode, or the Viewed button on the hunk strip. Marks
+are stored per review, keyed by hunk content, under a name that keeps meaning the same code: the
+pull request number, the jj change id (a change reviewed against its parent keeps its marks across
+rebases), or commit ids. A hunk whose content changes needs another look.
+
+### Comments, threads and submitting a review
+
+Comments go to a GitHub pull request, so they need a PR review or a linked PR.
+
+1. Start a comment with C (or `c` / Space c in vim mode, where visual mode comments on the selected
+   lines), or "Add Review Comment…" in the editor's context menu. A cursor on an inline removed line
+   comments on the old side.
+2. Write it in the composer that opens under the line. "Suggest change" inserts a GitHub suggestion
+   block with the line's text. A warning appears if the line is outside the diff, since GitHub
+   rejects those.
+3. ⌘↩ (Add to review) keeps it as a draft. ⌥⌘↩ (Comment now) posts it immediately on its own.
+4. Drafts are stored locally, stamped with the pull request and head commit they were written
+   against, and listed in the pending review bar below the editor as links to their lines.
+5. In the pending review bar, choose Comment, Approve or Request changes and press Submit… (⇧⌘↩).
+   A confirmation shows how many comments will be posted and as whom, with an optional summary.
+   "Post" sends the review and all drafts in one request.
+
+Existing threads show under their lines in the editor and as speech bubbles in the gutter (orange
+for unresolved). N and P (or `]t` and `[t` in vim mode) move between threads, unresolved first; R
+resolves or unresolves the current one. The Conversation pane lists every thread with Reply and
+Resolve buttons, plus checks and reviewers. Spelunk writes to GitHub only from these explicit
+actions.
+
+### Checking out a change
+
+A pinned review's header has a Check out menu with ways to make the change's head your working copy,
+each confirmed first:
+
+| Review | Options |
+|---|---|
+| jj change or range | `jj new <rev>` (new change on top) or `jj edit <rev>` |
+| git range, in a jj repository | `jj new <head>` |
+| git range | `git switch --detach <head>` (needs a clean working tree) |
+| Pull request, in a jj repository | fetch the PR head as `<remote>/pr/N`, `jj git import`, then `jj new` on it |
+| Pull request | `gh pr checkout N` |
+
+### Closing a review
+
+⌥⌘W, the toolbar's close button, "Close …" in the review menu, or Close Review in the palette
+closes the review being shown and returns to the working copy. A head rust-analyzer for that review
+stops, and a file open at the review's version reopens as the working copy at the same line. The
+working copy review cannot be closed. Viewed marks, drafts and Claude results stay stored, so
+reopening the same review restores them.
+
+## Claude
+
+Claude features run the `claude` CLI (found on `PATH`, or set in Settings › Claude › Claude CLI).
+Sessions load your user settings only, with hooks disabled and no MCP servers or slash commands,
+since they often run in a checkout of someone else's change.
+
+| Feature | Model setting (default) | Tools |
+|---|---|---|
+| Ask | Questions (`opus`) | Read, Grep, Glob |
+| Generated code paths | Traces (`opus`) | Read, Grep, Glob |
+| Deep triage | Review triage (`opus`) | Read, Grep, Glob |
+| Quick classification | Quick classification (`sonnet`, low effort) | none |
+| Grouping | Hunk grouping (`sonnet`) | none |
+| `llm` rule conditions, New Rule from Description | Rule questions (`sonnet`, low effort) | none; Read, Grep, Glob for the rule writer |
+| `claude` attachments | Attachments (`sonnet`) | Read, Grep, Glob |
+
+Each feature's model and effort can be set in Settings › Claude or from the small picker next to the
+feature (in the Claude pane, the Triage menu and the rule writer). Aliases (`fable`, `opus`,
+`sonnet`, `haiku`) resolve to the latest model in each family; full model names also work. Efforts
+are `low`, `medium`, `high`, `xhigh` and `max`.
+
+When the review being shown is not the working copy, asks and traces run in a checkout of the
+change's head and can read the change's full diff, so answers refer to that version.
+
+### Ask
+
+⌘L, the toolbar's Ask button, or Space a in vim mode opens the Claude pane with the question field
+focused. Leave the location checkbox ticked to tell Claude where you are looking. Ask (⌘↩) answers
+in prose with clickable `path:line` citations; Trace (⇧⌘↩) turns the question into a code path.
+
+### The job list
+
+Every ask and trace is a card in the Claude pane, newest first, with its progress (the tools it is
+using), cost and time. Any number can be started; at most four Claude sessions run at once (Settings
+› Claude › Runs), and the rest wait. The status bar shows how many are running and how many finished
+while the pane was not showing. A card's menu has Run Again, Copy Answer and Remove; Clear finished
+removes all finished cards.
+
+### Caching
+
+- A finished ask or trace is kept across relaunches (the last 60 by default). Asking the same
+  question with the same anchor, at the same revision and review, shows the earlier answer marked
+  "Cached" at no cost. Run Again asks anew.
+- Review results (quick and deep tiers, `llm` answers, attachment results) are cached by hunk
+  content and shared across reviews in the repository.
+- Cached results not used for 90 days are removed when the repository is next opened.
+
+## Languages
+
+Rust uses a bundled tree-sitter grammar. Other languages get a basic highlighter until you install a
+grammar in Settings › Languages: pick a preset (Swift, Python, Go, JavaScript, TypeScript + TSX, C,
+C++, Java, JSON, Bash, TOML, YAML, …) or give a grammar's git URL, with an optional subdirectory
+and tag or branch. Spelunk clones it, reads `tree-sitter.json` for grammar names and file types,
+compiles `src/parser.c` and any scanner with the system compiler into a dylib, and copies
+`queries/highlights.scm` and `queries/tags.scm` (the outline). Each new grammar is first loaded and
+exercised in a separate process, and one that crashes, hangs or has an unsupported ABI is never
+loaded into the app. Queries can be edited in place and reloaded. Grammars live in
+`~/Library/Application Support/Spelunk/grammars`.
+
+## Settings
+
+### General
+
+Buttons to edit your review rules and view the defaults, and a note on windows.
+
+### Editor
+
+| Setting | Default | Range |
+|---|---|---|
+| Font size | 13 pt | 9–24 |
+| Line spacing | 1.18 | 1.0–1.8 |
+| Tab width | 4 spaces | 1–8 |
+| Draw the selected hunk's boundary | on | |
+| Show the minimap | on | |
+| Minimap width | 70 pt | 40–140 |
+| Vim navigation in the code view | off | |
+| Show symbol details on hover | on | |
+| Hover delay | 0.6 s | 0.2–2.0 |
+
+Text settings apply when a file is next opened.
+
+### Review
+
+| Setting | Default | Range |
+|---|---|---|
+| Ignore whitespace changes | on | |
+| Classify new hunks with Claude automatically | on | |
+| Hunks per classification request | 120 | 20–400 |
+| Keep related hunks together in the list | on | |
+| Most groups per review | 80 | 10–200 |
+| Merge groups sharing N% of hunks | 60% | 30–90% |
+| Plain words group only when N+ characters | 14 | 8–30 |
+| Refresh after files change | 0.6 s | 0.2–3.0 |
+| Run attachments marked auto | on | |
+
+### Claude
+
+| Setting | Default | Range |
+|---|---|---|
+| Model and effort per feature | see [Claude](#claude) | |
+| At most N Claude sessions at once | 4 | 1–12 |
+| Stop a session after | 30 min | 2–120 |
+| Keep the last N asks and traces | 60 | 10–500 |
+| Forget cached results unused for | 90 days | 7–365 |
+| Claude CLI path | empty (found on `PATH`) | |
+
+### Code Intelligence
+
+| Setting | Default | Range |
+|---|---|---|
+| Start language servers automatically | on | |
+| rust-analyzer path | empty (detect) | |
+| sourcekit-lsp path | empty (detect) | |
+| Keep N files open in each server | 24 | 4–100 |
+| Index pull request heads with their own rust-analyzer | off | |
+| Answer from the SCIP index while rust-analyzer warms up | on | |
+| Keep N parsed files in memory | 300 | 50–2000 |
+
+### Languages
+
+Installed grammars, with buttons to edit their queries, reveal them, remove them, reload queries,
+and add a grammar.
