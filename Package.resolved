@@ -1,5 +1,5 @@
 {
-  "originHash" : "d889ab07d32b27c3fe377a7b428943ae76695f108dc83f661229bd20faf4e7da",
+  "originHash" : "1259fd7a2308c96d525890a1835a06738807390f5f109d7547768d64d96b55d7",
   "pins" : [
     {
       "identity" : "swifttreesitter",
@@ -16,6 +16,15 @@
       "state" : {
         "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
         "version" : "0.25.10"
+      }
+    },
+    {
+      "identity" : "tree-sitter-rust",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter-rust",
+      "state" : {
+        "revision" : "77a3747266f4d621d0757825e6b11edcbf991ca5",
+        "version" : "0.24.2"
       }
     }
   ],

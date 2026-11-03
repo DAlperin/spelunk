@@ -592,7 +592,7 @@ struct IndexPopover: View {
                 }
             }
             Divider()
-            row("tree-sitter", "Rust grammar 0.23 · always on", color: .green) {
+            row("tree-sitter", "Rust grammar 0.24 · always on", color: .green) {
                 Text("Highlighting, outline, enclosing items, test regions, change classification.").font(.caption).foregroundStyle(.secondary)
             }
             Divider()

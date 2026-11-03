@@ -18,8 +18,8 @@ Dependencies:
 
 - [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter), pinned to a revision on `main`
   that uses the tree-sitter 0.25 runtime, so grammars with ABI 15 load.
-- `TreeSitterRustGrammar`, the Rust grammar's generated `parser.c` and `scanner.c` vendored as a C
-  target under `Sources/TreeSitterRustGrammar`, with its license.
+- [tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust), the bundled Rust grammar,
+  pinned to an exact release through its own Swift package.
 
 ## Bundling
 

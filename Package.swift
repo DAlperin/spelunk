@@ -7,24 +7,17 @@ let package = Package(
     dependencies: [
         // main tracks the tree-sitter 0.25 runtime, which loads ABI 15 grammars (0.9.0 stops at ABI 14).
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter", revision: "cbe31cb3601aa29c1f64b6e4328733511126d6d5"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-rust", exact: "0.24.2"),
     ],
     targets: [
         .executableTarget(
             name: "Spelunk",
             dependencies: [
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
-                "TreeSitterRustGrammar",
+                .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
             ],
             path: "Sources/Spelunk",
             swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .target(
-            name: "TreeSitterRustGrammar",
-            path: "Sources/TreeSitterRustGrammar",
-            exclude: ["LICENSE"],
-            sources: ["src/parser.c", "src/scanner.c"],
-            publicHeadersPath: "include",
-            cSettings: [.headerSearchPath("src")]
         ),
         .testTarget(
             name: "SpelunkTests",

@@ -1,6 +1,6 @@
 import Foundation
 import SwiftTreeSitter
-import TreeSitterRustGrammar
+import TreeSitterRust
 
 enum TokenKind: String, Sendable {
     case keyword, type, function, macro, string, number, comment, docComment, attribute, lifetime,
