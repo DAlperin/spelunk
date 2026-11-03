@@ -297,6 +297,7 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        add("New Review Rule from Description…", nil, nil, icon: "wand.and.stars") { ws.showRuleWriter = true }
 
         // Navigation aids
         add("Toggle Bookmark", nil, "⇧⌘B", icon: "bookmark", when: ws.document != nil) { ws.toggleBookmark() }

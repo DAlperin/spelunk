@@ -90,6 +90,7 @@ final class Workspace {
     var contextPinned = false
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
+    var showRuleWriter = false
     /// Show review threads under their lines in the editor.
     var inlineThreads = true
     @ObservationIgnored var connectorCache: (key: String, value: [StepConnector])?
@@ -250,6 +251,7 @@ final class Workspace {
             await r.load()
         } else {
             let r = ReviewSession(root: root, target: target, github: github, tracksWorkingCopy: true)
+            attachSemantics(r)
             workingReview = r
             await r.load()
         }
@@ -523,6 +525,7 @@ final class Workspace {
             r = existing
         } else {
             r = ReviewSession(root: root, target: target, github: github)
+            attachSemantics(r)
             r.onPullRequestLoaded = { [weak self] in self?.inspectorPane = .conversation }
             pinnedReviews.append(r)
             activeReviewKey = target.key

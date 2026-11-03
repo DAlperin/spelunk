@@ -2,14 +2,14 @@ import Foundation
 
 /// The app's Claude features; each has its own model and effort setting.
 enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
-    case ask, trace, triage, classify, group
+    case ask, trace, triage, classify, group, rules, attach
 
     var id: String { rawValue }
     var modelKey: String { "claude.model.\(rawValue)" }
     var effortKey: String { "claude.effort.\(rawValue)" }
     /// The quick classification pass runs on every new hunk, so it defaults to a cheaper setup.
-    var defaultModel: String { self == .classify || self == .group ? "sonnet" : "opus" }
-    var defaultEffort: String? { self == .classify ? "low" : nil }
+    var defaultModel: String { [.classify, .group, .rules, .attach].contains(self) ? "sonnet" : "opus" }
+    var defaultEffort: String? { self == .classify || self == .rules ? "low" : nil }
 
     var label: String {
         switch self {
@@ -18,6 +18,8 @@ enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
         case .triage: "Review triage"
         case .classify: "Quick classification"
         case .group: "Hunk grouping"
+        case .rules: "Rule questions (llm conditions)"
+        case .attach: "Attachments"
         }
     }
 }
@@ -77,6 +79,7 @@ enum Claude {
         task: ClaudeTask,
         schema: [String: Any]? = nil,
         tools: [String] = ["Read", "Grep", "Glob"],
+        model modelOverride: String? = nil,
         onEvent: @escaping @Sendable (ClaudeEvent) -> Void = { _ in }
     ) async throws -> ClaudeResult {
         guard let bin = binary else { throw ClaudeError(message: "claude CLI not found on PATH (set it in Settings)") }
@@ -84,7 +87,7 @@ enum Claude {
             "-p", "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#,
             "--disable-slash-commands", "--setting-sources", "project",
-            "--model", model(for: task),
+            "--model", modelOverride ?? model(for: task),
             "--append-system-prompt", system,
         ]
         if let effort = effort(for: task) { args += ["--effort", effort] }

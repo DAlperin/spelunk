@@ -55,6 +55,8 @@ struct HunkAnalysis: Sendable {
     var settled = false
     /// Where the deciding rule is defined, e.g. `defaults:42`.
     var rule: String?
+    /// Semantic or `llm` conditions the first pass could not decide.
+    var pending = RulePending()
 }
 
 /// Small Rust lexer for comparing hunks token-by-token. Comments and whitespace are dropped.
@@ -117,11 +119,20 @@ enum RustTokens {
 /// their own rule files on top.
 enum ChangeClassifier {
     static func classify(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?, root: URL? = nil) -> HunkAnalysis {
+        analyze(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc, root: root).analysis
+    }
+
+    /// The analysis plus the facts behind it, kept so the second pass can re-evaluate with answers.
+    static func analyze(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?, root: URL? = nil) -> (analysis: HunkAnalysis, facts: HunkFacts) {
         let rules = root.map { ReviewRules.shared.rules(for: $0) } ?? ReviewRules.shared.defaultsOnly
         let facts = Self.facts(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc)
+        return (evaluate(rules, facts, enclosing: enclosing(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc)), facts)
+    }
+
+    static func evaluate(_ rules: RuleSet, _ facts: HunkFacts, enclosing: String?) -> HunkAnalysis {
         let outcome = rules.evaluate(facts)
-        return HunkAnalysis(tier: outcome.tier, reasons: outcome.reasons, enclosing: enclosing(file: file, hunk: hunk, oldDoc: oldDoc, newDoc: newDoc),
-                            settled: outcome.settled, rule: outcome.rule)
+        return HunkAnalysis(tier: outcome.tier, reasons: outcome.reasons, enclosing: enclosing,
+                            settled: outcome.settled, rule: outcome.rule, pending: outcome.pending)
     }
 
     /// Names the hunk after the first changed line that sits inside an item, so a hunk that starts

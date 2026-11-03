@@ -113,6 +113,41 @@ enum ClaudeTasks {
     otherwise. Reasons: at most 8 words, concrete.
     """
 
+    static let ruleQuestionSystem = """
+    You answer one yes/no question about each diff hunk for a code review rule. You see only the diff.
+    Return the ids of hunks for which the answer is clearly yes; leave out hunks where it is no or unclear.
+    """
+
+    struct RuleQuestionResponse: Decodable { var yes: [String] }
+
+    static let ruleQuestionSchema: [String: Any] = [
+        "type": "object",
+        "properties": ["yes": ["type": "array", "items": ["type": "string"]]],
+        "required": ["yes"],
+    ]
+
+    static let attachSystem = """
+    You produce a review aid that a rule attached to part of a code change. Follow the request exactly,
+    read the repository with the tools when the diff is not enough, and answer in Markdown. Cite code as
+    `path:line`. Keep it short enough to read next to the diff; no preamble.
+    """
+
+    static func ruleWriterSystem(reference: String, defaults: String) -> String {
+        """
+        You write review rules for Spelunk, a code review tool, in its small rule language. Output only the
+        rule text, no prose and no code fences. Prefer deterministic conditions (path, lang, hunk facts, code
+        regexes, ts queries, semantic conditions) and use `llm "<question>"` only for what they cannot express.
+        Rules run top to bottom and the first matching tier rule wins, so make conditions specific. Use
+        `collect` on critical risk signals, `note` for extra reasons, `attach` for review artifacts.
+
+        Syntax:
+        \(reference)
+
+        The built-in rules, for style:
+        \(defaults)
+        """
+    }
+
     static let groupSystem = """
     You group the hunks of a code change into logical sub-changes so a reviewer can read each one as a
     unit: for example, removing a feature flag and every branch that read it, adding a new operator and its

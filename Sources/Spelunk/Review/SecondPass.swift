@@ -1,0 +1,251 @@
+import Foundation
+
+/// A review artifact an `attach` rule produces for some part of the change.
+struct Attachment: Identifiable, Hashable {
+    var rule: AttachRule
+    /// Content-derived: the rule text plus the matched hunks' content keys.
+    var key: String
+    var label: String
+    var paths: [String]
+    var hunkIDs: [String]
+    var id: String { key }
+
+    static func == (a: Attachment, b: Attachment) -> Bool { a.key == b.key }
+    func hash(into h: inout Hasher) { h.combine(key) }
+
+    var isClaude: Bool { if case .claude = rule.action { true } else { false } }
+}
+
+struct AttachmentResult: Codable, Hashable {
+    var markdown: String?
+    var output: String?
+    /// Files the command wrote into its output directory, as absolute paths.
+    var files: [String] = []
+    var error: String?
+    var cost: Double = 0
+    var date = Date()
+    var seconds: Double = 0
+}
+
+extension ReviewSession {
+    private func answerKey(_ q: String, _ h: Hunk) -> String { q + "\u{1}" + h.contentKey }
+
+    private func rules() -> RuleSet { ReviewRules.shared.rules(for: root) }
+
+    /// Facts for a hunk with every answer known so far.
+    func currentFacts(_ h: Hunk) -> HunkFacts? {
+        guard var f = facts[h.id] else { return nil }
+        f.semantic = semantic[h.id]?.facts
+        for (k, v) in conditionAnswers where k.hasSuffix("\u{1}" + h.contentKey) {
+            f.answers[String(k.dropLast(h.contentKey.count + 1))] = v
+        }
+        return f
+    }
+
+    /// What a hunk still needs for its tier rules and attachments to be decided.
+    private func pending(_ h: Hunk, _ rs: RuleSet) -> RulePending {
+        guard let f = currentFacts(h) else { return RulePending() }
+        var p = rs.evaluate(f).pending
+        for a in rs.attachments where RuleSet.match(a.conditions, f) == nil { p.formUnion(RuleSet.pending(a.conditions, f)) }
+        return p
+    }
+
+    /// Second pass: answers semantic and `llm` conditions for hunks whose other conditions already
+    /// hold, re-evaluates them, then matches attachments.
+    func resolvePendingRules() async {
+        guard !resolvingRules else { return }
+        resolvingRules = true
+        defer { resolvingRules = false }
+        let rs = rules()
+        for _ in 0..<3 {
+            var semanticWork: [(Hunk, SemanticNeeds)] = []
+            var questions: [String: [Hunk]] = [:]
+            for f in files {
+                for h in f.hunks {
+                    let p = pending(h, rs)
+                    if !p.needs.isEmpty { semanticWork.append((h, p.needs.union(semantic[h.id]?.needs ?? SemanticNeeds()))) }
+                    for q in p.questions { questions[q, default: []].append(h) }
+                }
+            }
+            if semanticWork.isEmpty && questions.isEmpty { break }
+            if let provider = semanticProvider {
+                for (i, (h, needs)) in semanticWork.enumerated() {
+                    guard let f = file(for: h) else { continue }
+                    ruleState = "Semantic rules: \(i + 1) of \(semanticWork.count) hunks"
+                    semantic[h.id] = (needs, await provider(h, f, needs))
+                }
+            } else {
+                for (h, needs) in semanticWork { semantic[h.id] = (needs, .unavailable) }
+            }
+            for (q, hs) in questions.sorted(by: { $0.key < $1.key }) {
+                ruleState = "Asking \(ClaudeModels.label(Claude.model(for: .rules))): \(q) (\(hs.count) hunks)"
+                await answer(q, for: hs)
+            }
+            reevaluate(rs)
+        }
+        reevaluate(rs)
+        matchAttachments(rs)
+        ruleState = nil
+    }
+
+    private func reevaluate(_ rs: RuleSet) {
+        var next = analyses
+        for f in files {
+            for h in f.hunks {
+                guard let facts = currentFacts(h), facts.semantic != nil || !facts.answers.isEmpty else { continue }
+                next[h.id] = ChangeClassifier.evaluate(rs, facts, enclosing: analyses[h.id]?.enclosing)
+            }
+        }
+        analyses = next
+    }
+
+    /// One batched yes/no question per rule condition; every hunk sent gets a cached answer.
+    private func answer(_ q: String, for hunks: [Hunk]) async {
+        var remaining = hunks.filter { conditionAnswers[answerKey(q, $0)] == nil }
+        while !remaining.isEmpty {
+            var prompt = "Question: \(q)\n\nChange: \(title)\n\nHunks:\n"
+            var budget = 50_000
+            var sent: [Hunk] = []
+            for h in remaining {
+                let body = h.lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }
+                let text = body.count > 40 ? (body.prefix(40) + ["… \(body.count - 40) more lines"]).joined(separator: "\n") : body.joined(separator: "\n")
+                let chunk = "\n### \(h.id) file=\(h.path) in=\(analyses[h.id]?.enclosing ?? "-")\n\(text)\n"
+                if budget - chunk.utf8.count < 0 && !sent.isEmpty { break }
+                budget -= chunk.utf8.count
+                prompt += chunk
+                sent.append(h)
+            }
+            remaining.removeFirst(sent.count)
+            do {
+                let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.ruleQuestionSystem, cwd: root, task: .rules,
+                                             schema: ClaudeTasks.ruleQuestionSchema, tools: [])
+                let resp = try Claude.decode(ClaudeTasks.RuleQuestionResponse.self, from: r)
+                let yes = Set(resp.yes)
+                for h in sent { conditionAnswers[answerKey(q, h)] = yes.contains(h.id) }
+                save()
+            } catch {
+                ruleState = "Rule question failed: \(error.localizedDescription)"
+                return
+            }
+        }
+    }
+
+    // MARK: Attachments
+
+    func matchAttachments(_ rs: RuleSet? = nil) {
+        let rs = rs ?? rules()
+        var out: [Attachment] = []
+        for rule in rs.attachments {
+            var matched: [Hunk] = []
+            for f in files {
+                for h in f.hunks {
+                    if let facts = currentFacts(h), RuleSet.match(rule.conditions, facts) == true { matched.append(h) }
+                }
+            }
+            guard !matched.isEmpty else { continue }
+            let buckets: [(String, [Hunk])]
+            switch rule.scope {
+            case .change: buckets = [("Whole change", matched)]
+            case .file: buckets = Dictionary(grouping: matched, by: \.path).sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+            case .hunk: buckets = matched.map { (analyses[$0.id]?.enclosing ?? $0.path.lastPathComponent, [$0]) }
+            }
+            for (label, hs) in buckets {
+                let basis = rule.text + "\n" + hs.map(\.contentKey).sorted().joined(separator: "\n")
+                let key = String(UInt(bitPattern: basis.stableHash), radix: 36)
+                out.append(Attachment(rule: rule, key: key, label: label, paths: Array(Set(hs.map(\.path))).sorted(), hunkIDs: hs.map(\.id)))
+            }
+        }
+        attachments = out
+        for a in out where attachmentResults[a.key] == nil {
+            if let r = loadAttachmentResult(a.key) { attachmentResults[a.key] = r }
+        }
+        for a in out where a.rule.auto && attachmentResults[a.key] == nil { runAttachment(a) }
+    }
+
+    func attachments(for h: Hunk) -> [Attachment] {
+        attachments.filter { $0.hunkIDs.contains(h.id) }
+    }
+
+    func attachments(forPath p: String) -> [Attachment] { attachments.filter { $0.paths.contains(p) } }
+
+    private func attachmentDir(_ key: String) -> URL {
+        let d = AppPaths.support(for: root).appendingPathComponent("attachments/\(key)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    private func loadAttachmentResult(_ key: String) -> AttachmentResult? {
+        let u = AppPaths.support(for: root).appendingPathComponent("attachments/\(key)/result.json")
+        guard let d = try? Data(contentsOf: u) else { return nil }
+        return try? JSONDecoder().decode(AttachmentResult.self, from: d)
+    }
+
+    func cancelAttachment(_ a: Attachment) {
+        attachmentTasks[a.key]?.cancel()
+        attachmentTasks[a.key] = nil
+        attachmentsRunning.remove(a.key)
+    }
+
+    /// Runs the rule's command or Claude prompt. Results are stored next to their output files and
+    /// reused until the rule or the matched hunks change.
+    func runAttachment(_ a: Attachment) {
+        guard !attachmentsRunning.contains(a.key), let action = a.rule.action else { return }
+        attachmentsRunning.insert(a.key)
+        let dir = attachmentDir(a.key)
+        let out = dir.appendingPathComponent("out", isDirectory: true)
+        try? FileManager.default.removeItem(at: out)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let hunks = allHunks.filter { a.hunkIDs.contains($0.id) }
+        let diff = hunks.map { h in
+            "--- \(h.path)\n" + h.header + "\n" + h.lines.map { ($0.kind == .added ? "+" : $0.kind == .removed ? "-" : " ") + $0.text }.joined(separator: "\n")
+        }.joined(separator: "\n\n")
+        let diffURL = dir.appendingPathComponent("hunks.diff")
+        try? diff.write(to: diffURL, atomically: true, encoding: .utf8)
+        let name = hunks.first.flatMap { analyses[$0.id]?.enclosing } ?? ""
+        let start = Date()
+        attachmentTasks[a.key] = Task {
+            var result = AttachmentResult()
+            switch action {
+            case .run(let command):
+                let quoted = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+                let cmd = command
+                    .replacingOccurrences(of: "{file}", with: quoted(a.paths.first ?? ""))
+                    .replacingOccurrences(of: "{files}", with: a.paths.map(quoted).joined(separator: " "))
+                    .replacingOccurrences(of: "{out}", with: quoted(out.path))
+                    .replacingOccurrences(of: "{name}", with: quoted(name))
+                let env = ["SPELUNK_FILE=\(a.paths.first ?? "")", "SPELUNK_FILES=\(a.paths.joined(separator: "\n"))",
+                           "SPELUNK_OUT=\(out.path)", "SPELUNK_DIFF=\(diffURL.path)", "SPELUNK_NAME=\(name)",
+                           "SPELUNK_BASE=\(oldRev)", "SPELUNK_HEAD=\(newRev ?? "")"]
+                do {
+                    let r = try await Shell.run("/usr/bin/env", env + ["/bin/sh", "-c", cmd], cwd: root)
+                    let text = (r.stdout + (r.ok ? "" : "\n" + r.stderr)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty { result.output = String(text.prefix(40_000)) }
+                    if !r.ok { result.error = "exit \(r.status)" }
+                } catch {
+                    result.error = error.localizedDescription
+                }
+            case .claude(let ask):
+                var prompt = ask.replacingOccurrences(of: "{name}", with: name).replacingOccurrences(of: "{file}", with: a.paths.first ?? "")
+                prompt += "\n\nFiles: \(a.paths.joined(separator: ", "))\nChange: \(title)\n\nThe relevant hunks:\n\n" + String(diff.prefix(60_000))
+                do {
+                    let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.attachSystem, cwd: root, task: .attach,
+                                                 model: a.rule.model)
+                    result.markdown = r.text
+                    result.cost = r.costUSD
+                } catch {
+                    if Task.isCancelled { return }
+                    result.error = error.localizedDescription
+                }
+            }
+            if Task.isCancelled { return }
+            let files = (try? FileManager.default.contentsOfDirectory(at: out, includingPropertiesForKeys: nil)) ?? []
+            result.files = files.map(\.path).sorted()
+            result.seconds = Date().timeIntervalSince(start)
+            result.date = Date()
+            if result.error == nil, let d = try? JSONEncoder().encode(result) { try? d.write(to: dir.appendingPathComponent("result.json")) }
+            attachmentResults[a.key] = result
+            attachmentsRunning.remove(a.key)
+            attachmentTasks[a.key] = nil
+        }
+    }
+}

@@ -112,6 +112,21 @@ final class ReviewSession {
     /// Groups opened in the list; the one holding the selected hunk opens on its own.
     var expandedGroups: Set<String> = []
     @ObservationIgnored var layoutCache: [TierSection]?
+
+    /// Facts from the first pass, re-evaluated once semantic and `llm` answers arrive.
+    @ObservationIgnored var facts: [String: HunkFacts] = [:]
+    /// Answers semantic rule conditions; set by the workspace, which owns code intelligence.
+    @ObservationIgnored var semanticProvider: (@MainActor (Hunk, FileDiff, SemanticNeeds) async -> SemanticFacts)?
+    @ObservationIgnored var semantic: [String: (needs: SemanticNeeds, facts: SemanticFacts)] = [:]
+    /// `llm` condition answers keyed by question and hunk content.
+    var conditionAnswers: [String: Bool] = [:]
+    var ruleState: String?
+    var resolvingRules = false
+
+    var attachments: [Attachment] = []
+    var attachmentResults: [String: AttachmentResult] = [:]
+    var attachmentsRunning: Set<String> = []
+    @ObservationIgnored var attachmentTasks: [String: Task<Void, Never>] = [:]
     var grouping = false
     var groupState: String?
 
@@ -163,6 +178,7 @@ final class ReviewSession {
         var fingerprint: String
         var pendingComments: [PendingComment]?
         var claudeGroups: [HunkGroup]?
+        var conditionAnswers: [String: Bool]?
     }
 
     private var stateURL: URL {
@@ -182,13 +198,14 @@ final class ReviewSession {
         reviewOrder = p.reviewOrder ?? []
         pendingComments = p.pendingComments ?? []
         claudeGroups = p.claudeGroups ?? []
+        conditionAnswers = p.conditionAnswers ?? [:]
         persistedFingerprint = p.fingerprint
     }
 
     private var persistedFingerprint: String?
 
     func save() {
-        let p = Persisted(viewed: Array(viewed), notes: notes, llm: llm, overview: overview, reviewOrder: reviewOrder, fingerprint: fingerprint, pendingComments: pendingComments, claudeGroups: claudeGroups)
+        let p = Persisted(viewed: Array(viewed), notes: notes, llm: llm, overview: overview, reviewOrder: reviewOrder, fingerprint: fingerprint, pendingComments: pendingComments, claudeGroups: claudeGroups, conditionAnswers: conditionAnswers)
         if let d = try? JSONEncoder().encode(p) { try? d.write(to: stateURL, options: .atomic) }
     }
 
@@ -210,12 +227,19 @@ final class ReviewSession {
             if case .githubPR(let n) = target, first { await refreshPullRequest(n) }
             if first { state = .loading("Classifying \(newFiles.count) files") }
             var newAnalyses: [String: HunkAnalysis] = [:]
+            var newFacts: [String: HunkFacts] = [:]
             for f in newFiles {
                 let oldDoc = f.status == .added ? nil : await document(f.oldPath, side: .old)
                 let newDoc = f.status == .deleted ? nil : await document(f.newPath, side: .new)
-                for h in f.hunks { newAnalyses[h.id] = ChangeClassifier.classify(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc, root: root) }
+                for h in f.hunks {
+                    let r = ChangeClassifier.analyze(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc, root: root)
+                    newAnalyses[h.id] = r.analysis
+                    newFacts[h.id] = r.facts
+                }
             }
             files = newFiles
+            facts = newFacts
+            semantic = [:]
             analyses = newAnalyses
             recomputeGroups()
             // Viewed marks and triage are keyed by hunk content, so entries for hunks that no longer
@@ -227,6 +251,7 @@ final class ReviewSession {
             state = .ready
             save()
             if Self.autoClassify { Task { await quickClassify() } }
+            Task { await resolvePendingRules() }
         } catch {
             state = .failed(error.localizedDescription)
         }

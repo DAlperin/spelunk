@@ -66,6 +66,9 @@ final class DebugBridge {
         case "listmode": if let m = ReviewSession.ListMode(rawValue: arg.capitalized) { ws.review?.listMode = m }
         case "selecthunk":
             if let h = ws.review?.allHunks.first(where: { $0.path.contains(arg) || $0.lines.contains { $0.kind != .context && $0.text.contains(arg) } }) { ws.selectHunk(h) }
+        case "runattach":
+            if let r = ws.review, let h = r.allHunks.first(where: { $0.id == ws.selectedHunkID }) { r.attachments(for: h).forEach(r.runAttachment) }
+        case "pane": if let p = InspectorPane.allCases.first(where: { $0.rawValue.lowercased().hasPrefix(arg.lowercased()) }) { ws.inspectorPane = p }
         case "groupclaude": Task { await ws.review?.groupWithClaude() }
         case "trace": ws.generateTrace(arg, includeAnchor: true)
         case "ask": ws.ask(arg, includeAnchor: true)
@@ -167,6 +170,8 @@ final class DebugBridge {
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
+        for a in ws.review?.attachments ?? [] { s += "attach: \(a.rule.title) [\(a.label)] result=\(ws.review?.attachmentResults[a.key] != nil)\n" }
+        if let r = ws.review { for h in r.allHunks where r.analyses[h.id]?.reasons.contains(where: { $0.contains("join rendering") || $0.contains("places") }) == true { s += "semantic: \(h.id) \(r.analyses[h.id]!.reasons)\n" } }
         for g in ws.review?.allGroups ?? [] { s += "group: \(g.title) hunks=\(g.keys.count)\n" }
         for e in ws.jobs { s += "job: \(e.kind.rawValue) \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
         if let m = ws.statusMessage { s += "status: \(m)\n" }

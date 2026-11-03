@@ -41,9 +41,10 @@ enum HunkGrouper {
     /// Distinctive enough to tie hunks together: snake case, camel case or digits, or simply long.
     static func distinctive(_ s: String) -> Bool {
         guard s.count >= 4, !stop.contains(s), s.first?.isNumber == false else { return false }
-        if s.count >= 10 { return true }
         let inner = s.dropFirst()
-        return s.contains("_") || inner.contains(where: \.isUppercase) || s.contains(where: \.isNumber)
+        if s.contains("_") || inner.contains(where: \.isUppercase) || s.contains(where: \.isNumber) { return true }
+        // A single plain word, capitalized or not, is usually English or a common type name.
+        return s.count >= 14
     }
 
     private static let identRE = try! NSRegularExpression(pattern: #"[A-Za-z_][A-Za-z0-9_]*"#)

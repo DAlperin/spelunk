@@ -83,4 +83,65 @@ final class RulesTests: XCTestCase {
                                  DiffLine(kind: .added, text: "    work2().await;", oldLine: nil, newLine: 2)])
         XCTAssertNotEqual(evaluate(rules, f, other, old: old, new: new).reasons.first, "lock taken in async fn")
     }
+
+    func testSemanticConditionsWaitForAnswers() {
+        let (f, h) = hunk([], [(0, "x += 1;")])
+        let rules = """
+        rule critical "hot path: {callers} callers"
+          lang rust
+          callers > 2
+          called-from /peek/ depth 2
+        """
+        let parsed = RuleParser.parse(rules, source: "test")
+        XCTAssertEqual(parsed.errors, [])
+        let set = RuleSet(rules: parsed.rules + ReviewRules.shared.defaultsOnly.rules)
+        var facts = ChangeClassifier.facts(file: f, hunk: h, oldDoc: nil, newDoc: nil)
+        let first = set.evaluate(facts)
+        XCTAssertNotEqual(first.tier, .critical)
+        XCTAssertTrue(first.pending.needs.callers)
+        XCTAssertEqual(first.pending.needs.depth, 2)
+
+        facts.semantic = SemanticFacts(callers: [.init(name: "a", path: "x.rs"), .init(name: "b", path: "y.rs"), .init(name: "c", path: "z.rs")],
+                                       transitiveCallers: ["a", "sequence_peek"])
+        let second = set.evaluate(facts)
+        XCTAssertEqual(second.tier, .critical)
+        XCTAssertEqual(second.reasons.first, "hot path: 3 callers")
+        XCTAssertTrue(second.pending.isEmpty)
+
+        facts.semantic = .unavailable
+        XCTAssertNotEqual(set.evaluate(facts).tier, .critical)
+    }
+
+    func testLLMConditionAndAttach() {
+        let text = """
+        rule critical "resolver change"
+          path ~ **/graphql/**
+          llm "Does this add a resolver?"
+
+        attach "Usage examples" auto per hunk
+          path ~ **/graphql/**
+          claude "Show usage for {name}"
+          model sonnet
+
+        attach "Broken"
+          path ~ **
+        """
+        let parsed = RuleParser.parseAll(text, source: "test")
+        XCTAssertEqual(parsed.rules.count, 1)
+        XCTAssertEqual(parsed.attachments.count, 1)
+        XCTAssertEqual(parsed.errors.count, 1)
+        let a = parsed.attachments[0]
+        XCTAssertTrue(a.auto)
+        XCTAssertEqual(a.scope, .hunk)
+        XCTAssertEqual(a.model, "sonnet")
+        if case .claude(let p) = a.action { XCTAssertEqual(p, "Show usage for {name}") } else { XCTFail("expected claude action") }
+
+        let (f, h) = hunk([], [(0, "fn resolve_user() {}")], path: "src/graphql/user.rs")
+        var facts = ChangeClassifier.facts(file: f, hunk: h, oldDoc: nil, newDoc: nil)
+        let set = RuleSet(rules: parsed.rules)
+        XCTAssertEqual(set.evaluate(facts).pending.questions, ["Does this add a resolver?"])
+        XCTAssertEqual(RuleSet.match(a.conditions, facts), true)
+        facts.answers["Does this add a resolver?"] = true
+        XCTAssertEqual(set.evaluate(facts).tier, .critical)
+    }
 }

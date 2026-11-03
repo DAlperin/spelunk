@@ -532,6 +532,8 @@ struct ChangeContextSection: View {
                 .font(.caption.weight(.semibold)).padding(.top, 8)
             }
 
+            AttachmentsSection(review: review, hunk: hunk) { ws.openCitation($0) }
+
             ForEach(review.groups(containing: hunk).prefix(3)) { g in
                 RelatedGroupSection(ws: ws, review: review, group: g, current: hunk)
             }

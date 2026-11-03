@@ -30,6 +30,26 @@ import SwiftTreeSitter
 /// - `comment-words <op> N`, `lines <op> N`           (op: < <= > >= ==)
 /// - `ts touches <node-kind>[,<node-kind>…]`          (a syntax node of that kind overlaps the change)
 /// - `ts query <tree-sitter query>`                   (a query match overlaps the change)
+///
+/// Semantic conditions ask rust-analyzer (or the SCIP index, then text search) about the item the
+/// hunk changes. They are checked after the first pass, only for hunks whose other conditions hold:
+/// - `refs <op> N`                                    (references to the changed item)
+/// - `callers <op> N`, `callers in <glob>`            (direct call sites, and where they are)
+/// - `called-from /regex/ [depth N]`                  (a transitive caller's name matches; depth 3)
+/// - `calls /regex/`                                  (the changed function calls a matching name)
+/// - `signature /regex/`                              (the item's signature from hover)
+/// - `llm "<yes/no question>"`                        (asked of a cheap model, batched, cached per hunk)
+///
+/// Reasons may also use `{refs}` and `{callers}`.
+///
+/// Attachments add a review artifact to matching changes instead of setting a tier:
+/// ```
+/// attach "<title>" [auto] [per file|hunk|change]
+///   <conditions>
+///   run <shell command>          ({file} {files} {out} {name}; output files written to {out} are shown)
+///   claude "<prompt>"            (read-only Claude session; the answer is shown as Markdown)
+///   model <alias>
+/// ```
 struct ReviewRule: Sendable {
     enum Tier: Sendable, Equatable {
         case tier(ChangeTier)
@@ -47,6 +67,27 @@ struct ReviewRule: Sendable {
         case commentWords(String, Int)
         case lines(String, Int)
         case tsQuery(String)
+        case semantic(Semantic)
+        case llm(String)
+    }
+
+    enum Semantic: Sendable {
+        case refs(String, Int)
+        case callers(String, Int)
+        case callersIn(NSRegularExpression)
+        case calledFrom(NSRegularExpression, Int)
+        case calls(NSRegularExpression)
+        case signature(NSRegularExpression)
+
+        var needs: SemanticNeeds {
+            switch self {
+            case .refs: SemanticNeeds(refs: true)
+            case .callers, .callersIn: SemanticNeeds(callers: true)
+            case .calledFrom(_, let d): SemanticNeeds(callers: true, depth: d)
+            case .calls: SemanticNeeds(callees: true)
+            case .signature: SemanticNeeds(signature: true)
+            }
+        }
     }
 
     var tier: Tier
@@ -62,8 +103,66 @@ struct ReviewRule: Sendable {
 
 extension NSRegularExpression: @retroactive @unchecked Sendable {}
 
+/// Which semantic answers a hunk's pending rules need.
+struct SemanticNeeds: Sendable, Hashable, Codable {
+    var refs = false
+    var callers = false
+    var callees = false
+    var signature = false
+    var depth = 0
+
+    var isEmpty: Bool { !refs && !callers && !callees && !signature }
+    func union(_ o: SemanticNeeds) -> SemanticNeeds {
+        SemanticNeeds(refs: refs || o.refs, callers: callers || o.callers, callees: callees || o.callees,
+                      signature: signature || o.signature, depth: max(depth, o.depth))
+    }
+    func covers(_ o: SemanticNeeds) -> Bool { union(o) == self }
+}
+
+/// Code-intelligence answers about the item a hunk changes.
+struct SemanticFacts: Sendable {
+    struct Caller: Sendable, Hashable { var name: String; var path: String }
+    /// False when no provider could resolve the item; semantic conditions then do not hold.
+    var available = true
+    var item: String?
+    var refs: Int?
+    var callers: [Caller] = []
+    /// Names of callers up to the requested depth, nearest first.
+    var transitiveCallers: [String] = []
+    var callees: [String] = []
+    var signature: String?
+    var source: IntelSource?
+
+    static let unavailable = SemanticFacts(available: false)
+}
+
+/// Conditions a hunk's rules could not decide in the first pass.
+struct RulePending: Sendable, Hashable {
+    var needs = SemanticNeeds()
+    var questions: Set<String> = []
+    var isEmpty: Bool { needs.isEmpty && questions.isEmpty }
+    mutating func formUnion(_ o: RulePending) { needs = needs.union(o.needs); questions.formUnion(o.questions) }
+}
+
+struct AttachRule: Sendable, Identifiable {
+    enum Action: Sendable { case run(String), claude(String) }
+    enum Scope: String, Sendable { case file, hunk, change }
+    var title: String
+    var auto: Bool
+    var scope: Scope
+    var conditions: [(negated: Bool, condition: ReviewRule.Condition)]
+    var action: Action?
+    var model: String?
+    var source: String
+    var line: Int
+    /// The rule as written, so a cached result is reused only while the rule is unchanged.
+    var text: String
+    var id: String { "\(source):\(line):\(title)" }
+}
+
 struct RuleSet: Sendable {
     var rules: [ReviewRule] = []
+    var attachments: [AttachRule] = []
     var errors: [String] = []
 }
 
@@ -76,14 +175,26 @@ enum RuleParser {
 
     /// Parses one rules file. `disabled` collects reasons from `disable` lines.
     static func parse(_ text: String, source: String) -> (rules: [ReviewRule], disabled: Set<String>, errors: [String]) {
+        let r = parseAll(text, source: source)
+        return (r.rules, r.disabled, r.errors)
+    }
+
+    static func parseAll(_ text: String, source: String) -> (rules: [ReviewRule], attachments: [AttachRule], disabled: Set<String>, errors: [String]) {
         var rules: [ReviewRule] = []
+        var attachments: [AttachRule] = []
         var disabled: Set<String> = []
         var errors: [String] = []
         var current: ReviewRule?
+        var attach: AttachRule?
 
         func flush() {
             if let c = current { rules.append(c) }
             current = nil
+            if let a = attach {
+                if a.action == nil { errors.append("\(source):\(a.line): attach needs `run <command>` or `claude \"<prompt>\"`") }
+                else { attachments.append(a) }
+            }
+            attach = nil
         }
 
         for (i, rawLine) in text.components(separatedBy: "\n").enumerated() {
@@ -101,8 +212,26 @@ enum RuleParser {
                     }
                     continue
                 }
+                if trimmed.hasPrefix("attach ") {
+                    let rest = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                    guard let title = quoted(rest) else {
+                        errors.append("\(source):\(n): attach needs a quoted title")
+                        continue
+                    }
+                    let flags = rest.dropFirst(title.count + 2).split(separator: " ").map(String.init)
+                    var scope = AttachRule.Scope.file
+                    var i = 0
+                    while i < flags.count {
+                        if flags[i] == "per", i + 1 < flags.count, let s = AttachRule.Scope(rawValue: flags[i + 1]) { scope = s; i += 2; continue }
+                        if flags[i] != "auto" { errors.append("\(source):\(n): unexpected `\(flags[i])`") }
+                        i += 1
+                    }
+                    attach = AttachRule(title: title, auto: flags.contains("auto"), scope: scope, conditions: [], action: nil, model: nil,
+                                        source: source, line: n, text: trimmed)
+                    continue
+                }
                 guard trimmed.hasPrefix("rule ") else {
-                    errors.append("\(source):\(n): expected `rule`, `disable` or an indented condition")
+                    errors.append("\(source):\(n): expected `rule`, `attach`, `disable` or an indented condition")
                     continue
                 }
                 let rest = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -124,6 +253,21 @@ enum RuleParser {
                 continue
             }
 
+            if attach != nil {
+                attach!.text += "\n" + trimmed
+                if trimmed.hasPrefix("run ") { attach!.action = .run(String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)); continue }
+                if trimmed.hasPrefix("claude ") {
+                    let arg = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                    attach!.action = .claude(quoted(arg) ?? arg)
+                    continue
+                }
+                if trimmed.hasPrefix("model ") { attach!.model = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces); continue }
+                var body = trimmed
+                var negated = false
+                if body.hasPrefix("not ") { negated = true; body = String(body.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
+                do { attach!.conditions.append((negated, try condition(body))) } catch { errors.append("\(source):\(n): \(error.localizedDescription)") }
+                continue
+            }
             guard current != nil else {
                 errors.append("\(source):\(n): condition outside a rule")
                 continue
@@ -138,7 +282,7 @@ enum RuleParser {
             }
         }
         flush()
-        return (rules, disabled, errors)
+        return (rules, attachments, disabled, errors)
     }
 
     struct ParseError: Error, LocalizedError {
@@ -177,6 +321,26 @@ enum RuleParser {
                 throw ParseError(message: "use `\(head) <op> N`")
             }
             return head == "lines" ? .lines(sub[0], n) : .commentWords(sub[0], n)
+        case "refs", "callers":
+            let sub = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            if head == "callers", sub.first == "in", sub.count == 2 { return .semantic(.callersIn(try glob(sub[1]))) }
+            guard sub.count == 2, ["<", "<=", ">", ">=", "=="].contains(sub[0]), let n = Int(sub[1].trimmingCharacters(in: .whitespaces)) else {
+                throw ParseError(message: head == "refs" ? "use `refs <op> N`" : "use `callers <op> N` or `callers in <glob>`")
+            }
+            return .semantic(head == "refs" ? .refs(sub[0], n) : .callers(sub[0], n))
+        case "called-from":
+            var depth = 3
+            var re = arg
+            if let r = arg.range(of: #"\s+depth\s+\d+\s*$"#, options: .regularExpression) {
+                depth = Int(arg[r].split(separator: " ").last ?? "3") ?? 3
+                re = String(arg[..<r.lowerBound])
+            }
+            return .semantic(.calledFrom(try regex(re), min(6, max(1, depth))))
+        case "calls": return .semantic(.calls(try regex(arg)))
+        case "signature": return .semantic(.signature(try regex(arg)))
+        case "llm":
+            guard let q = quoted(arg), !q.isEmpty else { throw ParseError(message: "use `llm \"<yes/no question>\"`") }
+            return .llm(q)
         case "ts":
             let sub = arg.split(separator: " ", maxSplits: 1).map(String.init)
             guard sub.count == 2 else { throw ParseError(message: "use `ts touches <kinds>` or `ts query <query>`") }
@@ -282,8 +446,9 @@ final class ReviewRules: @unchecked Sendable {
         var disabled: Set<String> = []
         for (url, name) in [(files[0], ".spelunk/review.rules"), (files[1], "~/…/Spelunk/review.rules")] {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let r = RuleParser.parse(text, source: name)
+            let r = RuleParser.parseAll(text, source: name)
             set.rules += r.rules
+            set.attachments += r.attachments
             set.errors += r.errors
             disabled.formUnion(r.disabled)
         }
@@ -314,13 +479,37 @@ struct HunkFacts {
     var rename: String?
     /// Lazily evaluates a tree-sitter query against the changed region of either side.
     var tsMatches: (String) -> Bool
+    /// Filled in by the second pass; nil while unknown.
+    var semantic: SemanticFacts?
+    /// Answers to `llm` questions about this hunk; a missing key is unknown.
+    var answers: [String: Bool] = [:]
 
     func count(_ re: NSRegularExpression, _ s: String) -> Int {
         re.numberOfMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length))
     }
 
+    /// Whether a condition holds; nil when it needs an answer the first pass does not have.
+    func check(_ c: ReviewRule.Condition) -> Bool? {
+        switch c {
+        case .semantic(let q):
+            guard let s = semantic else { return nil }
+            guard s.available else { return false }
+            switch q {
+            case .refs(let op, let n): return s.refs.map { compare($0, op, n) } ?? false
+            case .callers(let op, let n): return compare(s.callers.count, op, n)
+            case .callersIn(let re): return s.callers.contains { count(re, $0.path) > 0 }
+            case .calledFrom(let re, _): return s.transitiveCallers.contains { count(re, $0) > 0 }
+            case .calls(let re): return s.callees.contains { count(re, $0) > 0 }
+            case .signature(let re): return s.signature.map { count(re, $0) > 0 } ?? false
+            }
+        case .llm(let q): return answers[q]
+        default: return holds(c)
+        }
+    }
+
     func holds(_ c: ReviewRule.Condition) -> Bool {
         switch c {
+        case .semantic, .llm: return check(c) ?? false
         case .path(let re): return count(re, path) > 0
         case .lang(let l): return !langs.isDisjoint(with: l)
         case .file(let k): return fileKinds.contains(k)
@@ -352,6 +541,8 @@ struct HunkFacts {
 
     func expand(_ reason: String) -> String {
         reason.replacingOccurrences(of: "{lang}", with: langDisplay)
+            .replacingOccurrences(of: "{refs}", with: semantic?.refs.map(String.init) ?? "?")
+            .replacingOccurrences(of: "{callers}", with: semantic.map { String($0.callers.count) } ?? "?")
             .replacingOccurrences(of: "{name}", with: publicName ?? "?")
             .replacingOccurrences(of: "{rename}", with: rename ?? "rename")
     }
@@ -363,6 +554,29 @@ extension RuleSet {
         var reasons: [String]
         var settled: Bool
         var rule: String?
+        var pending = RulePending()
+    }
+
+    /// Tri-state match: false if a known condition fails, nil if only unknown ones remain.
+    static func match(_ conditions: [(negated: Bool, condition: ReviewRule.Condition)], _ f: HunkFacts) -> Bool? {
+        var unknown = false
+        for c in conditions {
+            guard let v = f.check(c.condition) else { unknown = true; continue }
+            if v == c.negated { return false }
+        }
+        return unknown ? nil : true
+    }
+
+    static func pending(_ conditions: [(negated: Bool, condition: ReviewRule.Condition)], _ f: HunkFacts) -> RulePending {
+        var p = RulePending()
+        for c in conditions where f.check(c.condition) == nil {
+            switch c.condition {
+            case .semantic(let q): p.needs = p.needs.union(q.needs)
+            case .llm(let q): p.questions.insert(q)
+            default: break
+            }
+        }
+        return p
     }
 
     func evaluate(_ f: HunkFacts) -> Outcome {
@@ -370,9 +584,22 @@ extension RuleSet {
         var reasons: [String] = []
         var notes: [String] = []
         var settled = false
+        var pending = RulePending()
         for r in rules {
-            let matches = r.conditions.allSatisfy { $0.negated != f.holds($0.condition) }
-            guard matches else { continue }
+            let m = Self.match(r.conditions, f)
+            if m == nil {
+                // Only rules that could still change the outcome are worth an answer.
+                let relevant: Bool
+                switch r.tier {
+                case .note: relevant = true
+                case .tier(let t):
+                    if decided == nil { relevant = true }
+                    else if r.collect, case .tier(let dt) = decided!.tier { relevant = dt == t } else { relevant = false }
+                }
+                if relevant { pending.formUnion(Self.pending(r.conditions, f)) }
+                continue
+            }
+            guard m == true else { continue }
             switch r.tier {
             case .note:
                 notes.append(f.expand(r.reason))
@@ -388,9 +615,9 @@ extension RuleSet {
             }
         }
         guard let d = decided, case .tier(let t) = d.tier else {
-            return Outcome(tier: .behavior, reasons: ["code change"] + notes, settled: false, rule: nil)
+            return Outcome(tier: .behavior, reasons: ["code change"] + notes, settled: false, rule: nil, pending: pending)
         }
-        return Outcome(tier: t, reasons: reasons + notes.filter { !reasons.contains($0) }, settled: settled, rule: d.location)
+        return Outcome(tier: t, reasons: reasons + notes.filter { !reasons.contains($0) }, settled: settled, rule: d.location, pending: pending)
     }
 }
 
@@ -432,7 +659,17 @@ enum RulesFiles {
     #   comment-words > 3            lines > 40
     #   ts touches <node kinds>      ts query <tree-sitter query>
     #   not <condition>
+    # Semantic (rust-analyzer, else SCIP; checked only when the other conditions hold):
+    #   refs > 20      callers > 5      callers in src/adapter/**
+    #   called-from /sequence_peek|handle_command/ depth 3      calls /block_on|spawn_blocking/
+    #   signature /-> Result</      llm "Does this change when a lock is released?"
     # disable "<reason of a default rule>"
+    #
+    # attach "<title>" [auto] [per file|hunk|change]     (adds a review artifact instead of a tier)
+    #   <conditions>
+    #   run <command>        {file} {files} {out} {name}; files written to {out} are shown inline
+    #   claude "<prompt>"    read-only Claude session; Markdown answer
+    #   model sonnet
     #
     # Examples:
     #
@@ -443,9 +680,39 @@ enum RulesFiles {
     #   ts query (await_expression) @a
     #   code touches /\.lock\(\)/
     #
+    # rule critical "widely used: {refs} references" collect
+    #   hunk public-signature
+    #   refs > 25
+    #
+    # attach "Benchmark plot" per file
+    #   path ~ **/benches/**
+    #   run scripts/bench-boxplot.sh {file} {out}
+    #
+    # attach "Component render" per file
+    #   path ~ **/*.tsx
+    #   run npx tsx scripts/render-component.ts {file} {out}/render.png
+    #
+    # attach "Usage examples" per hunk
+    #   path ~ **/graphql/**
+    #   llm "Does this hunk add a new GraphQL resolver?"
+    #   claude "Show a basic query for each new resolver and two edge cases, with the expected response shape."
+    #
     # disable "comment wording"
 
     """#
+
+    /// Syntax reference for writing rules, given to Claude when it drafts one.
+    static var reference: String {
+        template.split(separator: "\n").filter { $0.hasPrefix("#") }.map { String($0.dropFirst(min(2, $0.count))) }.joined(separator: "\n")
+    }
+
+    static func append(_ text: String, toRepo root: URL?) throws {
+        let u = root.map(ReviewRules.repoURL) ?? ReviewRules.userURL
+        try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var existing = (try? String(contentsOf: u, encoding: .utf8)) ?? (root == nil ? template : template.replacingOccurrences(of: "(yours)", with: "(this repository)"))
+        if !existing.hasSuffix("\n") { existing += "\n" }
+        try (existing + "\n" + text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n").write(to: u, atomically: true, encoding: .utf8)
+    }
 
     static func openUserRules() {
         let u = ReviewRules.userURL

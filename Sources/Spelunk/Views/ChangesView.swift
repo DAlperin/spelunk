@@ -118,6 +118,10 @@ struct ChangesView: View {
                     .onTapGesture { RulesFiles.openUserRules() }
                     .help(review.ruleErrors.joined(separator: "\n"))
             }
+            if let s = review.ruleState {
+                HStack(spacing: 4) { ProgressView().controlSize(.mini); Text(s).lineLimit(1).truncationMode(.tail) }
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if review.triaging || review.classifyState?.hasPrefix("Classifying") == true {
                 HStack(spacing: 4) {
                     ProgressView().controlSize(.mini)
@@ -364,7 +368,10 @@ struct TriageMenu: View {
             modelMenu("Grouping model", .group)
             if let s = review.groupState { Text(s) }
             Divider()
+            Button("New Rule from Description…") { ws.showRuleWriter = true }
             Button("Edit Review Rules…") { RulesFiles.openUserRules() }
+            modelMenu("Rule questions model", .rules)
+            modelMenu("Attachments model", .attach)
         } label: {
             Label("Triage", systemImage: "sparkles")
         }
@@ -428,6 +435,7 @@ struct ImportantHunkRow: View {
                 .font(.caption2).foregroundStyle(open > 0 ? .orange : .secondary)
         }
         if !review.pending(for: hunk).isEmpty { Image(systemName: "pencil.circle.fill").font(.caption2).foregroundStyle(.blue) }
+        if !review.attachments(for: hunk).isEmpty { Image(systemName: "paperclip").font(.caption2).foregroundStyle(.secondary).help("Has attachments") }
         if let t = review.triage(of: hunk) {
             Image(systemName: t.isQuick ? "sparkle" : "sparkles").font(.caption2).foregroundStyle(.purple)
                 .help(t.isQuick ? "Classified by the quick pass" : "Triaged by Claude")

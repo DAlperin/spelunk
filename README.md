@@ -57,6 +57,27 @@ Each hunk is classified into tiers:
 Mechanical hunks start collapsed (click the section to expand). "Triage with Claude" re-checks every hunk,
 writes an overview and a reading order. ⇧⌘V marks a hunk viewed; ⌘J / ⇧⌘J move between hunks.
 
+Related hunks are kept together inside the importance list: every hunk that removes or adds the same
+symbol (identifiers and string literals, so a config flag and its name match) becomes one collapsible
+group, filed under the tier of its most important member. "Group with Claude" (Triage menu) asks a cheap
+model for logical groups as well. The Change context pane lists the rest of the selected hunk's group.
+J / K follow the list as shown.
+
+### Review rules
+
+Classification is a rule file: `.spelunk/review.rules` in the repository, then
+`~/Library/Application Support/Spelunk/review.rules`, then the built-in defaults (Triage menu, "Edit
+Review Rules"). Beyond path, language, hunk-shape, regex and tree-sitter conditions, rules can ask:
+
+- code intelligence, answered by rust-analyzer or SCIP after the first pass: `refs > 20`, `callers > 5`,
+  `callers in src/adapter/**`, `called-from /sequence_peek/ depth 3`, `calls /block_on/`, `signature /-> Result/`;
+- a cheap model: `llm "Does this change when a lock is released?"`, batched per question and cached per hunk.
+
+`attach` rules add a review artifact to matching files or hunks: `run <command>` (files it writes to
+`{out}` show inline, so a script can render a component or plot benchmarks) or `claude "<prompt>"`.
+Results are cached until the rule or the hunks change. "New Rule from Description" drafts rules from a
+sentence and checks them with the parser before adding them.
+
 ### GitHub
 
 Through `gh` (its authentication is used):
@@ -95,7 +116,10 @@ reloaded. Grammars live in `~/Library/Application Support/Spelunk/grammars`; the
 ## Claude models
 
 Questions, code paths and review triage each have their own model and effort (Settings, or the picker
-next to each feature). The default is `opus`; `fable`, `sonnet`, `haiku` or any full model name work.
+next to each feature). The default is `opus`; classification, grouping, rule questions and attachments
+default to `sonnet`. Any number of asks and traces run at once in the Claude pane (⌘L); finished answers
+are kept and a repeated question at the same revision is answered from the cache. Every model result in
+review (classification, triage, groups, rule answers, attachments) is cached by hunk content.
 
 ## State
 

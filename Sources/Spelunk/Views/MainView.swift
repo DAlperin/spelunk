@@ -66,6 +66,7 @@ struct MainView: View {
         }
         .toolbar { MainToolbar(ws: ws, showInspector: $ws.showInspector) }
         .navigationTitle(ws.name)
+        .sheet(isPresented: $ws.showRuleWriter) { RuleWriterSheet(ws: ws) }
         .onAppear {
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws] e in

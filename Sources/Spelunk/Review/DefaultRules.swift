@@ -93,6 +93,11 @@ rule critical "Drop / Send / Sync" collect
 rule critical "public API: {name}" collect
   hunk public-signature
 
+rule critical "used in {callers} places" collect
+  hunk public-signature
+  lang rust
+  callers > 10
+
 # --- Rust: low-risk shapes ------------------------------------------------------------------------
 
 rule mechanical "{rename}"
