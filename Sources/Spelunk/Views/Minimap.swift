@@ -42,6 +42,7 @@ extension CodeView.Coordinator {
             case .real(let l): idx = realToHunk[l]
             case .phantom(let p): idx = otherToHunk[p.otherLine]
             case .block: idx = nil
+            case .fold(let f): idx = f.lazy.compactMap { realToHunk[$0] }.first
             }
             guard let i = idx else { continue }
             let b = bounds[i] ?? (dl, dl)
@@ -120,6 +121,7 @@ final class MinimapView: NSView {
             case .phantom(let p): color = (p.kind == .added ? Theme.addedMarker : Theme.removedMarker).withAlphaComponent(0.8)
             case .real: color = Theme.gutterText.withAlphaComponent(0.45)
             case .block: color = .systemBlue.withAlphaComponent(0.3)
+            case .fold: color = Theme.gutterText.withAlphaComponent(0.25)
             }
             guard w.length > 0 else { continue }
             color.setFill()

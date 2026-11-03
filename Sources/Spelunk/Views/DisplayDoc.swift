@@ -25,6 +25,8 @@ final class DisplayDoc {
         case phantom(PhantomLine)
         /// Blank space reserved for an embedded view (a review thread or comment composer).
         case block(id: String, index: Int)
+        /// One line standing for folded real lines.
+        case fold(ClosedRange<Int>)
     }
 
     /// An embedded view after a real line, `lines` display lines tall.
@@ -49,10 +51,21 @@ final class DisplayDoc {
 
     /// Display line ranges of blocks, by id.
     let blockLines: [String: Range<Int>]
+    /// Per real line, whether a fold hides it; empty without folds.
+    let hiddenLines: [Bool]
 
-    init(doc: SourceDocument, phantoms: [Int: [PhantomLine]], blocks: [Block] = []) {
+    func isFolded(_ real: Int) -> Bool { real < hiddenLines.count && hiddenLines[real] }
+
+    init(doc: SourceDocument, phantoms: [Int: [PhantomLine]], blocks: [Block] = [], folds: [ClosedRange<Int>] = []) {
         self.doc = doc
-        hasPhantoms = !phantoms.isEmpty || !blocks.isEmpty
+        hasPhantoms = !phantoms.isEmpty || !blocks.isEmpty || !folds.isEmpty
+        let count = doc.lines.lineCount
+        var hidden = [Bool]()
+        if !folds.isEmpty {
+            hidden = Array(repeating: false, count: count)
+            for f in folds where f.upperBound < count { for l in f { hidden[l] = true } }
+        }
+        hiddenLines = hidden
         guard hasPhantoms else {
             text = doc.text
             ns = doc.ns
@@ -79,8 +92,21 @@ final class DisplayDoc {
                 blockRanges[b.id] = start..<entries.count
             }
         }
-        let count = doc.lines.lineCount
-        for line in 0...count {
+        let foldAt = Dictionary(folds.filter { $0.upperBound < count }.map { ($0.lowerBound, $0) }, uniquingKeysWith: { a, _ in a })
+        var line = 0
+        while line <= count {
+            if let f = foldAt[line] {
+                // Everything inside the fold maps to its placeholder; embedded views follow it.
+                let at = entries.count
+                let indent = doc.lineText(line).prefix { $0 == " " || $0 == "\t" }
+                out.append("\(indent)⋯ \(f.count) lines")
+                entries.append(.fold(f))
+                for _ in f { map.append(at) }
+                for l in f { emit(blocksAfter[l]) }
+                line = f.upperBound + 1
+                continue
+            }
+            defer { line += 1 }
             for p in phantoms[line] ?? [] {
                 out.append(p.text)
                 entries.append(.phantom(p))
@@ -100,6 +126,7 @@ final class DisplayDoc {
         var h = Hasher()
         for k in phantoms.keys.sorted() { h.combine(k); h.combine(phantoms[k]!) }
         for b in blocks.sorted(by: { $0.id < $1.id }) { h.combine(b) }
+        for f in folds { h.combine(f.lowerBound); h.combine(f.upperBound) }
         fingerprint = h.finalize()
         blockLines = blockRanges
     }

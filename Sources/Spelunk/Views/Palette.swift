@@ -306,6 +306,10 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        add("Fold Function", nil, "⌥⌘←", icon: "chevron.right", when: ws.document != nil) { ws.setFold(true) }
+        add("Unfold Function", nil, "⌥⌘→", icon: "chevron.down", when: ws.document != nil) { ws.setFold(false) }
+        add("Fold All Functions", nil, "⇧⌥⌘←", icon: "rectangle.compress.vertical", when: ws.document != nil) { ws.foldAll(true) }
+        add("Unfold All Functions", nil, "⇧⌥⌘→", icon: "rectangle.expand.vertical", when: ws.document != nil) { ws.foldAll(false) }
         add(Prefs.ignoreWhitespace ? "Show Whitespace Changes" : "Ignore Whitespace Changes", nil, nil, icon: "text.word.spacing") {
             Prefs.setIgnoreWhitespace(!Prefs.ignoreWhitespace)
         }

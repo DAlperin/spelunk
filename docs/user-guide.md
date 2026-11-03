@@ -112,6 +112,20 @@ the selected hunk outlined. Hover a hunk on the minimap to see what it is. The e
 hunk's extent with a tier-colored bar and dashed lines. Both can be turned off in Settings › Editor ›
 Review aids.
 
+### Folding
+
+A function's body can be folded to one "⋯ N lines" line, leaving its signature and closing line
+visible. By default, files that belong to the review being shown open with every function folded
+that has no changes, inline removed lines, threads or comments, and the function you arrive in stays
+open; Settings › Editor › Folding can apply this to every file or turn it off. A fold that hides
+changed lines keeps the change's color on its placeholder.
+
+Any jump to a line inside a fold (a hunk, a definition, a code path step, history) unfolds it.
+Click a placeholder to open it. Navigate › Fold Function (⌥⌘←) and Unfold Function (⌥⌘→) act on the
+function at the cursor, with ⇧ for every function in the file; in vim mode, `za`, `zo`, `zc`, `zR`
+and `zM` do the same. Folds are kept per file and version while the window is open, and the split
+diff view shows no folds so its two sides stay aligned.
+
 ### Diff modes
 
 While a file that belongs to the review is open, the toolbar's picker sets how it is shown:
@@ -480,6 +494,7 @@ Buttons to edit your review rules and view the defaults, and a note on windows.
 | Draw the selected hunk's boundary | on | |
 | Show the minimap | on | |
 | Minimap width | 70 pt | 40–140 |
+| Start with function bodies folded | Unchanged functions in review files | never, review files, every file |
 | Vim navigation in the code view | off | |
 | Show symbol details on hover | on | |
 | Hover delay | 0.6 s | 0.2–2.0 |

@@ -114,7 +114,8 @@ struct CodeView: NSViewRepresentable {
         let phantoms = secondary ? [:] : ws.phantomLines(for: document)
         let specs = secondary ? [] : ws.inlineBlocks(for: document)
         c.blockSpecs = specs
-        let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs))
+        c.foldRanges = secondary ? [] : ws.foldedRanges(for: document)
+        let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs), folds: c.foldRanges)
         if c.documentID != document.id {
             c.documentID = document.id
             c.document = document
@@ -171,6 +172,9 @@ struct CodeView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         /// Embedded views (threads, composer) and the display lines reserved for each.
         var blockSpecs: [(id: String, afterLine: Int, otherSide: Bool)] = []
+        var foldRanges: [ClosedRange<Int>] = []
+        /// The display last loaded into the text view.
+        private var shown: DisplayDoc?
         private var blockHeights: [String: Int] = [:]
         private var hosts: [String: NSHostingController<InlineBlockView>] = [:]
         static let blockWidth: CGFloat = 680
@@ -213,7 +217,7 @@ struct CodeView: NSViewRepresentable {
                                          width: Self.blockWidth, height: CGFloat(range.count) * lh - 6)
             }
             if changed {
-                let rebuilt = DisplayDoc(doc: doc, phantoms: secondary ? [:] : ws.phantomLines(for: doc), blocks: blocks(for: blockSpecs))
+                let rebuilt = DisplayDoc(doc: doc, phantoms: secondary ? [:] : ws.phantomLines(for: doc), blocks: blocks(for: blockSpecs), folds: foldRanges)
                 self.display = rebuilt
                 load(rebuilt, into: tv, keepScroll: true)
                 applyBackgrounds(selection: secondary ? nil : ws.selection, highlights: secondary ? [] : ws.highlightRanges)
@@ -271,7 +275,15 @@ struct CodeView: NSViewRepresentable {
             gutter?.needsDisplay = true
             caretAt = display.entry(dpos.line).map { ($0, dpos.col) }
             guard let pos = display.realPos(dpos) else {
-                if case .phantom(let p) = display.entry(dpos.line) { ws.removedLineAtCaret = p.otherLine + 1 }
+                switch display.entry(dpos.line) {
+                case .phantom(let p): ws.removedLineAtCaret = p.otherLine + 1
+                case .fold(let f):
+                    // On a placeholder the caret stands for the folded lines, so fold commands apply to them.
+                    if ws.removedLineAtCaret != nil { ws.removedLineAtCaret = nil }
+                    let first = SourcePos(line: f.lowerBound, col: 0)
+                    if ws.cursor != first { ws.cursor = first }
+                default: break
+                }
                 return
             }
             if ws.removedLineAtCaret != nil { ws.removedLineAtCaret = nil }
@@ -353,19 +365,33 @@ struct CodeView: NSViewRepresentable {
                 attr.addAttribute(.foregroundColor, value: Theme.color(kind), range: range)
                 if kind == .docComment || kind == .comment { attr.addAttribute(.font, value: italic, range: range) }
             }
+            let folded = !display.hiddenLines.isEmpty
             for t in doc.syntax.tokens {
+                if folded, display.isFolded(doc.lines.position(of: t.range.location).line) { continue }
                 let a = display.displayOffset(realOffset: t.range.location)
                 let b = display.displayOffset(realOffset: NSMaxRange(t.range))
                 paint(NSRange(location: a, length: b - a), t.kind)
             }
             for (i, e) in display.entries.enumerated() {
-                guard case .phantom(let p) = e else { continue }
-                let start = display.lines.starts[i]
-                for t in p.tokens { paint(NSRange(location: start + t.range.location, length: t.range.length), t.kind) }
+                switch e {
+                case .phantom(let p):
+                    let start = display.lines.starts[i]
+                    for t in p.tokens { paint(NSRange(location: start + t.range.location, length: t.range.length), t.kind) }
+                case .fold:
+                    let r = display.lines.lineRange(i)
+                    if NSMaxRange(r) <= len {
+                        attr.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: r)
+                        attr.addAttribute(.font, value: italic, range: r)
+                        attr.addAttribute(.toolTip, value: "Folded; click, or use Unfold Function, to show", range: r)
+                    }
+                default: break
+                }
             }
             attr.endEditing()
             let origin = tv.enclosingScrollView?.contentView.bounds.origin
+            let anchor = keepScroll ? shown.flatMap { topAnchor($0, tv) } : nil
             tv.textStorage?.setAttributedString(attr)
+            shown = display
             minimapWidths = Self.shapes(display)
             if let lm = tv.layoutManager, let tc = tv.textContainer {
                 lm.ensureLayout(for: tc)
@@ -378,14 +404,25 @@ struct CodeView: NSViewRepresentable {
                 case .real(let l): display.displayLine(l)
                 case .phantom(let p): display.entries.firstIndex { if case .phantom(let q) = $0 { q == p } else { false } }
                 case .block: nil
+                case .fold(let f): display.displayLine(f.lowerBound)
                 }
                 if let line { caret = min(display.lines.lineRange(line).location + at.col, NSMaxRange(display.lines.lineRange(line))) }
             }
             tv.setSelectedRange(NSRange(location: min(caret, display.ns.length), length: 0))
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
-            if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
-                clip.setBoundsOrigin(origin)
+            if keepScroll, let r = revealed, Date().timeIntervalSince(r.at) < 1.5 {
+                // Text arriving right after a jump (inline diff, embedded views, folds) keeps the jump's target in view.
+                scrollTo(r.range)
+            } else if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
+                // Keep the same source line at the top, so lines added or removed above do not move the view.
+                var y = origin.y
+                if let anchor, let lm = tv.layoutManager, display.ns.length > 0 {
+                    let off = display.lines.starts[min(display.displayLine(anchor.line), display.lines.lineCount - 1)]
+                    let rect = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: min(off, display.ns.length - 1)), effectiveRange: nil)
+                    y = max(0, rect.minY + anchor.offset + tv.textContainerInset.height)
+                }
+                clip.setBoundsOrigin(NSPoint(x: origin.x, y: y))
                 tv.enclosingScrollView?.reflectScrolledClipView(clip)
             } else {
                 tv.scroll(.zero)
@@ -430,26 +467,58 @@ struct CodeView: NSViewRepresentable {
             }
         }
 
+        /// The last location scrolled to and when; a re-render soon after scrolls there again.
+        private var revealed: (range: SourceRange, at: Date)?
+
         func reveal(_ range: SourceRange) {
-            guard let display else { return }
-            let r = display.displayRange(range)
-            // Defer one turn so a freshly loaded document has a laid-out frame to scroll within.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let tv = self.textView, let lm = tv.layoutManager, let tc = tv.textContainer,
-                      let clip = tv.enclosingScrollView?.contentView, NSMaxRange(r) <= (tv.textStorage?.length ?? 0) else { return }
-                let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: r.location, length: max(1, min(r.length, (tv.textStorage?.length ?? 1) - r.location))), actualCharacterRange: nil)
-                lm.ensureLayout(forGlyphRange: NSRange(location: 0, length: NSMaxRange(glyphs)))
-                var rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
-                rect.origin.y += tv.textContainerInset.height
-                let visible = clip.bounds
-                let maxY = max(0, tv.frame.height - visible.height)
-                let y = min(maxY, max(0, rect.midY - visible.height * 0.35))
-                let x = rect.maxX + 40 > visible.width - 72 ? max(0, rect.minX - 80) : 0
-                let left = tv.enclosingScrollView?.contentInsets.left ?? 0
-                clip.setBoundsOrigin(NSPoint(x: x - left, y: y))
-                tv.enclosingScrollView?.reflectScrolledClipView(clip)
-                self.gutter?.needsDisplay = true
+            revealed = (range, Date())
+            // Defer one turn so a freshly loaded document has a laid-out frame to scroll within. The
+            // target is mapped into the text shown when the scroll happens, not when it was asked for.
+            DispatchQueue.main.async { [weak self] in self?.scrollTo(range) }
+        }
+
+        private func scrollTo(_ range: SourceRange) {
+            guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer, let display,
+                  let clip = tv.enclosingScrollView?.contentView else { return }
+            let len = tv.textStorage?.length ?? 0
+            let start = min(display.displayOffset(range.start), max(0, len - 1))
+            guard len > 0 else { return }
+            let g = lm.glyphIndexForCharacter(at: start)
+            lm.ensureLayout(forGlyphRange: NSRange(location: 0, length: g + 1))
+            var rect = lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)
+            rect.origin.y += tv.textContainerInset.height
+            let caretX = lm.location(forGlyphAt: g).x + rect.minX
+            let visible = clip.bounds
+            // The full height from layout, since the frame may not have grown to the new text yet.
+            lm.ensureLayout(for: tc)
+            let contentHeight = max(tv.frame.height, lm.usedRect(for: tc).maxY + tv.textContainerInset.height * 2)
+            let maxY = max(0, contentHeight - visible.height)
+            let y = min(maxY, max(0, rect.midY - visible.height * 0.35))
+            // Scroll sideways only when the target's start would be off screen.
+            let x = caretX > visible.width - 120 ? max(0, caretX - 80) : 0
+            let left = tv.enclosingScrollView?.contentInsets.left ?? 0
+            clip.setBoundsOrigin(NSPoint(x: x - left, y: y))
+            tv.enclosingScrollView?.reflectScrolledClipView(clip)
+            gutter?.needsDisplay = true
+            minimap?.needsDisplay = true
+        }
+
+        /// The real line at the top of the view and how far into it the view starts.
+        private func topAnchor(_ d: DisplayDoc, _ tv: NSTextView) -> (line: Int, offset: CGFloat)? {
+            guard let lm = tv.layoutManager, let tc = tv.textContainer, d.ns.length > 0 else { return nil }
+            let top = tv.visibleRect.minY - tv.textContainerInset.height
+            let g = lm.glyphIndex(for: NSPoint(x: 0, y: max(0, top)), in: tc)
+            var dl = d.lines.position(of: lm.characterIndexForGlyph(at: g)).line
+            // Phantom, folded and embedded lines have no line of their own in the new text; use the next real one.
+            while dl < d.entries.count {
+                if case .real(let l) = d.entries[dl] {
+                    let off = d.lines.starts[dl]
+                    let rect = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: min(off, d.ns.length - 1)), effectiveRange: nil)
+                    return (l, top - rect.minY)
+                }
+                dl += 1
             }
+            return nil
         }
 
         /// Real document position under a point; nil over a phantom (other-side) line.
@@ -645,7 +714,13 @@ final class SourceTextView: NSTextView {
         let p = convert(event.locationInWindow, from: nil)
         let cmd = event.modifierFlags.contains(.command)
         MainActor.assumeIsolated {
-            if let pos = coordinator?.position(at: p) { coordinator?.click(at: pos, command: cmd) }
+            guard let c = coordinator else { return }
+            if let pos = c.position(at: p) {
+                c.click(at: pos, command: cmd)
+            } else if let display = c.display, !c.secondary,
+                      case .fold(let f) = display.entry(display.lines.position(of: characterIndexForInsertion(at: p)).line) {
+                c.ws.unfold(containing: f.lowerBound, in: display.doc)
+            }
         }
     }
 
@@ -753,7 +828,7 @@ final class GutterView: NSView {
                 let str = NSAttributedString(string: "\(line + 1)", attributes: (caretLine.map { $0 == dline } ?? (line == selLine)) ? boldAttrs : attrs)
                 let size = str.size()
                 str.draw(at: NSPoint(x: thickness - size.width - 8, y: y + (h - size.height) / 2))
-            case .block, nil:
+            case .block, .fold, nil:
                 break
             }
             dline += 1

@@ -79,7 +79,13 @@ final class Workspace {
     }
     var selection: SourceRange?
     var highlightRanges: [SourceRange] = []
-    var revealRequest = 0
+    /// Incremented to scroll the editor to `selection`; a target inside a fold unfolds it.
+    var revealRequest = 0 {
+        didSet { if let d = document, let s = selection { unfold(containing: s.start.line, in: d) } }
+    }
+    /// Folded function ids (first lines) per document; see `foldedRanges(for:)`.
+    @ObservationIgnored var folds: [String: Set<Int>] = [:]
+    var foldsVersion = 0
     var cursor: SourcePos?
     var context: SymbolContext?
     var backStack: [CodeLocation] = []

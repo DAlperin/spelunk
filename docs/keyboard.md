@@ -16,6 +16,8 @@ These work in any repository window.
 | ⇧⌘K | Command Palette… | Navigate |
 | ⌘P | Filter File Tree (switches to the Files tab and focuses its filter) | Navigate |
 | ⇧⌘F | Find in Repository… (switches to the Search tab) | Navigate |
+| ⌥⌘← / ⌥⌘→ | Fold / Unfold Function at the cursor | Navigate |
+| ⇧⌥⌘← / ⇧⌥⌘→ | Fold / Unfold All Functions | Navigate |
 | ⇧⌘T | Add Location to Code Path | Code Paths |
 | ⌥] or ⌥⌘↓ | Next Step of the active code path | Code Paths |
 | ⌥[ or ⌥⌘↑ | Previous Step of the active code path | Code Paths |
@@ -165,6 +167,8 @@ Motions work in normal and both visual modes. Arrow keys work as motions too.
 | Keys | Action |
 |---|---|
 | `zz` `zt` `zb` | Scroll so the cursor line is centered, at the top, at the bottom |
+| `za` `zo` `zc` | Toggle, open, close the fold of the function at the cursor |
+| `zR` `zM` | Unfold, fold every function in the file |
 | `/` | Open the find bar |
 | `n` `N` | Next, previous match of the find bar |
 | `*` `#` | Next, previous occurrence of the whole word under the cursor |

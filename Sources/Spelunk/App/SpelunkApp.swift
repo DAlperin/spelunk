@@ -40,6 +40,11 @@ struct SpelunkApp: App {
                 Button("Command Palette…") { model.workspace?.palette = .commands }.keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Filter File Tree") { model.workspace?.sidebarTab = .files; model.focusFilter.toggle() }.keyboardShortcut("p")
                 Button("Find in Repository…") { model.workspace?.sidebarTab = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
+                Divider()
+                Button("Fold Function") { model.workspace?.setFold(true) }.keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Unfold Function") { model.workspace?.setFold(false) }.keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Fold All Functions") { model.workspace?.foldAll(true) }.keyboardShortcut(.leftArrow, modifiers: [.command, .option, .shift])
+                Button("Unfold All Functions") { model.workspace?.foldAll(false) }.keyboardShortcut(.rightArrow, modifiers: [.command, .option, .shift])
             }
             CommandMenu("Code Paths") {
                 Button("Add Location to Code Path") { model.workspace?.addCurrentToTrace() }.keyboardShortcut("t", modifiers: [.command, .shift])

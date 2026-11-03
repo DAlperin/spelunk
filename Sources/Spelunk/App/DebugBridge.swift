@@ -153,6 +153,11 @@ final class DebugBridge {
         case "palette": ws.palette = arg == "commands" ? .commands : .files
         case "ptype": ws.paletteQuery = arg
         case "pclose": ws.palette = nil
+        case "folds":
+            if let d = ws.document {
+                let r = ws.foldedRanges(for: d)
+                Log.debug("folds: \(r.count) \(r.prefix(12).map { "\($0.lowerBound + 1)-\($0.upperBound + 1)" }.joined(separator: " ")) near=\(r.filter { abs($0.lowerBound - (ws.cursor?.line ?? 0)) < 80 }.map { "\($0.lowerBound + 1)-\($0.upperBound + 1)" })")
+            }
         case "whitespace": Prefs.setIgnoreWhitespace(arg == "ignore")
         case "tab": ws.sidebarTab = SidebarTab.allCases.first { $0.rawValue.lowercased() == arg.lowercased() } ?? .files
         case "scmsection": ws.scmSection = arg == "prs" ? .pullRequests : .changes

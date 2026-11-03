@@ -14,6 +14,7 @@ enum Prefs {
         static let hoverEnabled = "hover.enabled"
         static let hoverDelay = "hover.delay"
         static let vim = "editor.vim"
+        static let foldMode = "editor.foldMode"
         // Review
         static let autoClassify = "review.autoClassify"
         static let groupRelated = "review.groupRelated"
@@ -50,6 +51,7 @@ enum Prefs {
         Key.hoverEnabled: true,
         Key.hoverDelay: 0.6,
         Key.vim: false,
+        Key.foldMode: "review",
         Key.autoClassify: true,
         Key.ignoreWhitespace: true,
         Key.groupRelated: true,
@@ -86,6 +88,7 @@ enum Prefs {
     static var hoverEnabled: Bool { d.bool(forKey: Key.hoverEnabled) }
     static var hoverDelay: Double { d.double(forKey: Key.hoverDelay) }
     static var vim: Bool { d.bool(forKey: Key.vim) }
+    static var foldMode: String { d.string(forKey: Key.foldMode) ?? "review" }
     static var autoClassify: Bool { d.bool(forKey: Key.autoClassify) }
     static var ignoreWhitespace: Bool { d.bool(forKey: Key.ignoreWhitespace) }
 

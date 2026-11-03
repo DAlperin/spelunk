@@ -52,6 +52,7 @@ private struct EditorSettings: View {
     @AppStorage(Prefs.Key.hoverEnabled) var hover = true
     @AppStorage(Prefs.Key.hoverDelay) var hoverDelay = 0.6
     @AppStorage(Prefs.Key.vim) var vim = false
+    @AppStorage(Prefs.Key.foldMode) var foldMode = "review"
 
     var body: some View {
         Form {
@@ -68,9 +69,15 @@ private struct EditorSettings: View {
                     Slider(value: $minimapWidth, in: 40...140) { Text(verbatim: "Minimap width: \(Int(minimapWidth)) pt") }
                 }
             }
+            Section("Folding") {
+                Picker("Start with function bodies folded", selection: $foldMode) {
+                    ForEach(FoldMode.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                Note("Folds apply to files opened after the change. A jump into a folded function unfolds it; click a fold's placeholder to open it, or use Navigate › Fold Function (⌥⌘←) and Unfold Function (⌥⌘→).")
+            }
             Section("Keyboard") {
                 Toggle("Vim navigation in the code view", isOn: $vim)
-                Note("Motions (hjkl, w b e, 0 ^ $, gg G, H M L, Ctrl-d/u, { } %, f t ; ,), search (/ n N * #), visual v V with y to copy, gd definition, K hover, Ctrl-o / Ctrl-i back and forward. Review keys become ]h [h (hunk), ]u (next unviewed), ]t [t (thread), space v (viewed), space c (comment), space r (resolve), space a (ask), space p (add to code path).")
+                Note("Motions (hjkl, w b e, 0 ^ $, gg G, H M L, Ctrl-d/u, { } %, f t ; ,), search (/ n N * #), visual v V with y to copy, gd definition, gh hover, Ctrl-o / Ctrl-i back and forward, za zo zc zM zR folds. In a review, J and K move between hunks and c comments; ]u is the next unviewed hunk, ]t [t move between threads, and space v, space r, space a and space p mark viewed, resolve, ask and add to the code path.")
             }
             Section("Hover") {
                 Toggle("Show symbol details on hover", isOn: $hover)

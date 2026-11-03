@@ -127,6 +127,11 @@ final class VimController {
         case "gg": move(lastCountWasEmpty ? .documentStart : .line(n), count: 1)
         case "gd": if let pos = realCaret() { ws.goToDefinition(at: pos) }
         case "gh": showHover()
+        case "za": ws.toggleFold()
+        case "zo": ws.setFold(false)
+        case "zc": ws.setFold(true)
+        case "zR": ws.foldAll(false)
+        case "zM": ws.foldAll(true)
         case "zz": scrollCaret(0.5)
         case "zt": scrollCaret(0.0)
         case "zb": scrollCaret(1.0)
