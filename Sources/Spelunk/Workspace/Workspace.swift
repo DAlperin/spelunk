@@ -91,6 +91,8 @@ final class Workspace {
     var inspectorPane: InspectorPane = .context
     var showGenerateTrace = false
     var showRuleWriter = false
+    /// A description to draft a rule from as soon as the rule writer opens.
+    var ruleWriterSeed: String?
     /// Show review threads under their lines in the editor.
     var inlineThreads = true
     @ObservationIgnored var connectorCache: (key: String, value: [StepConnector])?
@@ -308,7 +310,20 @@ final class Workspace {
     /// Opens a location in the working copy. Records it in history, and in the active trace when recording.
     func open(_ loc: CodeLocation, record: Bool = true, edge: TraceEdge? = nil, title: String? = nil, source: IntelSource = .manual) {
         if record, let cur = currentLocation, cur != loc { backStack.append(cur); forwardStack.removeAll() }
-        if document?.path != loc.path || document?.revisionLabel != nil {
+        // Leaving the current step's place means no step is current any more.
+        if let i = traces.currentStep, let step = traces.active?.steps[safe: i],
+           step.location.path != loc.path || abs(step.location.line - loc.line) > 3 {
+            traces.currentStep = nil
+        }
+        // While reviewing a change that is not the working copy, files it changes open at its head;
+        // files it leaves alone are the same on both sides.
+        let head = review.flatMap { r -> SourceDocument? in
+            guard !r.afterIsWorkingCopy, r.files.contains(where: { $0.newPath == loc.path && $0.status != .deleted }) else { return nil }
+            return r.cachedDocument(loc.path, side: .new)
+        }
+        if let head, document !== head {
+            document = head
+        } else if head == nil, document?.path != loc.path || document?.revisionLabel != nil {
             guard let d = docs.document(loc.path) else { statusMessage = "Could not open \(loc.path)"; return }
             recentFiles.removeAll { $0 == loc.path }
             recentFiles.insert(loc.path, at: 0)
@@ -568,6 +583,8 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
+        traces.currentStep = nil
+        if inspectorPane == .paths { inspectorPane = .context }
         if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }
         if !contextPinned { contextFocus = .hunk }
         if changeContext?.hunkID != h.id { loadChangeContext(for: h) }

@@ -110,6 +110,8 @@ extension ReviewSession {
         resolvingRules = true
         defer { resolvingRules = false }
         let rs = rules()
+        // Attachments that need no answers show up before the slower semantic pass.
+        matchAttachments(rs)
         for _ in 0..<3 {
             var semanticWork: [(Hunk, SemanticNeeds)] = []
             var questions: [String: [Hunk]] = [:]

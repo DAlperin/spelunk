@@ -66,6 +66,13 @@ struct RuleWriterSheet: View {
         }
         .padding(16)
         .frame(width: 680, height: 560)
+        .onAppear {
+            if let seed = ws.ruleWriterSeed {
+                ws.ruleWriterSeed = nil
+                description = seed
+                generate()
+            }
+        }
     }
 
     private func generate() {

@@ -58,6 +58,10 @@ final class DebugBridge {
             case "jj": ws.startReview(.jj(from: p.count > 1 ? p[1] : "@-", to: p.count > 2 ? p[2] : "@"))
             case "git": ws.startReview(.git(base: p.count > 1 ? p[1] : "HEAD", head: p.count > 2 ? p[2] : nil))
             case "pr": ws.startReview(.githubPR(Int(p.count > 1 ? p[1] : "0") ?? 0))
+            case "wc":
+                ws.activeReviewKey = nil
+                ws.sidebarTab = .changes
+                if let h = ws.review?.tierSections.first?.hunks.first { ws.selectHunk(h) }
             default: break
             }
         case "hunk": if arg == "prev" { ReviewNav.previous(ws) } else { ReviewNav.next(ws) }
@@ -138,6 +142,21 @@ final class DebugBridge {
             for c in ws.review?.pendingComments ?? [] { ws.review?.removePending(c.id) }
         case "addpending":
             if var d = ws.commentDraft { d.body = arg; ws.review?.addPending(d); ws.commentDraft = nil }
+        case "record": startRecording(arg)
+        case "openjobtrace":
+            if let j = ws.jobs.last(where: { $0.kind == .trace && $0.traceID != nil }) { ws.openJobTrace(j.id) }
+        case "rulewriter": ws.ruleWriterSeed = arg; ws.showRuleWriter = true
+        case "rulewriterclose": ws.showRuleWriter = false
+        case "expandgroup":
+            if let r = ws.review, let g = r.allGroups.first(where: { $0.title.contains(arg) }) { r.expandedGroups.insert(g.id) }
+        case "collapseall": ws.review?.expandedGroups = []
+        case "recordstop": Self.recordTimer?.invalidate(); Self.recordTimer = nil
+        case "winframe":
+            // x y w h in screen points, measured from the top-left of the main screen.
+            let n = arg.split(separator: " ").compactMap { Double($0) }
+            if n.count == 4, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }), let screen = NSScreen.screens.first {
+                w.setFrame(NSRect(x: n[0], y: screen.frame.height - n[1] - n[3], width: n[2], height: n[3]), display: true, animate: false)
+            }
         case "geom":
             func walk(_ v: NSView, _ depth: Int) {
                 if v is NSScrollView || v is NSClipView || v is NSTextView || v is GutterView || v.superview is NSWindow || depth < 4 {
@@ -207,7 +226,15 @@ final class DebugBridge {
 
     /// Captures a window, compositing an attached sheet on top so sheets appear in context.
     private func capture(_ window: NSWindow, to path: String) {
-        guard let base = windowImage(window) else { return }
+        guard let final = composited(window) else { return }
+        if let data = NSBitmapImageRep(cgImage: final).representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+            Log.debug("snapshot(cg) \(path) \(final.width)x\(final.height)")
+        }
+    }
+
+    private func composited(_ window: NSWindow) -> CGImage? {
+        guard let base = windowImage(window) else { return nil }
         var final = base
         if let sheet = window.attachedSheet, let sheetImg = windowImage(sheet) {
             let scale = CGFloat(base.width) / window.frame.width
@@ -222,9 +249,39 @@ final class DebugBridge {
                 if let img = ctx.makeImage() { final = img }
             }
         }
-        if let data = NSBitmapImageRep(cgImage: final).representation(using: .png, properties: [:]) {
-            try? data.write(to: URL(fileURLWithPath: path))
-            Log.debug("snapshot(cg) \(path) \(final.width)x\(final.height)")
+        return final
+    }
+
+    private static var recordTimer: Timer?
+    private static let recordQueue = DispatchQueue(label: "spelunk.record")
+
+    /// Writes the main window as JPEG frames plus `frames.txt` (index and seconds since start) into
+    /// `dir`, about ten per second, until `recordstop`.
+    private func startRecording(_ dir: String) {
+        Self.recordTimer?.invalidate()
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let start = Date()
+        var index = 0
+        var busy = false
+        let log = URL(fileURLWithPath: dir).appendingPathComponent("frames.txt")
+        FileManager.default.createFile(atPath: log.path, contents: nil)
+        let handle = try? FileHandle(forWritingTo: log)
+        Self.recordTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard !busy, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && !$0.title.contains("Settings") }),
+                      let img = self.composited(w) else { return }
+                busy = true
+                let i = index, t = Date().timeIntervalSince(start)
+                index += 1
+                Self.recordQueue.async {
+                    let name = String(format: "f%05d.jpg", i)
+                    if let data = NSBitmapImageRep(cgImage: img).representation(using: .jpeg, properties: [.compressionFactor: 0.9]) {
+                        try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+                        handle?.write(Data(String(format: "%@ %.3f\n", name, t).utf8))
+                    }
+                    DispatchQueue.main.async { busy = false }
+                }
+            }
         }
     }
 }

@@ -52,7 +52,7 @@ extension Workspace {
     }
 
     func jobCacheKey(_ kind: ClaudeJob.Kind, _ question: String, _ anchor: String?) -> String {
-        [kind.rawValue, question.trimmingCharacters(in: .whitespacesAndNewlines), anchor ?? "", vcs.revision].joined(separator: "\u{1}")
+        [kind.rawValue, question.trimmingCharacters(in: .whitespacesAndNewlines), anchor ?? "", vcs.revision, review?.target.key ?? ""].joined(separator: "\u{1}")
     }
 
     /// A previous successful run of the same job at the same revision, if any.
@@ -69,6 +69,17 @@ extension Workspace {
         j.started = hit.started
         jobs.append(j)
         if j.kind == .trace { openJobTrace(j.id) }
+    }
+
+    /// Where a Claude session should read code: the head of the change under review when that is not
+    /// the working copy, plus the change's full diff as a readable file.
+    func claudeWorkspace() async -> (cwd: URL, readable: [URL], note: String) {
+        guard let r = review, !r.afterIsWorkingCopy else { return (root, [], "") }
+        let head = await r.headCheckout()
+        let diff = r.fullDiffFile()
+        let note = "\n\nThe working directory is the code after the change under review (\(r.title)) is applied; "
+            + "its full diff is at \(diff.path). Line numbers refer to that version."
+        return (head, [diff.deletingLastPathComponent()], note)
     }
 
     var runningJobs: [ClaudeJob] { jobs.filter(\.running) }
@@ -130,7 +141,9 @@ extension Workspace {
         if let r = review { prompt += "\n\nContext: I am reviewing \(r.title) (\(r.target.label))." }
         jobTasks[id] = Task {
             do {
-                let res = try await Claude.run(prompt: prompt, system: ClaudeTasks.askSystem, cwd: root, task: .ask) { [weak self] ev in
+                let place = await claudeWorkspace()
+                let res = try await Claude.run(prompt: prompt + place.note, system: ClaudeTasks.askSystem, cwd: place.cwd, task: .ask,
+                                               readableDirs: place.readable) { [weak self] ev in
                     Task { @MainActor in
                         self?.updateJob(id) { j in
                             switch ev {
@@ -162,14 +175,16 @@ extension Workspace {
         let startTrace = traces.activeID
         jobTasks[id] = Task {
             do {
-                let res = try await Claude.run(prompt: ClaudeTasks.tracePrompt(question: question, anchor: anchor),
-                                               system: ClaudeTasks.traceSystem, cwd: root, task: .trace, schema: ClaudeTasks.traceSchema) { [weak self] ev in
+                let place = await claudeWorkspace()
+                let res = try await Claude.run(prompt: ClaudeTasks.tracePrompt(question: question, anchor: anchor) + place.note,
+                                               system: ClaudeTasks.traceSystem, cwd: place.cwd, task: .trace, schema: ClaudeTasks.traceSchema,
+                                               readableDirs: place.readable) { [weak self] ev in
                     if case .toolUse(let n, let s) = ev {
                         Task { @MainActor in self?.updateJob(id) { $0.activity.append("\(n) \(s)") } }
                     }
                 }
                 let resp = try Claude.decode(ClaudeTasks.TraceResponse.self, from: res)
-                let trace = ClaudeTasks.materialize(resp, question: question, docs: docs)
+                let trace = ClaudeTasks.materialize(resp, question: question, docs: place.cwd == root ? docs : DocumentCache(root: place.cwd))
                 let stayed = document?.path == startPath && traces.activeID == startTrace
                 let previous = traces.activeID, previousStep = traces.currentStep
                 traces.add(trace)
