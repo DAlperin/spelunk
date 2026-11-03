@@ -45,12 +45,12 @@ extension ReviewSession {
                 .split(separator: "\n").first.map(String.init) ?? ""
             oldRev = parent
             newRev = commit
-            return try await Shell.output("jj", ["diff", "--git", "--context", "3", "--from", parent, "--to", commit], cwd: root)
+            return try await Shell.output("jj", ["diff", "--git", "--context", "3"] + Self.jjWhitespace + ["--from", parent, "--to", commit], cwd: root)
         }
         let parent = try await Shell.output("git", ["rev-parse", "\(commit)^"], cwd: root).trimmingCharacters(in: .whitespacesAndNewlines)
         oldRev = parent
         newRev = commit
-        return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", parent, commit], cwd: root)
+        return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff"] + Self.gitWhitespace + [parent, commit], cwd: root)
     }
 
     /// Shows one commit of the range, or the whole range with nil.

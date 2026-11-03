@@ -169,6 +169,7 @@ struct MainToolbar: ToolbarContent {
     @Bindable var ws: Workspace
     @Binding var showInspector: Bool
     @State private var showReviewPicker = false
+    @AppStorage(Prefs.Key.ignoreWhitespace) private var ignoreWhitespace = true
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -206,6 +207,13 @@ struct MainToolbar: ToolbarContent {
                 .frame(width: 170)
                 .help("Inline: new version with removed lines in place. Split: old and new side by side.")
             }
+            if ws.review != nil {
+                Toggle(isOn: Binding(get: { ignoreWhitespace }, set: { Prefs.setIgnoreWhitespace($0) })) {
+                    Image(systemName: "text.word.spacing")
+                }
+                .toggleStyle(.button)
+                .help(ignoreWhitespace ? "Whitespace changes are hidden; click to show them" : "Whitespace changes are shown; click to hide them")
+            }
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { ws.openAsk() } label: { Label("Ask", systemImage: "sparkles").labelStyle(.titleAndIcon) }.help("Ask Claude (⌘L)")
@@ -231,7 +239,7 @@ struct ReviewTargetMenu: View {
                 } label: {
                     if active { Label(menuTitle(r), systemImage: "checkmark") } else { Text(menuTitle(r)) }
                 }
-                .keyboardShortcut(i < 9 ? KeyEquivalent(Character(String(i + 1))) : "0", modifiers: .control)
+                .keyboardShortcut(i < 9 ? KeyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .control) : nil)
             }
             Divider()
             Button("Review a Pull Request…") { ws.sidebarTab = .scm; ws.scmSection = .pullRequests }

@@ -297,6 +297,9 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        add(Prefs.ignoreWhitespace ? "Show Whitespace Changes" : "Ignore Whitespace Changes", nil, nil, icon: "text.word.spacing") {
+            Prefs.setIgnoreWhitespace(!Prefs.ignoreWhitespace)
+        }
         add(Prefs.vim ? "Turn Off Vim Navigation" : "Turn On Vim Navigation", nil, nil, icon: "keyboard") {
             UserDefaults.standard.set(!Prefs.vim, forKey: Prefs.Key.vim)
             ws.vimStatus = nil

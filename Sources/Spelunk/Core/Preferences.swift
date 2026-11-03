@@ -17,7 +17,7 @@ enum Prefs {
         // Review
         static let autoClassify = "review.autoClassify"
         static let groupRelated = "review.groupRelated"
-        static let hideMechanical = "review.hideMechanical"
+        static let ignoreWhitespace = "review.ignoreWhitespace"
         static let quickBatch = "review.quickBatch"
         static let groupMaxGroups = "grouping.maxGroups"
         static let groupOverlap = "grouping.overlap"
@@ -51,8 +51,8 @@ enum Prefs {
         Key.hoverDelay: 0.6,
         Key.vim: false,
         Key.autoClassify: true,
+        Key.ignoreWhitespace: true,
         Key.groupRelated: true,
-        Key.hideMechanical: true,
         Key.quickBatch: 120,
         Key.groupMaxGroups: 80,
         Key.groupOverlap: 0.6,
@@ -87,7 +87,13 @@ enum Prefs {
     static var hoverDelay: Double { d.double(forKey: Key.hoverDelay) }
     static var vim: Bool { d.bool(forKey: Key.vim) }
     static var autoClassify: Bool { d.bool(forKey: Key.autoClassify) }
-    static var hideMechanical: Bool { d.bool(forKey: Key.hideMechanical) }
+    static var ignoreWhitespace: Bool { d.bool(forKey: Key.ignoreWhitespace) }
+
+    /// Changes whether review diffs ignore whitespace, and reloads every open review.
+    @MainActor static func setIgnoreWhitespace(_ on: Bool) {
+        d.set(on, forKey: Key.ignoreWhitespace)
+        NotificationCenter.default.post(name: .diffOptionsChanged, object: nil)
+    }
     static var quickBatch: Int { max(10, d.integer(forKey: Key.quickBatch)) }
     static var groupMaxGroups: Int { max(1, d.integer(forKey: Key.groupMaxGroups)) }
     static var groupOverlap: Double { d.double(forKey: Key.groupOverlap) }
@@ -103,4 +109,9 @@ enum Prefs {
     static var openDocuments: Int { max(4, d.integer(forKey: Key.openDocuments)) }
     static var headServer: Bool { d.bool(forKey: Key.headServer) }
     static var documentCacheSize: Int { max(20, d.integer(forKey: Key.documentCacheSize)) }
+}
+
+extension Notification.Name {
+    /// Posted when an option that changes how review diffs are computed changes.
+    static let diffOptionsChanged = Notification.Name("spelunk.diffOptionsChanged")
 }

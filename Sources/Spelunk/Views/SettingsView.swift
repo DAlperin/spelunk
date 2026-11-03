@@ -85,8 +85,8 @@ private struct EditorSettings: View {
 
 private struct ReviewSettings: View {
     @AppStorage(Prefs.Key.autoClassify) var autoClassify = true
+    @AppStorage(Prefs.Key.ignoreWhitespace) var ignoreWhitespace = true
     @AppStorage(Prefs.Key.quickBatch) var quickBatch = 120
-    @AppStorage(Prefs.Key.hideMechanical) var hideMechanical = true
     @AppStorage(Prefs.Key.groupRelated) var groupRelated = true
     @AppStorage(Prefs.Key.groupMaxGroups) var maxGroups = 80
     @AppStorage(Prefs.Key.groupOverlap) var overlap = 0.6
@@ -96,10 +96,13 @@ private struct ReviewSettings: View {
 
     var body: some View {
         Form {
+            Section("Diff") {
+                Toggle("Ignore whitespace changes", isOn: Binding(get: { ignoreWhitespace }, set: { Prefs.setIgnoreWhitespace($0) }))
+                Note("Hunks that only change whitespace are left out, and changed lines are compared without it. A pull request whose commits cannot be fetched uses GitHub's diff, which always includes whitespace.")
+            }
             Section("Classification") {
                 Toggle("Classify new hunks with Claude automatically", isOn: $autoClassify)
                 Stepper(value: $quickBatch, in: 20...400, step: 20) { Text(verbatim: "Hunks per classification request: \(quickBatch)") }
-                Toggle("Collapse mechanical hunks when a review opens", isOn: $hideMechanical)
                 Note("The quick pass sends hunks the rules cannot settle. Results are cached by hunk content and never resent.")
             }
             Section("Grouping") {

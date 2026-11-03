@@ -15,8 +15,8 @@ import SwiftTreeSitter
 /// reason. Rules are checked in order (your file, then the repository's, then defaults); the first
 /// matching non-note rule sets the tier. A `collect` rule that also matches adds its reason when its
 /// tier won, which is how several risk signals are listed together. `settled` keeps a hunk out of
-/// the Claude classification pass. `disable` removes earlier-loaded or
-/// default rules with that reason. Reasons may use `{lang}`, `{name}` (public item) and `{rename}`.
+/// the Claude classification pass. `disable` removes rules with that
+/// reason from the files loaded after its own, defaults included; it never removes attach rules. Reasons may use `{lang}`, `{name}` (public item) and `{rename}`.
 ///
 /// Conditions, all of which must hold:
 /// - `path ~ <glob>`                                  (`*`, `**`, `?`, `{a,b}`)

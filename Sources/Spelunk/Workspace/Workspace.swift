@@ -188,9 +188,16 @@ final class Workspace {
         grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadCurrentDocument() }
         }
+        diffOptionsObserver = NotificationCenter.default.addObserver(forName: .diffOptionsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for r in [self.workingReview].compactMap({ $0 }) + self.pinnedReviews { Task { await r.load() } }
+            }
+        }
     }
 
     @ObservationIgnored private var grammarObserver: NSObjectProtocol?
+    @ObservationIgnored private var diffOptionsObserver: NSObjectProtocol?
 
     /// Re-parses open documents, e.g. after grammars change.
     func reloadCurrentDocument(keepPosition: Bool = false) {

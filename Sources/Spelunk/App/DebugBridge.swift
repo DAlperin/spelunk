@@ -153,6 +153,7 @@ final class DebugBridge {
         case "palette": ws.palette = arg == "commands" ? .commands : .files
         case "ptype": ws.paletteQuery = arg
         case "pclose": ws.palette = nil
+        case "whitespace": Prefs.setIgnoreWhitespace(arg == "ignore")
         case "tab": ws.sidebarTab = SidebarTab.allCases.first { $0.rawValue.lowercased() == arg.lowercased() } ?? .files
         case "scmsection": ws.scmSection = arg == "prs" ? .pullRequests : .changes
         case "scmselect":

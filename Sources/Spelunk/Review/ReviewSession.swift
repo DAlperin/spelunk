@@ -108,7 +108,6 @@ final class ReviewSession {
     private var reloadPending = false
     var viewed: Set<String> = []
     var notes: [String: String] = [:]
-    var hideTiers: Set<ChangeTier> = Prefs.hideMechanical ? [.mechanical] : []
     var pullRequest: GitHubService.PullRequestDetails?
     var pendingComments: [PendingComment] = []
     var githubError: String?
@@ -331,8 +330,6 @@ final class ReviewSession {
             // exist simply stop matching. The overview describes the whole change; flag it once stale.
             await hydrate()
             overviewIsStale = overview != nil && overviewFingerprint != nil && overviewFingerprint != fingerprint
-            // Hiding a tier only helps when something else is left to read.
-            if first, allHunks.allSatisfy({ hideTiers.contains(tier(of: $0)) }) { hideTiers = [] }
             lastLoaded = Date()
             state = .ready
             save()
@@ -372,7 +369,7 @@ final class ReviewSession {
             body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             changeID = (try? await Shell.output("jj", ["log", "--no-graph", "-r", to, "-T", "change_id.short(8)"], cwd: root))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return try await Shell.output("jj", ["diff", "--git", "--context", "3", "--from", from, "--to", to], cwd: root)
+            return try await Shell.output("jj", ["diff", "--git", "--context", "3"] + Self.jjWhitespace + ["--from", from, "--to", to], cwd: root)
         case .git(let base, let head):
             vcs = .git
             func commit(_ rev: String) async -> String {
@@ -382,8 +379,8 @@ final class ReviewSession {
             oldRev = await commit(base)
             newRev = head == nil ? nil : await commit(head!)
             title = target.label
-            if let head { return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", base, head], cwd: root) }
-            return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", base], cwd: root)
+            if let head { return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff"] + Self.gitWhitespace + [base, head], cwd: root) }
+            return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff"] + Self.gitWhitespace + [base], cwd: root)
         case .githubPR(let n):
             vcs = .git
             if files.isEmpty { state = .loading("Fetching PR #\(n)") }
@@ -417,9 +414,14 @@ final class ReviewSession {
             let mb = (try? await Shell.output("git", ["merge-base", base, head], cwd: root))?.trimmingCharacters(in: .whitespacesAndNewlines)
             oldRev = mb ?? base
             newRev = head
-            return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", oldRev, head], cwd: root)
+            return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff"] + Self.gitWhitespace + [oldRev, head], cwd: root)
         }
     }
+
+    /// Diff flags for the whitespace preference. A pull request whose commits cannot be fetched uses
+    /// GitHub's diff, which always includes whitespace changes.
+    static var jjWhitespace: [String] { Prefs.ignoreWhitespace ? ["--ignore-all-space"] : [] }
+    static var gitWhitespace: [String] { Prefs.ignoreWhitespace ? ["-w"] : [] }
 
     enum Side { case old, new }
 
