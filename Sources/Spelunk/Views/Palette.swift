@@ -306,6 +306,15 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        add("Focus Code View", nil, "⌃W L", icon: "text.cursor", when: ws.document != nil) {
+            DispatchQueue.main.async { if let w = NSApp.keyWindow { PaneFocus.focusCodeView(w) } }
+        }
+        add("Focus Sidebar", nil, "⌃W H", icon: "sidebar.left") {
+            DispatchQueue.main.async { if let w = NSApp.keyWindow { PaneFocus.focusSidebar(w) } }
+        }
+        add("Focus Inspector", nil, nil, icon: "sidebar.right", when: ws.showInspector) {
+            DispatchQueue.main.async { if let w = NSApp.keyWindow { PaneFocus.focusInspector(w) } }
+        }
         add("Fold Function", nil, "⌥⌘←", icon: "chevron.right", when: ws.document != nil) { ws.setFold(true) }
         add("Unfold Function", nil, "⌥⌘→", icon: "chevron.down", when: ws.document != nil) { ws.setFold(false) }
         add("Fold All Functions", nil, "⇧⌥⌘←", icon: "rectangle.compress.vertical", when: ws.document != nil) { ws.foldAll(true) }

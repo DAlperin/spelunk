@@ -145,8 +145,10 @@ struct MainView: View {
                 let handled = MainActor.assumeIsolated { () -> Bool in
                     // Every window installs a monitor and each sees every key; only the window the
                     // key was typed in handles it.
-                    guard let w = e.window, w === host.window, w.isVisible, w.attachedSheet == nil, !w.isSheet,
-                          !ReviewKeys.focusIsTextInput() else { return false }
+                    guard let w = e.window, w === host.window, w.isVisible, w.attachedSheet == nil, !w.isSheet else { return false }
+                    // Ctrl-w pane moves work from anywhere in the window, text fields included.
+                    if ws.palette == nil, PaneFocus.handle(e, window: w) { return true }
+                    guard !ReviewKeys.focusIsTextInput() else { return false }
                     return ReviewKeys.handle(e, ws: ws)
                 }
                 return handled ? nil : e

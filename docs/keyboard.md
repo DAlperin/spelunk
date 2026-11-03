@@ -37,6 +37,21 @@ Other shortcuts outside the menu bar:
 | ⌘-click | Code view | Go to definition |
 | Double-click | Gutter | Toggle a bookmark on that line |
 
+## Moving between panes
+
+Ctrl-w followed by a key moves keyboard focus between the window's panes, as in vim. It works with
+vim mode off and from anywhere in the window, text fields included (not while the palette is open).
+
+| Keys | Moves focus to |
+|---|---|
+| Ctrl-w l | The pane to the right: from the review or file list into the code view, from the code view to the inspector's list |
+| Ctrl-w h | The pane to the left |
+| Ctrl-w w / Ctrl-w W | The next / previous pane, wrapping around |
+| Ctrl-w p | The pane focused before the last move |
+
+With nothing focused, Ctrl-w l goes to the code view and Ctrl-w h to the sidebar. In split diff view
+the two sides are separate panes. The palette has Focus Code View, Focus Sidebar and Focus Inspector.
+
 ## Review keys
 
 Single-letter keys act on the review shown in the window. They apply when no text field has focus,

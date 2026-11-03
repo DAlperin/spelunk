@@ -120,6 +120,22 @@ final class DebugBridge {
                     NSApp.postEvent(e, atStart: false)
                 }
             }
+        case "rawkey", "rawctrl":
+            // Like key / ctrlkey but leaves focus where it is.
+            guard let w = mainWindow else { break }
+            for ch in arg {
+                let mods: NSEvent.ModifierFlags = verb == "rawctrl" ? [.control] : (ch.isUppercase ? [.shift] : [])
+                if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: w.windowNumber, context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch),
+                                            isARepeat: false, keyCode: 0) {
+                    NSApp.postEvent(e, atStart: false)
+                }
+            }
+        case "responder":
+            if let r = mainWindow?.firstResponder {
+                let x = (r as? NSView).map { Int($0.convert($0.visibleRect, to: nil).midX) } ?? -1
+                Log.debug("responder: \(type(of: r)) x=\(x)")
+            }
         case "ctrlkey":
             // ctrlkey <char>: one control-modified key press.
             guard let w = mainWindow, let ch = arg.first else { break }
