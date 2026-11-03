@@ -221,6 +221,18 @@ final class DebugBridge {
                 let h = NSScreen.screens.first?.frame.height ?? 0
                 Log.debug("screenpos: \(Int(sr.midX)) \(Int(h - sr.midY))")
             }
+        case "treerow":
+            // treerow <row> [toggle]: selects a row of the file tree, as the arrow keys do, or opens or closes its folder
+            let p = arg.split(separator: " ")
+            guard let o = mainWindow?.contentView?.allSubviews(ofType: NSOutlineView.self).first(where: { $0.delegate is FileOutline.Coordinator }),
+                  let row = p.first.flatMap({ Int($0) }),
+                  let item = o.item(atRow: row) else { break }
+            if p.count > 1 {
+                if o.isItemExpanded(item) { o.collapseItem(item) } else { o.expandItem(item) }
+            } else {
+                o.selectRowIndexes([row], byExtendingSelection: false)
+            }
+            Log.debug("treerow \(row) \((item as? FileNode)?.path ?? "?") rows=\(o.numberOfRows)")
         case "scroll":
             // scroll <dy> <steps>: scrolls the code view by dy points per step, drawing each step, and logs the time per step
             let p = arg.split(separator: " ").compactMap { Double($0) }
@@ -446,6 +458,10 @@ final class DebugBridge {
 }
 
 extension NSView {
+    func allSubviews<T: NSView>(ofType t: T.Type) -> [T] {
+        ((self as? T).map { [$0] } ?? []) + subviews.flatMap { $0.allSubviews(ofType: t) }
+    }
+
     func firstSubview<T: NSView>(ofType t: T.Type) -> T? {
         if let v = self as? T { return v }
         for c in subviews { if let v = c.firstSubview(ofType: t) { return v } }
