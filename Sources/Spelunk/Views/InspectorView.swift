@@ -4,6 +4,7 @@ import SwiftUI
 /// hunk's impact, or (from the Panes menu) code paths, the outline, bookmarks or problems.
 struct InspectorView: View {
     @Bindable var ws: Workspace
+    @Environment(AppModel.self) var model
 
     var showingHunk: Bool { ws.showsHunkContext }
 
@@ -11,38 +12,9 @@ struct InspectorView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            Group {
-                switch ws.inspectorPane {
-                case .context:
-                    List {
-                        Group {
-                            if showingHunk, let cc = ws.changeContext, let r = ws.review,
-                               let h = r.allHunks.first(where: { $0.id == cc.hunkID }) {
-                                ChangeContextSection(ws: ws, review: r, hunk: h, cc: cc)
-                            } else if let c = ws.context {
-                                ContextSection(ws: ws, ctx: c)
-                            } else {
-                                Text("Click a symbol to see its definition, callers and references. ⌘-click jumps to the definition.")
-                                    .font(.callout).foregroundStyle(.secondary).padding(12)
-                            }
-                        }
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                    }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                case .conversation:
-                    if let r = ws.review, let pr = r.pullRequest { ConversationPane(ws: ws, review: r, pr: pr) }
-                    else { Text("Open a GitHub pull request to see its conversation.").font(.callout).foregroundStyle(.secondary).padding(12); Spacer() }
-                case .claude: ClaudePane(ws: ws)
-                case .paths: TracePanel(ws: ws, traces: ws.traces)
-                case .outline: OutlinePanel(ws: ws)
-                case .bookmarks: BookmarksPanel(ws: ws)
-                case .problems: ProblemsPanel(ws: ws)
-                }
+            KeptTabs(selection: InspectorContent.Key(pane: ws.inspectorPane, hunk: ws.inspectorPane == .context && showingHunk), owner: ws, model: model) { [ws] key in
+                AnyView(InspectorContent(ws: ws, key: key).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
             }
-            .frame(maxHeight: .infinity, alignment: .top)
             if ws.inspectorPane == .context {
                 Divider()
                 CollapsedRows(ws: ws)
@@ -104,6 +76,50 @@ struct InspectorView: View {
 }
 
 /// Source tag shown only when an answer comes from something weaker than rust-analyzer.
+/// One pane of the inspector; for the context pane, either the selected hunk's change context or
+/// the symbol's. Each is kept alive by `KeptTabs`, so switching between them reuses its rows.
+struct InspectorContent: View {
+    struct Key: Hashable {
+        var pane: InspectorPane
+        var hunk: Bool
+    }
+
+    @Bindable var ws: Workspace
+    let key: Key
+
+    var body: some View {
+        switch key.pane {
+        case .context:
+            List {
+                Group {
+                    if key.hunk, let cc = ws.changeContext, let r = ws.review,
+                       let h = r.allHunks.first(where: { $0.id == cc.hunkID }) {
+                        ChangeContextSection(ws: ws, review: r, hunk: h, cc: cc)
+                    } else if let c = ws.context {
+                        ContextSection(ws: ws, ctx: c)
+                    } else {
+                        Text("Click a symbol to see its definition, callers and references. ⌘-click jumps to the definition.")
+                            .font(.callout).foregroundStyle(.secondary).padding(12)
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        case .conversation:
+            if let r = ws.review, let pr = r.pullRequest { ConversationPane(ws: ws, review: r, pr: pr) }
+            else { Text("Open a GitHub pull request to see its conversation.").font(.callout).foregroundStyle(.secondary).padding(12) }
+        case .claude: ClaudePane(ws: ws)
+        case .paths: TracePanel(ws: ws, traces: ws.traces)
+        case .outline: OutlinePanel(ws: ws)
+        case .bookmarks: BookmarksPanel(ws: ws)
+        case .problems: ProblemsPanel(ws: ws)
+        }
+    }
+}
+
 struct WeakSourceTag: View {
     let source: IntelSource?
     var body: some View {
