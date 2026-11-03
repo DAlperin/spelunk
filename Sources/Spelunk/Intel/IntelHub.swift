@@ -38,7 +38,7 @@ final class IntelHub {
     }
 
     private func scipSymbol(path: String, at p: SourcePos) -> String? {
-        guard let idx = scip.index, idx.documents[path] != nil else { return nil }
+        guard let idx = scip.index, idx.documents[path] != nil, !scip.isStale(path) else { return nil }
         // Convert our UTF-16 column into the index's encoding by scanning candidates on the line.
         let line = docs.document(path)?.lineText(p.line) ?? ""
         let utf8Col = String(decoding: Array(line.utf16.prefix(p.col)), as: UTF16.self).utf8.count
@@ -123,6 +123,7 @@ final class IntelHub {
     func definitions(path: String, at p: SourcePos, name: String) async -> ([CodeLocation], IntelSource) {
         if scipFirst, let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
         if ra.status.isUsable, let r = try? await ra.definition(path: path, at: p), !r.isEmpty { return (r, .rustAnalyzer) }
+        if Task.isCancelled { return ([], .rustAnalyzer) }
         if let defs = scipDefinitions(path: path, at: p) { return (defs, .scip) }
         let syn = await syntaxDefinitions(name: name, near: path)
         if !syn.isEmpty { return (syn, .treeSitter) }
@@ -161,10 +162,13 @@ final class IntelHub {
 
     func references(path: String, at p: SourcePos, name: String) async -> ([ReferenceHit], IntelSource) {
         if scipFirst, let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
-        if ra.status.isUsable, let r = try? await ra.references(path: path, at: p), !r.isEmpty {
+        // A warm rust-analyzer that answers with no references means there are none; a cold one
+        // may not know yet, so only then fall back.
+        if ra.status.isUsable, let r = try? await ra.references(path: path, at: p), !r.isEmpty || ra.isWarm {
             let defs = Set((try? await ra.definition(path: path, at: p)) ?? [])
             return (r.map { hit($0, isDef: defs.contains($0), source: .rustAnalyzer) }, .rustAnalyzer)
         }
+        if Task.isCancelled { return ([], .rustAnalyzer) }
         if let hits = scipReferences(path: path, at: p) { return (hits, .scip) }
         var opts = TextSearch.Options()
         opts.wholeWord = true
@@ -191,9 +195,10 @@ final class IntelHub {
     // MARK: Implementations
 
     func implementations(path: String, at p: SourcePos, name: String) async -> ([ReferenceHit], IntelSource) {
-        if ra.status.isUsable, let r = try? await ra.implementations(path: path, at: p), !r.isEmpty {
+        if ra.status.isUsable, let r = try? await ra.implementations(path: path, at: p), !r.isEmpty || ra.isWarm {
             return (r.map { implHit($0, source: .rustAnalyzer) }, .rustAnalyzer)
         }
+        if Task.isCancelled { return ([], .rustAnalyzer) }
         if let sym = scipSymbol(path: path, at: p), let idx = scip.index, let impls = idx.implementors[sym], !impls.isEmpty {
             let locs = impls.flatMap { idx.definitions(of: $0) }.map { scipLocation($0.path, $0.occ) }
             return (locs.map { implHit($0, source: .scip) }, .scip)
@@ -227,8 +232,9 @@ final class IntelHub {
                                 location: CodeLocation(path: path, range: RustAnalyzer.parseRange(item.value["selectionRange"]) ?? SourceRange(line: p.line)),
                                 callSites: [], source: .rustAnalyzer, payload: item, ancestry: [])
             await expand(root, direction)
-            if let c = root.children, !c.isEmpty { return c }
+            if let c = root.children, !c.isEmpty || ra.isWarm { return c }
         }
+        if Task.isCancelled { return [] }
         let def = await definitions(path: path, at: p, name: name).0.first ?? CodeLocation(path: path, range: SourceRange(line: p.line, col: p.col))
         let root = CallNode(name: name, detail: "", location: def, callSites: [], source: .treeSitter, payload: nil, ancestry: [])
         await expand(root, direction)

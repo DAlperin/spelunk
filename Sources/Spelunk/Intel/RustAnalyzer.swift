@@ -94,6 +94,11 @@ final class RustAnalyzer {
         return nil
     }
 
+    private var generation = 0
+    private var initialized = false
+    private var queuedOpens: [String: String] = [:]
+    private var openOrder: [String] = []
+
     func start() {
         guard client == nil, status != .starting else { return }
         status = .starting
@@ -110,6 +115,10 @@ final class RustAnalyzer {
         }
         binaryPath = bin
         status = .starting
+        generation += 1
+        let gen = generation
+        initialized = false
+        versions.removeAll()
         let c = LSPClient(executable: bin, args: [], cwd: root)
         if Log.enabled, let filter = ProcessInfo.processInfo.environment["SPELUNK_RA_LOG"] { c.environment["RA_LOG"] = filter }
         c.onNotification = { [weak self] method, params in
@@ -130,8 +139,11 @@ final class RustAnalyzer {
         }
         c.onExit = { [weak self] code, tail in
             Task { @MainActor in
-                guard let self else { return }
+                // A late exit from a client that has been replaced must not touch the new one.
+                guard let self, self.generation == gen else { return }
                 self.client = nil
+                self.initialized = false
+                self.versions.removeAll()
                 if case .off = self.status { return }
                 let lastLine = tail.split(separator: "\n").last.map(String.init) ?? ""
                 self.status = .failed("exited \(code) \(lastLine)")
@@ -170,7 +182,11 @@ final class RustAnalyzer {
                 if let info = (result as? [String: Any])?["serverInfo"] as? [String: Any] {
                     self.version = info["version"] as? String
                 }
+                guard self.generation == gen else { return }
                 c.notify("initialized", [String: Any]())
+                self.initialized = true
+                for (path, text) in self.queuedOpens { self.didOpen(path: path, text: text, language: .rust) }
+                self.queuedOpens = [:]
                 if case .starting = self.status { self.status = .indexing("Loading workspace") }
             } catch {
                 self.status = .failed(error.localizedDescription)
@@ -249,8 +265,14 @@ final class RustAnalyzer {
         return u.standardizedFileURL.relativePath(from: root)
     }
 
+    /// Sends a file's current text. Before the server is initialized it is queued; the most recently
+    /// opened files stay open, older ones are closed so the server reads them from disk again.
     func didOpen(path: String, text: String, language: SourceLanguage) {
-        guard let client, language == .rust else { return }
+        guard language == .rust else { return }
+        guard let client, initialized else { queuedOpens[path] = text; return }
+        openOrder.removeAll { $0 == path }
+        openOrder.append(path)
+        while openOrder.count > 24 { didClose(openOrder.removeFirst()) }
         if let v = versions[path] {
             versions[path] = v + 1
             client.notify("textDocument/didChange", [
@@ -263,6 +285,22 @@ final class RustAnalyzer {
         client.notify("textDocument/didOpen", [
             "textDocument": ["uri": uri(for: path), "languageId": "rust", "version": 1, "text": text],
         ])
+    }
+
+    func didClose(_ path: String) {
+        guard let client, initialized, versions.removeValue(forKey: path) != nil else { return }
+        openOrder.removeAll { $0 == path }
+        client.notify("textDocument/didClose", ["textDocument": ["uri": uri(for: path)]])
+    }
+
+    /// Files changed on disk: open copies other than `except` are closed (the server then reads the
+    /// new text from disk), and the server is told which files changed.
+    func filesChanged(_ paths: [String], except: String?) {
+        guard let client, initialized else { return }
+        let rust = paths.filter { $0.hasSuffix(".rs") || $0.hasSuffix("Cargo.toml") }
+        guard !rust.isEmpty else { return }
+        for p in rust where p != except && versions[p] != nil { didClose(p) }
+        client.notify("workspace/didChangeWatchedFiles", ["changes": rust.prefix(500).map { ["uri": uri(for: $0), "type": 2] }])
     }
 
     private func pos(_ p: SourcePos) -> [String: Any] { ["line": p.line, "character": p.col] }

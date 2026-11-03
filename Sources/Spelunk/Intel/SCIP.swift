@@ -261,6 +261,8 @@ final class SCIPService {
 
     struct Meta: Codable {
         var generatedAt: Date
+        /// When generation started; files modified after it may not match the index.
+        var startedAt: Date?
         var revision: String
         var tool: String
         var documentCount: Int
@@ -328,7 +330,10 @@ final class SCIPService {
         }
         generator?.terminate()
         state = .generating("Running rust-analyzer scip")
-        let tmp = cacheURL.deletingLastPathComponent().appendingPathComponent("index.scip.tmp")
+        runGeneration += 1
+        let gen = runGeneration
+        let startedAt = Date()
+        let tmp = cacheURL.deletingLastPathComponent().appendingPathComponent("index-\(gen)-\(UUID().uuidString.prefix(8)).scip.tmp")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
         p.arguments = ["scip", root.path, "--output", tmp.path]
@@ -352,7 +357,8 @@ final class SCIPService {
             let status = proc.terminationStatus
             let errTail = String(decoding: tail.data.suffix(400), as: UTF8.self)
             Task { @MainActor in
-                guard let self else { return }
+                // A run that has been replaced must not overwrite the newer one's state.
+                guard let self, self.runGeneration == gen else { try? FileManager.default.removeItem(at: tmp); return }
                 self.generator = nil
                 guard status == 0 else {
                     self.state = .failed("rust-analyzer scip exited \(status): \(errTail.split(separator: "\n").last ?? "")")
@@ -360,7 +366,7 @@ final class SCIPService {
                 }
                 try? FileManager.default.removeItem(at: self.cacheURL)
                 try? FileManager.default.moveItem(at: tmp, to: self.cacheURL)
-                self.meta = Meta(generatedAt: Date(), revision: revision, tool: "rust-analyzer scip", documentCount: 0)
+                self.meta = Meta(generatedAt: Date(), startedAt: startedAt, revision: revision, tool: "rust-analyzer scip", documentCount: 0)
                 self.load(sourceFiles: sourceFiles)
                 Task { @MainActor in
                     while self.state == .loading { try? await Task.sleep(nanoseconds: 100_000_000) }
@@ -373,6 +379,20 @@ final class SCIPService {
             }
         }
         do { try p.run(); generator = p } catch { state = .failed(error.localizedDescription) }
+    }
+
+    private var runGeneration = 0
+    private var staleCache: [String: (checked: Date, stale: Bool)] = [:]
+
+    /// Whether a file changed after the index was generated, so the index's positions may not match
+    /// its text. Checked by modification time, at most every few seconds per file.
+    func isStale(_ path: String) -> Bool {
+        guard let started = meta?.startedAt ?? meta?.generatedAt else { return false }
+        if let c = staleCache[path], Date().timeIntervalSince(c.checked) < 5 { return c.stale }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(path).path)[.modificationDate] as? Date) ?? .distantPast
+        let stale = mtime > started
+        staleCache[path] = (Date(), stale)
+        return stale
     }
 
     func cancel() {

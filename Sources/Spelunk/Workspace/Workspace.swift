@@ -225,6 +225,7 @@ final class Workspace {
     /// Debounced reaction to edits on disk (yours, Claude's, a checkout): refresh the open file,
     /// the working-copy review, and the change graph when it is visible.
     private func filesChanged(_ paths: [String]) {
+        ra.filesChanged(paths, except: document?.isWorkingCopy == true ? document?.path : nil)
         if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
         refreshTask?.cancel()
         refreshTask = Task {

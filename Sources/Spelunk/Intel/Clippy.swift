@@ -25,8 +25,12 @@ final class ClippyService {
 
     init(root: URL) { self.root = root }
 
+    private var runGeneration = 0
+
     func run() {
         process?.terminate()
+        runGeneration += 1
+        let gen = runGeneration
         state = .running("Starting cargo clippy")
         diagnostics = []
         byFile = [:]
@@ -52,7 +56,7 @@ final class ClippyService {
             let rest = all[(lastNL + 1)...]
             let lines = String(decoding: complete, as: UTF8.self).split(separator: "\n").map(String.init)
             lineBuf.reset(Data(rest))
-            Task { @MainActor in self?.consume(lines) }
+            Task { @MainActor in if self?.runGeneration == gen { self?.consume(lines) } }
         }
         err.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
@@ -65,7 +69,7 @@ final class ClippyService {
             err.fileHandleForReading.readabilityHandler = nil
             let code = proc.terminationStatus
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.runGeneration == gen else { return }
                 self.process = nil
                 self.state = (code == 0 || !self.diagnostics.isEmpty) ? .done(Date()) : .failed("cargo clippy exited \(code)")
             }
