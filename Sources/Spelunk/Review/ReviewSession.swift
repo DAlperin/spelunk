@@ -26,13 +26,15 @@ enum ReviewTarget: Codable, Hashable, Sendable {
 }
 
 struct LLMTriage: Codable, Sendable {
-    enum Pass: String, Codable, Sendable { case quick, deep }
+    /// `skipped`: sent to the quick pass but left out of its reply. Cached so it is not resent; the rules decide.
+    enum Pass: String, Codable, Sendable { case quick, deep, skipped }
     var tier: ChangeTier
     var reason: String
     var summary: String?
     /// Nil for results saved before passes were distinguished; treated as deep.
     var pass: Pass?
     var isQuick: Bool { pass == .quick }
+    var isSkipped: Bool { pass == .skipped }
 }
 
 @MainActor @Observable
@@ -45,10 +47,10 @@ final class ReviewSession {
     var title: String = ""
     var body: String = ""
     var files: [FileDiff] = []
-    var analyses: [String: HunkAnalysis] = [:]
-    var llm: [String: LLMTriage] = [:]
+    var analyses: [String: HunkAnalysis] = [:] { didSet { layoutCache = nil } }
+    var llm: [String: LLMTriage] = [:] { didSet { layoutCache = nil } }
     var overview: String?
-    var reviewOrder: [String] = []
+    var reviewOrder: [String] = [] { didSet { layoutCache = nil } }
     var triageState: String?
     var triaging = false
     var overviewIsStale = false
@@ -97,7 +99,21 @@ final class ReviewSession {
     var githubError: String?
     @ObservationIgnored var onPullRequestLoaded: (() -> Void)?
     let github: GitHubService?
-    var groupByTier = true
+    enum ListMode: String, CaseIterable, Identifiable { case importance = "Importance", files = "Files"; var id: String { rawValue } }
+    var listMode: ListMode = ListMode(rawValue: UserDefaults.standard.string(forKey: "review.listMode") ?? "") ?? .importance {
+        didSet { UserDefaults.standard.set(listMode.rawValue, forKey: "review.listMode") }
+    }
+    var groups: [HunkGroup] = [] { didSet { layoutCache = nil } }
+    var claudeGroups: [HunkGroup] = [] { didSet { layoutCache = nil } }
+    /// Related hunks shown together inside the importance list.
+    var groupRelated = UserDefaults.standard.object(forKey: "review.groupRelated") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(groupRelated, forKey: "review.groupRelated"); layoutCache = nil }
+    }
+    /// Groups opened in the list; the one holding the selected hunk opens on its own.
+    var expandedGroups: Set<String> = []
+    @ObservationIgnored var layoutCache: [TierSection]?
+    var grouping = false
+    var groupState: String?
 
     /// Resolved revisions used to fetch file contents.
     private(set) var oldRev: String = ""
@@ -146,6 +162,7 @@ final class ReviewSession {
         var reviewOrder: [String]?
         var fingerprint: String
         var pendingComments: [PendingComment]?
+        var claudeGroups: [HunkGroup]?
     }
 
     private var stateURL: URL {
@@ -164,13 +181,14 @@ final class ReviewSession {
         overview = p.overview
         reviewOrder = p.reviewOrder ?? []
         pendingComments = p.pendingComments ?? []
+        claudeGroups = p.claudeGroups ?? []
         persistedFingerprint = p.fingerprint
     }
 
     private var persistedFingerprint: String?
 
     func save() {
-        let p = Persisted(viewed: Array(viewed), notes: notes, llm: llm, overview: overview, reviewOrder: reviewOrder, fingerprint: fingerprint, pendingComments: pendingComments)
+        let p = Persisted(viewed: Array(viewed), notes: notes, llm: llm, overview: overview, reviewOrder: reviewOrder, fingerprint: fingerprint, pendingComments: pendingComments, claudeGroups: claudeGroups)
         if let d = try? JSONEncoder().encode(p) { try? d.write(to: stateURL, options: .atomic) }
     }
 
@@ -199,6 +217,7 @@ final class ReviewSession {
             }
             files = newFiles
             analyses = newAnalyses
+            recomputeGroups()
             // Viewed marks and triage are keyed by hunk content, so entries for hunks that no longer
             // exist simply stop matching. The overview describes the whole change; flag it once stale.
             overviewIsStale = overview != nil && persistedFingerprint != nil && persistedFingerprint != fingerprint
@@ -316,14 +335,14 @@ final class ReviewSession {
 
     // MARK: Derived
 
-    func tier(of h: Hunk) -> ChangeTier { llm[h.contentKey]?.tier ?? analyses[h.id]?.tier ?? .behavior }
+    func tier(of h: Hunk) -> ChangeTier { triage(of: h)?.tier ?? analyses[h.id]?.tier ?? .behavior }
 
-    func triage(of h: Hunk) -> LLMTriage? { llm[h.contentKey] }
+    func triage(of h: Hunk) -> LLMTriage? { llm[h.contentKey].flatMap { $0.isSkipped ? nil : $0 } }
 
     func isViewed(_ h: Hunk) -> Bool { viewed.contains(h.contentKey) }
 
     func reasons(of h: Hunk) -> [String] {
-        if let l = llm[h.contentKey] { return [l.reason] }
+        if let l = triage(of: h) { return [l.reason] }
         return analyses[h.id]?.reasons ?? []
     }
 
@@ -475,53 +494,60 @@ final class ReviewSession {
     private var classifying = false
 
     /// Hunks worth a model's opinion: not yet classified, and not settled by the rules beyond doubt.
-    private var classifyCandidates: [Hunk] {
+    var classifyCandidates: [Hunk] {
         allHunks.filter { h in
             guard llm[h.contentKey] == nil else { return false }
             return !(analyses[h.id]?.settled ?? false)
         }
     }
 
-    /// Cheap per-hunk pass after the static rules: diff text only, no tools. Results are cached by
-    /// hunk content, so live refreshes only send new or changed hunks.
+    /// Cheap per-hunk pass after the static rules: diff text only, no tools. Every hunk sent gets a
+    /// cached result keyed by its content (the model's tier, or the rules' tier when the reply skips
+    /// it), so reopening a review or refreshing the working copy only sends hunks never seen before.
     func quickClassify() async {
         guard !classifying else { return }
-        let batch = Array(classifyCandidates.prefix(120))
-        guard !batch.isEmpty else { return }
         classifying = true
         defer { classifying = false }
         let model = ClaudeModels.label(Claude.model(for: .classify))
-        classifyState = "Classifying \(batch.count) hunks with \(model)…"
-        var prompt = "Change: \(title)\n\nHunks:\n"
-        var budget = 60_000
-        var sent: [Hunk] = []
-        for h in batch {
-            let a = analyses[h.id]
-            let body = h.lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }
-            let text = body.count > 40 ? (body.prefix(40) + ["… \(body.count - 40) more lines"]).joined(separator: "\n") : body.joined(separator: "\n")
-            let chunk = "\n### \(h.id) file=\(h.path) in=\(a?.enclosing ?? "-") heuristic=\(a?.tier.rawValue ?? "?") (\(a?.reasons.joined(separator: "; ") ?? ""))\n\(text)\n"
-            if budget - chunk.utf8.count < 0 { break }
-            budget -= chunk.utf8.count
-            prompt += chunk
-            sent.append(h)
-        }
-        do {
-            let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.classifySystem, cwd: root, task: .classify,
-                                         schema: ClaudeTasks.classifySchema, tools: [])
-            let resp = try Claude.decode(ClaudeTasks.ClassifyResponse.self, from: r)
-            let byID = Dictionary(sent.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            for item in resp.hunks {
-                guard let h = byID[item.id], let tier = ChangeTier(rawValue: item.tier), llm[h.contentKey] == nil else { continue }
-                llm[h.contentKey] = LLMTriage(tier: tier, reason: item.reason, pass: .quick)
+        var total = 0, cost = 0.0
+        while true {
+            let batch = Array(classifyCandidates.prefix(120))
+            guard !batch.isEmpty else { break }
+            classifyState = "Classifying \(batch.count) new hunks with \(model)…"
+            var prompt = "Change: \(title)\n\nHunks:\n"
+            var budget = 60_000
+            var sent: [Hunk] = []
+            for h in batch {
+                let a = analyses[h.id]
+                let body = h.lines.filter { $0.kind != .context }.map { ($0.kind == .added ? "+" : "-") + $0.text }
+                let text = body.count > 40 ? (body.prefix(40) + ["… \(body.count - 40) more lines"]).joined(separator: "\n") : body.joined(separator: "\n")
+                let chunk = "\n### \(h.id) file=\(h.path) in=\(a?.enclosing ?? "-") heuristic=\(a?.tier.rawValue ?? "?") (\(a?.reasons.joined(separator: "; ") ?? ""))\n\(text)\n"
+                if budget - chunk.utf8.count < 0 && !sent.isEmpty { break }
+                budget -= chunk.utf8.count
+                prompt += chunk
+                sent.append(h)
             }
-            classifyState = String(format: "Classified %d hunks with %@ ($%.3f)", resp.hunks.count, model, r.costUSD)
-            save()
-        } catch {
-            classifyState = "Quick classification failed: \(error.localizedDescription)"
+            do {
+                let r = try await Claude.run(prompt: prompt, system: ClaudeTasks.classifySystem, cwd: root, task: .classify,
+                                             schema: ClaudeTasks.classifySchema, tools: [])
+                let resp = try Claude.decode(ClaudeTasks.ClassifyResponse.self, from: r)
+                let byID = Dictionary(resp.hunks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                for h in sent where llm[h.contentKey] == nil {
+                    if let item = byID[h.id], let tier = ChangeTier(rawValue: item.tier) {
+                        llm[h.contentKey] = LLMTriage(tier: tier, reason: item.reason, pass: .quick)
+                    } else {
+                        llm[h.contentKey] = LLMTriage(tier: analyses[h.id]?.tier ?? .behavior, reason: "", pass: .skipped)
+                    }
+                }
+                total += sent.count
+                cost += r.costUSD
+                save()
+            } catch {
+                classifyState = "Quick classification failed: \(error.localizedDescription)"
+                return
+            }
         }
-        if !classifyCandidates.isEmpty && sent.count == batch.count && batch.count == 120 {
-            Task { await quickClassify() }
-        }
+        classifyState = total == 0 ? "All hunks classified (cached)" : String(format: "Classified %d new hunks with %@ ($%.3f)", total, model, cost)
     }
 
     func triageWithClaude() async {

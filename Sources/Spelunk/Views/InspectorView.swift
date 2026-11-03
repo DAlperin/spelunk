@@ -532,6 +532,10 @@ struct ChangeContextSection: View {
                 .font(.caption.weight(.semibold)).padding(.top, 8)
             }
 
+            ForEach(review.groups(containing: hunk).prefix(3)) { g in
+                RelatedGroupSection(ws: ws, review: review, group: g, current: hunk)
+            }
+
             if let e = cc.enclosing {
                 PaneSectionHeader(title: "Callers of \(e.split(separator: ":").last.map(String.init) ?? e)",
                                   trailing: cc.callers.isEmpty ? nil : String(cc.callers.count), source: cc.source, loading: cc.loading && cc.callers.isEmpty)
@@ -566,6 +570,57 @@ struct ChangeContextSection: View {
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 12)
+    }
+}
+
+/// The rest of a logical change the hunk belongs to, with the other hunks one click away.
+struct RelatedGroupSection: View {
+    @Bindable var ws: Workspace
+    let review: ReviewSession
+    let group: HunkGroup
+    let current: Hunk
+
+    var body: some View {
+        let hs = review.hunks(of: group)
+        let pos = (hs.firstIndex { $0.id == current.id } ?? 0) + 1
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: group.glyph).font(.caption2).foregroundStyle(group.kind == .claude ? .purple : .secondary)
+                Text(group.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text(verbatim: "\(pos) of \(hs.count)").font(.caption).foregroundStyle(.tertiary).fixedSize()
+                Button { step(hs, pos, by: -1) } label: { Image(systemName: "chevron.up") }.disabled(pos <= 1)
+                Button { step(hs, pos, by: 1) } label: { Image(systemName: "chevron.down") }.disabled(pos >= hs.count)
+            }
+            .buttonStyle(.borderless).controlSize(.small)
+            .padding(.top, 10).padding(.bottom, 3)
+            if let r = group.rationale { Text(r).font(.caption).foregroundStyle(.secondary).padding(.bottom, 2) }
+            ForEach(hs.prefix(12)) { h in
+                Button { ws.selectHunk(h) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: review.isViewed(h) ? "checkmark.circle.fill" : "circle").font(.caption2)
+                            .foregroundStyle(review.isViewed(h) ? .green : .secondary)
+                        Text(review.analyses[h.id]?.enclosing ?? h.path.lastPathComponent)
+                            .font(.system(size: 11, weight: h.id == current.id ? .semibold : .regular, design: .monospaced))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(verbatim: h.path.lastPathComponent).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 1)
+                .background(h.id == current.id ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 3))
+            }
+            if hs.count > 12 {
+                Button("Show all \(hs.count) in the review list") { review.listMode = .importance; review.expandedGroups.insert(group.id); ws.sidebarTab = .changes }.buttonStyle(.link).font(.caption)
+            }
+        }
+    }
+
+    func step(_ hs: [Hunk], _ pos: Int, by d: Int) {
+        let i = pos - 1 + d
+        if i >= 0 && i < hs.count { ws.selectHunk(hs[i]) }
     }
 }
 
@@ -785,7 +840,7 @@ struct TracePanel: View {
             Text(q).font(.callout)
             HStack {
                 Button("Refine…") { question = q; ws.showGenerateTrace = true }
-                Button("Regenerate") { ws.generateTrace(q, includeAnchor: false) }
+                Button("Regenerate") { ws.generateTrace(q, includeAnchor: false, force: true) }
             }
             .controlSize(.small)
         }

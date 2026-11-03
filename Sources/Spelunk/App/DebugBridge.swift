@@ -63,6 +63,10 @@ final class DebugBridge {
         case "hunk": if arg == "prev" { ReviewNav.previous(ws) } else { ReviewNav.next(ws) }
         case "side": ws.setReviewSide(arg == "before" ? .before : .after)
         case "triage": Task { await ws.review?.triageWithClaude() }
+        case "listmode": if let m = ReviewSession.ListMode(rawValue: arg.capitalized) { ws.review?.listMode = m }
+        case "selecthunk":
+            if let h = ws.review?.allHunks.first(where: { $0.path.contains(arg) || $0.lines.contains { $0.kind != .context && $0.text.contains(arg) } }) { ws.selectHunk(h) }
+        case "groupclaude": Task { await ws.review?.groupWithClaude() }
         case "trace": ws.generateTrace(arg, includeAnchor: true)
         case "ask": ws.ask(arg, includeAnchor: true)
         case "askclose": ws.inspectorPane = .context
@@ -162,6 +166,8 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
+        if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
+        for g in ws.review?.allGroups ?? [] { s += "group: \(g.title) hunks=\(g.keys.count)\n" }
         for e in ws.jobs { s += "job: \(e.kind.rawValue) \(e.question) running=\(e.running) answer=\(e.answer.prefix(600)) err=\(e.error ?? "-")\n" }
         if let m = ws.statusMessage { s += "status: \(m)\n" }
         s += "scm kind=\(ws.scm.kind) rows=\(ws.scm.rows.count) changes=\(ws.scm.rows.compactMap(\.change).count) wc=\(ws.scm.workingCopy?.changeId ?? "-") wcfiles=\(ws.scm.workingCopyFiles.count) selected=\(ws.scm.selectedID ?? "-") selfiles=\(ws.scm.selectedFiles.map(\.path).prefix(5)) err=\(ws.scm.lastError ?? "-")\n"

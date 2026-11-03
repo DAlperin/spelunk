@@ -113,6 +113,39 @@ enum ClaudeTasks {
     otherwise. Reasons: at most 8 words, concrete.
     """
 
+    static let groupSystem = """
+    You group the hunks of a code change into logical sub-changes so a reviewer can read each one as a
+    unit: for example, removing a feature flag and every branch that read it, adding a new operator and its
+    wiring, or a signature change and its call sites. A group needs at least two hunks; hunks that stand
+    alone stay ungrouped, and a hunk may belong to two groups only when it really serves both. Titles are
+    short imperative phrases naming the concrete thing ("Remove half_join2 flag and its branches").
+    Rationale: one sentence saying what ties the hunks together. Order groups by how much they matter.
+    """
+
+    struct GroupResponse: Decodable {
+        struct Group: Decodable { var title: String; var rationale: String?; var hunks: [String] }
+        var groups: [Group]
+    }
+
+    static let groupSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "groups": [
+                "type": "array",
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "title": ["type": "string"],
+                        "rationale": ["type": "string"],
+                        "hunks": ["type": "array", "items": ["type": "string"]],
+                    ],
+                    "required": ["title", "hunks"],
+                ],
+            ],
+        ],
+        "required": ["groups"],
+    ]
+
     struct ClassifyResponse: Decodable {
         struct Item: Decodable { var id: String; var tier: String; var reason: String }
         var hunks: [Item]

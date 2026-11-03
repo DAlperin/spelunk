@@ -100,7 +100,7 @@ struct ClaudeJobCard: View {
                 } else {
                     Menu {
                         Button("Run Again") {
-                            if job.kind == .trace { ws.generateTrace(job.question, includeAnchor: false) } else { ws.ask(job.question, includeAnchor: false) }
+                            if job.kind == .trace { ws.generateTrace(job.question, includeAnchor: false, force: true) } else { ws.ask(job.question, includeAnchor: false, force: true) }
                         }
                         Button("Copy Answer") {
                             NSPasteboard.general.clearContents()

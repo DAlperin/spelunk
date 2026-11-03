@@ -2,13 +2,13 @@ import Foundation
 
 /// The app's Claude features; each has its own model and effort setting.
 enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
-    case ask, trace, triage, classify
+    case ask, trace, triage, classify, group
 
     var id: String { rawValue }
     var modelKey: String { "claude.model.\(rawValue)" }
     var effortKey: String { "claude.effort.\(rawValue)" }
     /// The quick classification pass runs on every new hunk, so it defaults to a cheaper setup.
-    var defaultModel: String { self == .classify ? "sonnet" : "opus" }
+    var defaultModel: String { self == .classify || self == .group ? "sonnet" : "opus" }
     var defaultEffort: String? { self == .classify ? "low" : nil }
 
     var label: String {
@@ -17,6 +17,7 @@ enum ClaudeTask: String, CaseIterable, Identifiable, Sendable {
         case .trace: "Traces"
         case .triage: "Review triage"
         case .classify: "Quick classification"
+        case .group: "Hunk grouping"
         }
     }
 }

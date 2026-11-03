@@ -161,6 +161,7 @@ final class Workspace {
         bookmarks = BookmarkStore(root: self.root)
         github = GitHubService(root: self.root)
         scm = SCMService(root: self.root)
+        loadJobs()
         grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadCurrentDocument() }
         }
@@ -550,6 +551,7 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
+        if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }
         if !contextPinned { contextFocus = .hunk }
         if changeContext?.hunkID != h.id { loadChangeContext(for: h) }
         guard let r = review, let f = r.file(for: h) else { return }

@@ -115,11 +115,16 @@ final class AppModel {
 }
 
 enum ReviewNav {
-    /// Every hunk in reading order: important tiers first, then low-signal ones.
+    /// Every hunk in the order the review list shows it: by file, or by importance with related
+    /// hunks kept together, then low-signal ones.
     @MainActor static func ordered(_ ws: Workspace, importantOnly: Bool = false) -> [Hunk] {
         guard let r = ws.review else { return [] }
-        let tiers = importantOnly ? ChangeTier.important : ChangeTier.allCases
-        return tiers.flatMap { r.hunks(in: $0) }
+        if r.listMode == .files {
+            let hs = r.files.sorted { r.fileTier($0) < r.fileTier($1) }.flatMap(\.hunks)
+            return importantOnly ? hs.filter { !r.tier(of: $0).isLowSignal } : hs
+        }
+        let main = r.tierSections.flatMap(\.hunks)
+        return importantOnly ? main : main + ChangeTier.lowSignal.flatMap { r.hunks(in: $0) }
     }
 
     @MainActor static func next(_ ws: Workspace) { step(ws, 1, importantOnly: false) }

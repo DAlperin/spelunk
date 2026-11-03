@@ -61,10 +61,11 @@ struct ChangesView: View {
             default:
                 if review.files.isEmpty {
                     ContentUnavailableView("No changes", systemImage: "checkmark.circle")
-                } else if review.groupByTier {
-                    tierList
                 } else {
-                    fileList
+                    switch review.listMode {
+                    case .importance: tierList
+                    case .files: fileList
+                    }
                 }
             }
         }
@@ -108,6 +109,10 @@ struct ChangesView: View {
                 Spacer()
                 TriageMenu(ws: ws, review: review)
             }
+            Picker("", selection: $review.listMode) {
+                ForEach(ReviewSession.ListMode.allCases) { m in Text(m.rawValue).tag(m) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             if !review.ruleErrors.isEmpty {
                 Label("\(review.ruleErrors.count) rule errors", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                     .onTapGesture { RulesFiles.openUserRules() }
@@ -163,18 +168,38 @@ struct ChangesView: View {
 
     var tierList: some View {
         List(selection: selection) {
-            ForEach(ChangeTier.important) { tier in
-                let hs = review.hunks(in: tier)
-                if !hs.isEmpty {
-                    Section {
-                        ForEach(hs) { h in ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id).tag(h.id) }
-                    } header: {
-                        HStack(spacing: 5) {
-                            Image(systemName: tier.glyph).font(.system(size: 8)).foregroundStyle(tier.color)
-                            Text(tier.title).foregroundStyle(tier.color)
-                            Spacer()
-                            Text(verbatim: "\(hs.filter(review.isViewed).count)/\(hs.count)").foregroundStyle(.secondary)
+            if review.grouping || review.groupState != nil {
+                HStack(spacing: 4) {
+                    if review.grouping { ProgressView().controlSize(.mini) }
+                    Text(review.groupState ?? "").lineLimit(1).truncationMode(.tail)
+                }
+                .font(.caption).foregroundStyle(.purple).selectionDisabled()
+            }
+            ForEach(review.tierSections) { section in
+                let hs = section.hunks
+                Section {
+                    ForEach(section.items) { item in
+                        switch item {
+                        case .hunk(let h):
+                            ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id).tag(h.id)
+                        case .group(let g, let members):
+                            GroupRow(review: review, group: g, hunks: members).selectionDisabled()
+                            if review.expandedGroups.contains(g.id) {
+                                ForEach(members) { h in
+                                    ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id, showTier: review.tier(of: h) != section.tier)
+                                        .padding(.leading, 14)
+                                        .overlay(alignment: .leading) { Rectangle().fill(Color.secondary.opacity(0.25)).frame(width: 1.5).padding(.leading, 5) }
+                                        .tag(h.id)
+                                }
+                            }
                         }
+                    }
+                } header: {
+                    HStack(spacing: 5) {
+                        Image(systemName: section.tier.glyph).font(.system(size: 8)).foregroundStyle(section.tier.color)
+                        Text(section.tier.title).foregroundStyle(section.tier.color)
+                        Spacer()
+                        Text(verbatim: "\(hs.filter(review.isViewed).count)/\(hs.count)").foregroundStyle(.secondary)
                     }
                 }
             }
@@ -192,6 +217,11 @@ struct ChangesView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    @ViewBuilder func row(_ h: Hunk) -> some View {
+        if review.tier(of: h).isLowSignal { LowSignalRow(review: review, hunk: h).tag(h.id) }
+        else { ImportantHunkRow(review: review, hunk: h, selected: ws.selectedHunkID == h.id).tag(h.id) }
     }
 
     var fileList: some View {
@@ -213,6 +243,53 @@ struct ChangesView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+}
+
+/// A collapsible row for related hunks inside the importance list.
+struct GroupRow: View {
+    @Bindable var review: ReviewSession
+    let group: HunkGroup
+    let hunks: [Hunk]
+    var body: some View {
+        let open = review.expandedGroups.contains(group.id)
+        Button {
+            if open { review.expandedGroups.remove(group.id) } else { review.expandedGroups.insert(group.id) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(open ? 90 : 0))
+                    .foregroundStyle(.secondary).frame(width: 10)
+                Image(systemName: group.glyph).font(.system(size: 11))
+                    .foregroundStyle(group.kind == .claude ? Color.purple : group.kind == .removes ? .red : group.kind == .adds ? .green : .secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.title).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.tail)
+                    Text(verbatim: "\(hunks.count) hunks · \(Set(hunks.map(\.path)).count) files" + (group.rationale.map { " · " + $0 } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 4)
+                Text(verbatim: "\(hunks.filter(review.isViewed).count)/\(hunks.count)").font(.caption2.monospaced()).foregroundStyle(.secondary).fixedSize()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(group.rationale ?? group.title)
+        .padding(.vertical, 3)
+    }
+}
+
+struct GroupHeader: View {
+    let review: ReviewSession
+    let group: HunkGroup
+    let hunks: [Hunk]
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: group.glyph).font(.system(size: 9))
+                .foregroundStyle(group.kind == .claude ? Color.purple : group.kind == .removes ? .red : group.kind == .adds ? .green : .secondary)
+            Text(group.title).lineLimit(1).truncationMode(.tail).help(group.rationale ?? group.title)
+            Spacer(minLength: 4)
+            Text(verbatim: "\(hunks.filter(review.isViewed).count)/\(hunks.count) · \(Set(hunks.map(\.path)).count) files")
+                .foregroundStyle(.secondary).fixedSize()
+        }
     }
 }
 
@@ -270,7 +347,7 @@ struct TriageMenu: View {
 
     var body: some View {
         Menu {
-            Button(review.llm.values.contains { !$0.isQuick } ? "Re-run Deep Triage" : "Deep Triage with Claude") {
+            Button(review.llm.values.contains { $0.pass == .deep } ? "Re-run Deep Triage" : "Deep Triage with Claude") {
                 Task { await review.triageWithClaude() }
             }
             .disabled(review.triaging || review.state != .ready)
@@ -281,7 +358,12 @@ struct TriageMenu: View {
             if let s = review.classifyState { Text(s) }
             if let s = review.triageState { Text(s) }
             Divider()
-            Toggle("Group by File", isOn: Binding(get: { !review.groupByTier }, set: { review.groupByTier = !$0 }))
+            Toggle("Keep Related Hunks Together", isOn: $review.groupRelated)
+            Button(review.claudeGroups.isEmpty ? "Group with Claude" : "Regroup with Claude") { Task { await review.groupWithClaude() } }
+                .disabled(review.grouping || review.state != .ready)
+            modelMenu("Grouping model", .group)
+            if let s = review.groupState { Text(s) }
+            Divider()
             Button("Edit Review Rules…") { RulesFiles.openUserRules() }
         } label: {
             Label("Triage", systemImage: "sparkles")
@@ -304,6 +386,8 @@ struct ImportantHunkRow: View {
     let review: ReviewSession
     let hunk: Hunk
     let selected: Bool
+    /// Marks the hunk's own tier when it is listed under another tier's group.
+    var showTier = false
 
     var body: some View {
         let viewed = review.isViewed(hunk)
@@ -314,6 +398,10 @@ struct ImportantHunkRow: View {
                 .help("Mark viewed (V)")
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
+                    if showTier {
+                        let t = review.tier(of: hunk)
+                        Image(systemName: t.glyph).font(.system(size: 7)).foregroundStyle(t.color).help(t.title)
+                    }
                     Text(review.analyses[hunk.id]?.enclosing ?? hunk.path.lastPathComponent)
                         .font(.system(size: 12, weight: .medium, design: .monospaced)).lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 2)

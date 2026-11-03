@@ -213,3 +213,50 @@ final class RepoFilterTests: XCTestCase {
         XCTAssertEqual(NotARepoView.filtered(repos, "mz").count, 1)
     }
 }
+
+final class GroupingTests: XCTestCase {
+    func testRemovedFlagGroupsAcrossFiles() {
+        let diff = """
+        diff --git a/src/a.rs b/src/a.rs
+        --- a/src/a.rs
+        +++ b/src/a.rs
+        @@ -1,3 +1,2 @@
+         fn a() {
+        -    if ENABLE_HALF_JOIN2.get(cfg) { half_join2() }
+             other();
+        diff --git a/src/b.rs b/src/b.rs
+        --- a/src/b.rs
+        +++ b/src/b.rs
+        @@ -1,3 +1,1 @@
+        -pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
+        -    "enable_half_join2", true);
+         fn b() {}
+        diff --git a/src/c.rs b/src/c.rs
+        --- a/src/c.rs
+        +++ b/src/c.rs
+        @@ -1,2 +1,2 @@
+        -    let x = compute_thing(1);
+        +    let x = compute_thing(2);
+        """
+        let files = DiffParser.parse(diff)
+        let groups = HunkGrouper.group(files)
+        let flag = groups.first { $0.symbols.contains("ENABLE_HALF_JOIN2") }
+        XCTAssertNotNil(flag)
+        XCTAssertEqual(flag?.kind, .removes)
+        XCTAssertEqual(flag?.keys.count, 2)
+        XCTAssertFalse(groups.contains { $0.symbols.contains("compute_thing") })
+    }
+}
+
+final class GroupingDiffTests: XCTestCase {
+    /// Prints the groups for a real diff: SPELUNK_GROUP_DIFF=/path/to.diff swift test --filter GroupingDiffTests
+    func testPrintGroups() throws {
+        guard let path = ProcessInfo.processInfo.environment["SPELUNK_GROUP_DIFF"] else { throw XCTSkip("SPELUNK_GROUP_DIFF not set") }
+        let files = DiffParser.parse(try String(contentsOfFile: path, encoding: .utf8))
+        let byKey = Dictionary(files.flatMap(\.hunks).map { ($0.contentKey, $0) }, uniquingKeysWith: { a, _ in a })
+        for g in HunkGrouper.group(files) {
+            let paths = Set(g.keys.compactMap { byKey[$0]?.path })
+            print("GROUP \(g.title)  hunks=\(g.keys.count) files=\(paths.count)")
+        }
+    }
+}
