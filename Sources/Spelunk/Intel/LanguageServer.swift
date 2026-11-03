@@ -299,16 +299,38 @@ final class LanguageServer {
         }
     }
 
+    @ObservationIgnored private var lastProgressShown = Date.distantPast
+    @ObservationIgnored private var progressRefreshPending = false
+
     private func refreshStatus() {
         guard client != nil else { return }
         if case .failed = status { return }
+        let next: Status
         if let first = progress.values.sorted().first {
-            status = .indexing(first)
+            next = .indexing(first)
         } else if quiescent || !spec.reportsQuiescence {
-            status = .ready
+            next = .ready
         } else {
-            status = .indexing("")
+            next = .indexing("")
         }
+        guard next != status else { return }
+        // Progress reports arrive many times a second while indexing; a new message every quarter
+        // second is enough to read, and each one redraws whatever shows the status.
+        if case .indexing = next, case .indexing = status {
+            let wait = 0.25 - Date().timeIntervalSince(lastProgressShown)
+            if wait > 0 {
+                guard !progressRefreshPending else { return }
+                progressRefreshPending = true
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(wait))
+                    self?.progressRefreshPending = false
+                    self?.refreshStatus()
+                }
+                return
+            }
+        }
+        lastProgressShown = Date()
+        status = next
     }
 
     // MARK: Documents

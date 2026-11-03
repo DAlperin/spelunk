@@ -87,17 +87,20 @@ final class OutlineItem: Identifiable, @unchecked Sendable {
 
 struct SyntaxInfo: Sendable {
     var tokens: [Token] = []
-    var outline: [OutlineItem] = []
+    var outline: [OutlineItem] = [] {
+        didSet {
+            var out: [OutlineItem] = []
+            func walk(_ items: [OutlineItem]) { for i in items { out.append(i); walk(i.children) } }
+            walk(outline)
+            flatOutline = out
+        }
+    }
     var testLineRanges: [ClosedRange<Int>] = []
     var errorCount: Int = 0
     var parsedWithTreeSitter = false
 
-    var flatOutline: [OutlineItem] {
-        var out: [OutlineItem] = []
-        func walk(_ items: [OutlineItem]) { for i in items { out.append(i); walk(i.children) } }
-        walk(outline)
-        return out
-    }
+    /// Every outline item, parents before their children.
+    private(set) var flatOutline: [OutlineItem] = []
 
     /// Innermost item (excluding impls/modules unless nothing else matches) containing `line`.
     func enclosingItem(line: Int, strict: Bool) -> OutlineItem? {

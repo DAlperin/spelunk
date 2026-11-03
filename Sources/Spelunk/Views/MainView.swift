@@ -452,7 +452,6 @@ struct FoldMenu: View {
 struct StatusBar: View {
     @Bindable var ws: Workspace
     @AppStorage(Prefs.Key.vim) private var vim = false
-    @State private var showIndex = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -495,22 +494,7 @@ struct StatusBar: View {
                 .help(ws.runningJobs.map(\.question).joined(separator: "\n"))
             }
             Spacer(minLength: 8)
-            Group {
-                clippyStatus
-                Button { showIndex.toggle() } label: {
-                    HStack(spacing: 4) {
-                        Circle().fill(raColor).frame(width: 7, height: 7)
-                        Text(raLabel)
-                        Text("·").foregroundStyle(.tertiary)
-                        Text(ws.scip.summary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
-                if let r = ws.removedLineAtCaret { Text(verbatim: "Removed line \(r)").foregroundStyle(.red) }
-            else if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
-            }
-            .fixedSize()
+            StatusIndicators(ws: ws).fixedSize()
             if ws.reviewing {
                 ViewThatFits(in: .horizontal) {
                     keyHints(labels: true)
@@ -540,6 +524,32 @@ struct StatusBar: View {
             }
         }
         .fixedSize()
+    }
+
+}
+
+/// Clippy, the language server and the caret line: a view of its own, so the frequent changes it
+/// shows redraw only this part of the status bar.
+struct StatusIndicators: View {
+    @Bindable var ws: Workspace
+    @State private var showIndex = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            clippyStatus
+            Button { showIndex.toggle() } label: {
+                HStack(spacing: 4) {
+                    Circle().fill(raColor).frame(width: 7, height: 7)
+                    Text(raLabel)
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(ws.scip.summary)
+                }
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
+            if let r = ws.removedLineAtCaret { Text(verbatim: "Removed line \(r)").foregroundStyle(.red) }
+            else if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
+        }
     }
 
     @ViewBuilder var clippyStatus: some View {
