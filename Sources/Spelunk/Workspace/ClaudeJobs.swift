@@ -161,8 +161,8 @@ extension Workspace {
         }
     }
 
-    /// Generates a code path from a question. When it lands, it opens only if the user is still where
-    /// they started; otherwise it waits in the Claude pane and the path picker.
+    /// Generates a code path from a question. When it lands it waits in the Claude pane and the path
+    /// picker until opened.
     func generateTrace(_ question: String, includeAnchor: Bool, force: Bool = false) {
         let anchor = includeAnchor ? anchorDescription() : nil
         let key = jobCacheKey(.trace, question, anchor)
@@ -171,8 +171,6 @@ extension Workspace {
         job.cacheKey = key
         let id = job.id
         jobs.append(job)
-        let startPath = document?.path
-        let startTrace = traces.activeID
         jobTasks[id] = Task {
             do {
                 let place = await claudeWorkspace()
@@ -185,21 +183,17 @@ extension Workspace {
                 }
                 let resp = try Claude.decode(ClaudeTasks.TraceResponse.self, from: res)
                 let trace = ClaudeTasks.materialize(resp, question: question, docs: place.cwd == root ? docs : DocumentCache(root: place.cwd))
-                let stayed = document?.path == startPath && traces.activeID == startTrace
                 let previous = traces.activeID, previousStep = traces.currentStep
                 traces.add(trace)
+                // A finished path never moves the editor; it waits to be opened.
+                traces.activeID = previous
+                traces.currentStep = previousStep
                 finishJob(id) {
                     $0.traceID = trace.id
                     $0.cost = res.costUSD
                     $0.answer = String(format: "%d steps, %d verified", trace.steps.count, trace.steps.filter(\.verified).count)
                 }
-                if stayed {
-                    playStep(0)
-                } else {
-                    traces.activeID = previous
-                    traces.currentStep = previousStep
-                    statusMessage = "Code path ready: \(trace.title)"
-                }
+                statusMessage = "Code path ready: \(trace.title)"
             } catch {
                 if Task.isCancelled { return }
                 finishJob(id) { $0.error = error.localizedDescription }
