@@ -56,10 +56,20 @@ struct ChangesView: View {
             case .loading(let s):
                 ProgressView(s).frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let e):
-                ContentUnavailableView("Could not load change", systemImage: "exclamationmark.triangle", description: Text(e))
+                ContentUnavailableView {
+                    Label("Could not load change", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(e)
+                } actions: {
+                    HStack {
+                        Button("Retry") { Task { await review.load() } }
+                        if !review.tracksWorkingCopy { Button("Close Review") { ws.closeReview(review.target.key) } }
+                    }
+                }
+                .frame(maxHeight: .infinity)
             default:
                 if review.files.isEmpty {
-                    ContentUnavailableView("No changes", systemImage: "checkmark.circle")
+                    ContentUnavailableView("No changes", systemImage: "checkmark.circle").frame(maxHeight: .infinity)
                 } else {
                     switch review.listMode {
                     case .importance: tierList

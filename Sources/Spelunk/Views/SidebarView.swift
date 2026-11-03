@@ -19,6 +19,8 @@ struct SidebarView: View {
             case .scm: SCMView(ws: ws)
             }
         }
+        // Content that does not fill the column stays at the top instead of centering.
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -308,6 +310,11 @@ struct SearchView: View {
             }
             .toggleStyle(.button).controlSize(.small).padding(.horizontal, 8)
             let grouped = Dictionary(grouping: results, by: \.path)
+            if query.isEmpty && results.isEmpty {
+                ContentUnavailableView("Search the repository", systemImage: "magnifyingglass",
+                                       description: Text("ripgrep over the working copy. Toggle regex, whole word, case and definitions above."))
+                    .frame(maxHeight: .infinity)
+            } else {
             List {
                 ForEach(grouped.keys.sorted(), id: \.self) { path in
                     Section {
@@ -326,6 +333,7 @@ struct SearchView: View {
             }
             .listStyle(.sidebar)
             Text(verbatim: "\(results.count) matches").font(.caption).foregroundStyle(.secondary).padding(.bottom, 6)
+            }
         }
     }
 

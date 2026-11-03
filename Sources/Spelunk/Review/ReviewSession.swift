@@ -376,6 +376,9 @@ final class ReviewSession {
         case .githubPR(let n):
             vcs = .git
             if files.isEmpty { state = .loading("Fetching PR #\(n)") }
+            guard await github?.ensureRepo() != nil else {
+                throw ClaudeError(message: "\(root.lastPathComponent) has no GitHub remote, so it has no pull request #\(n).")
+            }
             let json = try await Shell.output("gh", ["pr", "view", "\(n)", "--json", "title,body,baseRefOid,headRefOid,url,author"], cwd: root)
             guard let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                   let base = obj["baseRefOid"] as? String, let head = obj["headRefOid"] as? String else {

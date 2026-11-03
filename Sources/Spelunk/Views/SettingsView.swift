@@ -64,13 +64,13 @@ private struct EditorSettings: View {
                 Toggle("Draw the selected hunk's boundary", isOn: $hunkBoundary)
                 Toggle("Show the minimap", isOn: $minimap)
                 if minimap {
-                    Slider(value: $minimapWidth, in: 40...140, step: 5) { Text(verbatim: "Minimap width: \(Int(minimapWidth)) pt") }
+                    Slider(value: $minimapWidth, in: 40...140) { Text(verbatim: "Minimap width: \(Int(minimapWidth)) pt") }
                 }
             }
             Section("Hover") {
                 Toggle("Show symbol details on hover", isOn: $hover)
                 if hover {
-                    Slider(value: $hoverDelay, in: 0.2...2.0, step: 0.1) { Text(verbatim: String(format: "Delay: %.1f s", hoverDelay)) }
+                    Slider(value: $hoverDelay, in: 0.2...2.0) { Text(verbatim: String(format: "Delay: %.1f s", hoverDelay)) }
                 }
             }
         }
@@ -100,12 +100,12 @@ private struct ReviewSettings: View {
             Section("Grouping") {
                 Toggle("Keep related hunks together in the list", isOn: $groupRelated)
                 Stepper(value: $maxGroups, in: 10...200, step: 10) { Text(verbatim: "Most groups per review: \(maxGroups)") }
-                Slider(value: $overlap, in: 0.3...0.9, step: 0.05) { Text(verbatim: String(format: "Merge groups sharing %.0f%% of hunks", overlap * 100)) }
+                Slider(value: $overlap, in: 0.3...0.9) { Text(verbatim: String(format: "Merge groups sharing %.0f%% of hunks", overlap * 100)) }
                 Stepper(value: $plainLength, in: 8...30) { Text(verbatim: "Plain words group only when \(plainLength)+ characters") }
                 Note("Groups form around identifiers a change adds or removes in several places. Snake case, camel case and names with digits always count; plain words only when long.")
             }
             Section("Live review") {
-                Slider(value: $refreshDelay, in: 0.2...3.0, step: 0.1) { Text(verbatim: String(format: "Refresh %.1f s after files change", refreshDelay)) }
+                Slider(value: $refreshDelay, in: 0.2...3.0) { Text(verbatim: String(format: "Refresh %.1f s after files change", refreshDelay)) }
                 Toggle("Run attachments marked auto", isOn: $autoAttachments)
                 Note("Commands from a repository's own rules file still need that repository to be trusted.")
             }

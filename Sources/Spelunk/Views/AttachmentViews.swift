@@ -152,15 +152,15 @@ struct PayloadView: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(color).frame(width: 6, height: 6)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(f.title).font(.caption.weight(.medium)).foregroundStyle(.primary)
-                    if let d = f.detail, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
+                    if let p = f.path {
+                        Text(verbatim: (p as NSString).lastPathComponent + (f.line.map { ":\($0)" } ?? ""))
+                            .font(.caption2.monospaced()).foregroundStyle(f.line == nil ? Color.secondary : Color.accentColor).lineLimit(1)
+                    }
+                    if let d = f.detail, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                 }
-                Spacer(minLength: 4)
-                if let p = f.path {
-                    Text(verbatim: (p as NSString).lastPathComponent + (f.line.map { ":\($0)" } ?? ""))
-                        .font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
-                }
+                Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
         }

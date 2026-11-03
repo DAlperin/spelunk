@@ -67,6 +67,8 @@ struct InspectorView: View {
                         Text(verbatim: ws.context.map { $0.name.count > 16 ? $0.name.prefix(15) + "…" : $0.name } ?? "Symbol").tag(ContextFocus.symbol)
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    // Segmented controls keep their first labels; rebuild when they change.
+                    .id("\(ReviewNav.importantPosition(ws).map { "\($0.0)/\($0.1)" } ?? "")|\(ws.context?.name ?? "")")
                     .help("Switch between the selected hunk's change context and the last clicked symbol (Esc returns to the hunk)")
                 } else if showingHunk {
                     Text("Change context").font(.callout.weight(.semibold))

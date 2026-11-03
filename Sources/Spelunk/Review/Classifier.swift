@@ -141,7 +141,20 @@ enum ChangeClassifier {
         hunk.added.lazy.compactMap { $0.newLine }.compactMap { newDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.removed.lazy.compactMap { $0.oldLine }.compactMap { oldDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.added.first?.newLine.flatMap { newDoc?.syntax.enclosingItem(line: $0)?.qualifiedName }
-            ?? (FileClassifier.isGenerated(file.path) || hunk.header.isEmpty ? nil : hunk.header)
+            ?? (FileClassifier.isGenerated(file.path) || hunk.header.isEmpty ? nil : headerName(hunk.header))
+    }
+
+    private static let declRE = try! NSRegularExpression(pattern: #"\b(?:def|class|fn|func|function|struct|enum|impl|trait|interface|type|message|service)\s+([A-Za-z_][\w.]*)"#)
+
+    /// A diff hunk header (the enclosing line git shows) reduced to the declared name when it has one.
+    static func headerName(_ header: String) -> String {
+        let h = header.trimmingCharacters(in: .whitespaces)
+        let ns = h as NSString
+        if let m = declRE.firstMatch(in: h, range: NSRange(location: 0, length: ns.length)) {
+            let kw = ns.substring(with: m.range).split(separator: " ").first.map(String.init) ?? ""
+            return kw + " " + ns.substring(with: m.range(at: 1))
+        }
+        return h.trimmingCharacters(in: CharacterSet(charactersIn: "({:= "))
     }
 
     static func facts(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?) -> HunkFacts {

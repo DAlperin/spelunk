@@ -296,10 +296,11 @@ struct PendingReviewBar: View {
             Picker("", selection: $event) {
                 ForEach(GitHubService.ReviewEvent.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 290)
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
             if posting { ProgressView().controlSize(.small) }
-            Button { confirming = true } label: { HStack(spacing: 4) { Text("Submit review…"); KeyCap("⇧⌘↩") } }
-                .buttonStyle(.borderedProminent).controlSize(.small)
+            Button { confirming = true } label: { Text("Submit…") }
+                .buttonStyle(.borderedProminent).controlSize(.small).fixedSize()
+                .help("Submit the review (⇧⌘↩)")
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
                 .disabled(posting || (event == .comment && review.pendingForCurrentPR.isEmpty))
         }
