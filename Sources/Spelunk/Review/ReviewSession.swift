@@ -475,7 +475,14 @@ final class ReviewSession {
 
     // MARK: Derived
 
-    func tier(of h: Hunk) -> ChangeTier { triage(of: h)?.tier ?? analyses[h.id]?.tier ?? .behavior }
+    /// Claude's tier when there is one, except that the cheap quick pass cannot lower a hunk the
+    /// rules call critical; only deep triage, which reads the code, can.
+    func tier(of h: Hunk) -> ChangeTier {
+        let rule = analyses[h.id]?.tier
+        guard let t = triage(of: h) else { return rule ?? .behavior }
+        if t.isQuick, rule == .critical, t.tier != .critical { return .critical }
+        return t.tier
+    }
 
     func triage(of h: Hunk) -> LLMTriage? { llm[h.contentKey].flatMap { $0.isSkipped ? nil : $0 } }
 

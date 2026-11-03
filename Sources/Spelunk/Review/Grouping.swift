@@ -89,7 +89,7 @@ enum HunkGrouper {
         guard hunks.count >= 2 else { return [] }
         let cap = max(12, hunks.count / 4)
 
-        struct Candidate { var keys: Set<String>; var kind: HunkGroup.Kind; var symbols: [String]; var members: Set<Int>; var score: Int }
+        struct Candidate { var seed: Set<Int> = []; var keys: Set<String>; var kind: HunkGroup.Kind; var symbols: [String]; var members: Set<Int>; var score: Int }
         var candidates: [Candidate] = []
         for (key, u) in uses {
             let members = u.removed.union(u.added)
@@ -120,15 +120,18 @@ enum HunkGrouper {
                 let related = k.kind == c.kind && k.kind != .changes
                     && k.keys.contains { min($0.count, ck.count) >= 6 && ($0.contains(ck) || ck.contains($0)) }
                     && Set(k.members.map { hunks[$0].path }).intersection(c.members.map { hunks[$0].path }).count > 0
-                let inter = Double(k.members.intersection(c.members).count)
-                return related || inter / Double(k.members.union(c.members).count) >= 0.6
+                // Compare against the group's original seed, not its grown union, so merging does not snowball.
+                let inter = Double(k.seed.intersection(c.members).count)
+                return related || inter / Double(k.seed.union(c.members).count) >= 0.6
             }) {
                 if !kept[i].symbols.contains(c.symbols[0]) { kept[i].symbols.append(c.symbols[0]) }
                 kept[i].members.formUnion(c.members)
                 kept[i].keys.formUnion(c.keys)
                 continue
             }
-            kept.append(c)
+            var seeded = c
+            seeded.seed = c.members
+            kept.append(seeded)
             if kept.count >= 80 { break }
         }
 

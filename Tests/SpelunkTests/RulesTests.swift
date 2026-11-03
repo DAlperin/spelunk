@@ -144,4 +144,30 @@ final class RulesTests: XCTestCase {
         facts.answers["Does this add a resolver?"] = true
         XCTAssertEqual(set.evaluate(facts).tier, .critical)
     }
+
+    func testCommentAfterGlobIsStripped() {
+        let parsed = RuleParser.parse("""
+        rule critical "lib"
+          path ~ src/lib.rs  # the crate root
+          text touches /a#b/
+        """, source: "test")
+        XCTAssertEqual(parsed.errors, [])
+        let (f, h) = hunk([], [(0, "let x = \"a#b\";")], path: "src/lib.rs")
+        let set = RuleSet(rules: parsed.rules)
+        XCTAssertEqual(set.evaluate(ChangeClassifier.facts(file: f, hunk: h, oldDoc: nil, newDoc: nil)).tier, .critical)
+    }
+
+    func testUnavailableSemanticsDoNotFlipNegation() {
+        let parsed = RuleParser.parse("""
+        rule critical "unused"
+          lang rust
+          not refs > 0
+        """, source: "test")
+        let (f, h) = hunk([], [(0, "fn x() {}")])
+        var facts = ChangeClassifier.facts(file: f, hunk: h, oldDoc: nil, newDoc: nil)
+        facts.semantic = .unavailable
+        XCTAssertNotEqual(RuleSet(rules: parsed.rules).evaluate(facts).tier, .critical)
+        facts.semantic = SemanticFacts(refs: 0)
+        XCTAssertEqual(RuleSet(rules: parsed.rules).evaluate(facts).tier, .critical)
+    }
 }

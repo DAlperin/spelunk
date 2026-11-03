@@ -12,7 +12,7 @@ import SwiftTreeSitter
 /// ```
 ///
 /// Tiers: critical, behavior, supporting, docs, tests, mechanical, plus `note`, which only adds a
-/// reason. Rules are checked in order (repository file, then user file, then defaults); the first
+/// reason. Rules are checked in order (your file, then the repository's, then defaults); the first
 /// matching non-note rule sets the tier. A `collect` rule that also matches adds its reason when its
 /// tier won, which is how several risk signals are listed together. `settled` keeps a hunk out of
 /// the Claude classification pass. `disable` removes earlier-loaded or
@@ -361,7 +361,10 @@ enum RuleParser {
         var prev: Character = " "
         for (i, c) in s.enumerated() {
             if c == "\"" && prev != "\\" { inString.toggle() }
-            if c == "/" && prev != "\\" && !inString { inRegex.toggle() }
+            // A regex opens with a slash after whitespace (an argument), so paths like src/lib.rs are not regexes.
+            if c == "/" && !inString {
+                if inRegex { if prev != "\\" { inRegex = false } } else if prev == " " || prev == "\t" { inRegex = true }
+            }
             if c == "(" && !inString && !inRegex { depth += 1 }
             if c == ")" && !inString && !inRegex { depth -= 1 }
             if c == "#" && !inRegex && !inString && depth == 0 && (i == 0 || prev == " " || prev == "\t") {
@@ -444,10 +447,12 @@ final class ReviewRules: @unchecked Sendable {
 
         var set = RuleSet()
         var disabled: Set<String> = []
-        for (url, name) in [(files[0], ".spelunk/review.rules"), (files[1], "~/…/Spelunk/review.rules")] {
+        // Your rules come first, so they can override or disable the repository's; `disable` removes
+        // rules with that reason from every file loaded after it, defaults included.
+        for (url, name) in [(files[1], "~/…/Spelunk/review.rules"), (files[0], ".spelunk/review.rules")] {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let r = RuleParser.parseAll(text, source: name)
-            set.rules += r.rules
+            set.rules += r.rules.filter { !disabled.contains($0.reason) }
             set.attachments += r.attachments
             set.errors += r.errors
             disabled.formUnion(r.disabled)
@@ -561,6 +566,9 @@ extension RuleSet {
     static func match(_ conditions: [(negated: Bool, condition: ReviewRule.Condition)], _ f: HunkFacts) -> Bool? {
         var unknown = false
         for c in conditions {
+            // A semantic question nobody could answer leaves the rule undecidable: it does not fire,
+            // whether or not the condition is negated.
+            if case .semantic = c.condition, let s = f.semantic, !s.available { return false }
             guard let v = f.check(c.condition) else { unknown = true; continue }
             if v == c.negated { return false }
         }
