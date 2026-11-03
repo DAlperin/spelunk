@@ -41,6 +41,8 @@ struct TraceStep: Codable, Identifiable, Hashable, Sendable {
     /// False when an LLM-proposed step could not be matched to a real symbol in the file.
     var verified: Bool = true
     var snippet: String = ""
+    /// Finds the step again after its file changes.
+    var anchor: CodeAnchor?
 }
 
 struct Trace: Codable, Identifiable, Hashable, Sendable {
@@ -53,6 +55,39 @@ struct Trace: Codable, Identifiable, Hashable, Sendable {
     var steps: [TraceStep] = []
     var created = Date()
     var updated = Date()
+
+    /// The plain-text form: the title, then one `file:symbol:note` line per step, with `\` and `:`
+    /// escaped in the file and symbol fields. Steps carry no line numbers; they are found again by
+    /// symbol, so other tools (Claude Code in a terminal, a script) can write paths Spelunk opens.
+    func plainText() -> String {
+        func esc(_ s: String) -> String { s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: ":", with: "\\:") }
+        var lines = [title]
+        for s in steps {
+            let note = s.note.replacingOccurrences(of: "\n", with: " ")
+            lines.append("\(esc(s.location.path)):\(esc(s.title)):\(note)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Reads `plainText()`'s format: nil without a title and at least one well-formed step.
+    static func parsePlainText(_ text: String) -> (title: String, steps: [(file: String, symbol: String, note: String)])? {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: true).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return nil }
+        let title = lines.removeFirst()
+        var steps: [(String, String, String)] = []
+        for line in lines {
+            // Split on the first two unescaped colons; the note keeps any colons it has.
+            var fields: [String] = [], cur = "", escaped = false
+            for ch in line {
+                if fields.count == 2 { cur.append(ch); continue }
+                if escaped { cur.append(ch); escaped = false } else if ch == "\\" { escaped = true } else if ch == ":" { fields.append(cur); cur = "" } else { cur.append(ch) }
+            }
+            fields.append(cur)
+            guard fields.count == 3, !fields[0].isEmpty, !fields[1].isEmpty else { continue }
+            steps.append((fields[0], fields[1], fields[2].trimmingCharacters(in: .whitespaces)))
+        }
+        return steps.isEmpty ? nil : (title, steps)
+    }
 
     func markdown() -> String {
         var s = "# \(title)\n\n"
@@ -190,6 +225,19 @@ final class TraceStore {
         active = t
     }
 
+    /// Applies `change` to every step of every path; saves when any step changed.
+    func updateAllSteps(_ change: (inout TraceStep) -> Void) {
+        var changed = false
+        for i in traces.indices {
+            for j in traces[i].steps.indices {
+                let before = traces[i].steps[j]
+                change(&traces[i].steps[j])
+                if traces[i].steps[j] != before { changed = true }
+            }
+        }
+        if changed { save() }
+    }
+
     func removeStep(_ id: UUID) {
         guard var t = active else { return }
         t.steps.removeAll { $0.id == id }
@@ -210,6 +258,8 @@ struct Bookmark: Codable, Identifiable, Hashable, Sendable {
     var title: String
     var location: CodeLocation
     var context: String
+    /// Finds the bookmark again after its file changes.
+    var anchor: CodeAnchor?
 }
 
 @MainActor @Observable
@@ -235,6 +285,13 @@ final class BookmarkStore {
     }
 
     func remove(_ id: UUID) { items.removeAll { $0.id == id }; save() }
+
+    /// Applies `change` to every bookmark; saves when any changed.
+    func updateAll(_ change: (inout Bookmark) -> Void) {
+        let before = items
+        for i in items.indices { change(&items[i]) }
+        if items != before { save() }
+    }
 
     func contains(path: String, line: Int) -> Bool { items.contains { $0.location.path == path && $0.location.line == line } }
 

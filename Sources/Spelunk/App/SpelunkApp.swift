@@ -44,6 +44,14 @@ struct SpelunkApp: App {
             CommandMenu("Code Paths") {
                 Button("Add Location to Code Path") { model.workspace?.addCurrentToTrace() }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("New Code Path") { model.workspace?.newCodePath(fromCursor: false) }
+                Button("Import Code Path from Clipboard") {
+                    model.workspace?.importCodePath(NSPasteboard.general.string(forType: .string) ?? "")
+                }
+                Button("Copy Code Path as Text") {
+                    guard let t = model.workspace?.traces.active else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(t.plainText(), forType: .string)
+                }.disabled(model.workspace?.traces.active == nil)
                 Divider()
                 Button("Next Step ") {
                     guard let ws = model.workspace else { return }

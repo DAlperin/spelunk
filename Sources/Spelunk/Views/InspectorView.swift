@@ -1036,7 +1036,7 @@ struct BookmarksPanel: View {
         } else {
             List {
                 ForEach(Array(ws.bookmarks.items.enumerated()), id: \.element.id) { i, b in
-                    Button { ws.open(b.location) } label: {
+                    Button { ws.openBookmark(b) } label: {
                         VStack(alignment: .leading, spacing: 1) {
                             HStack {
                                 Text(b.title).font(.system(size: 12, weight: .semibold, design: .monospaced))

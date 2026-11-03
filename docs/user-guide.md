@@ -191,11 +191,41 @@ none (a channel, a trait object, an async boundary) is marked inferred.
 
 "Share as Markdown" in the pane, or "Copy Code Path as Markdown" in the palette, copies the path.
 
+### When the code changes
+
+Steps and bookmarks in the working copy remember the item they are in, their line and the lines
+around it. When their file opens, and again when you visit one, Spelunk checks the file: if the
+saved line has moved (code added above it, functions reordered), the step moves with it, searched
+for inside its item first and then in the whole file. If the line itself changed, the step keeps its
+distance into the item. If nothing matches, the step stays on its last known line and the status bar
+says so. Steps in a commit (from a review) never move.
+
+### Paths as text
+
+Code Paths › Copy Code Path as Text copies a path in a plain format with no line numbers: the title
+on the first line, then one step per line as `file:symbol:note`. In the file and symbol fields,
+write `\:` for a colon and `\\` for a backslash; the note can contain anything but a newline.
+
+```text
+SUBSCRIBE from pgwire to the compute replica
+src/pgwire/src/protocol.rs:StateMachine\:\:run:Reads the query message and hands it to the adapter.
+src/adapter/src/coord.rs:Coordinator\:\:sequence_plan:Plans the SUBSCRIBE and installs a dataflow.
+```
+
+Code Paths › Import Code Path from Clipboard reads that format and finds each step by its symbol,
+so a script or Claude Code in a terminal can write a path for Spelunk to open. Steps whose symbol is
+not found in the named file are marked unverified.
+
 ### Paths from Claude
 
 Generate with Claude… (also the Claude pane's Trace button, ⇧⌘↩) turns a question into a path,
-anchored at the cursor if you leave that checked. Steps are matched against the parsed files to fix
-their line numbers; a step that cannot be matched to a symbol is marked unverified. A finished path
+anchored at the cursor if you leave that checked. Claude is asked to verify every step in the code,
+to say which branch the path takes where the route depends on a condition, and to keep direct calls
+apart from dispatch, callbacks, channels and spawned tasks. Notes of steps reached some other way
+than a direct call start with how: `[dispatch]`, `[callback]`, `[channel]`, `[spawned task]`,
+`[inferred]` (a connection Claude believes in but could not see), or `[boundary]` (the last verified
+call before code it cannot read). Steps are matched against the parsed files to fix their line
+numbers; a step that cannot be matched to a symbol is marked unverified. A finished path
 does not move the editor; open it from its card in the Claude pane or from the path picker. Refine…
 and Regenerate start a new run from the same question.
 

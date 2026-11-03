@@ -282,6 +282,15 @@ enum PaletteCommands {
         }
         add("Next Code Path Step", nil, "⌥⌘↓", icon: "chevron.down", when: ws.traces.active != nil) { ws.playStep((ws.traces.currentStep ?? -1) + 1) }
         add("Previous Code Path Step", nil, "⌥⌘↑", icon: "chevron.up", when: ws.traces.active != nil) { ws.playStep((ws.traces.currentStep ?? 1) - 1) }
+        add("Import Code Path from Clipboard", "title, then file:symbol:note lines", icon: "square.and.arrow.down") {
+            ws.importCodePath(NSPasteboard.general.string(forType: .string) ?? "")
+        }
+        add("Copy Code Path as Text", ws.traces.active?.title, icon: "doc.plaintext", when: ws.traces.active != nil) {
+            if let t = ws.traces.active {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(t.plainText(), forType: .string)
+            }
+        }
         add("Copy Code Path as Markdown", ws.traces.active?.title, icon: "doc.on.doc", when: ws.traces.active != nil) {
             if let t = ws.traces.active {
                 NSPasteboard.general.clearContents()

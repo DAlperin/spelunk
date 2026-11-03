@@ -68,7 +68,10 @@ extension Workspace {
     }
 
     func jobCacheKey(_ kind: ClaudeJob.Kind, _ question: String, _ anchor: String?) -> String {
-        [kind.rawValue, question.trimmingCharacters(in: .whitespacesAndNewlines), anchor ?? "", vcs.revision, review?.target.key ?? ""].joined(separator: "\u{1}")
+        // A changed trace prompt makes earlier paths stale.
+        let prompt = kind == .trace ? CodeAnchor.hash(ClaudeTasks.traceSystem) : ""
+        return [kind.rawValue, question.trimmingCharacters(in: .whitespacesAndNewlines), anchor ?? "", vcs.revision, review?.target.key ?? "", prompt]
+            .joined(separator: "\u{1}")
     }
 
     /// A previous successful run of the same job at the same revision, if any.

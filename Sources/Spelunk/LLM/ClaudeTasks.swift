@@ -10,6 +10,7 @@ enum ClaudeTasks {
             var symbol: String
             var line: Int?
             var note: String
+            var link: String?
         }
         var title: String
         var summary: String?
@@ -27,9 +28,11 @@ enum ClaudeTasks {
                     "type": "object",
                     "properties": [
                         "file": ["type": "string", "description": "Repository-relative path"],
-                        "symbol": ["type": "string", "description": "Exact identifier of the function, method, type or macro at this step (no path, no parentheses)"],
+                        "symbol": ["type": "string", "description": "The declaration at this step as written in the file: a bare name, or Type::method when the bare name is ambiguous (no module path, no parentheses)"],
                         "line": ["type": "integer", "description": "1-based line of the symbol's definition or the relevant call"],
                         "note": ["type": "string", "description": "What happens at this step and how control or data reaches the next step"],
+                        "link": ["type": "string", "enum": ["call", "dispatch", "callback", "channel", "spawn", "inferred", "boundary"],
+                                 "description": "How execution gets here from the previous step: a direct call; dynamic dispatch through a trait object or generic; a callback, closure or registered handler; a message over a channel; a spawned task; a relationship you inferred but could not see in the code; or the last verified point before code you cannot read"],
                     ],
                     "required": ["file", "symbol", "note"],
                 ],
@@ -39,12 +42,30 @@ enum ClaudeTasks {
     ]
 
     static let traceSystem = """
-    You trace control and data flow through a Rust codebase for an engineer reading it in a code viewer.
-    Read the code with your tools; do not guess. Follow the path in execution order, one step per function,
-    method, trait impl, channel hop or task boundary that matters. Call out dynamic dispatch (which impl runs),
-    async boundaries (spawned tasks, channels, awaits), cfg/feature gates and error paths that change the route.
-    Keep notes concrete: name the arguments, fields, messages or state that carry the flow. 4 to 25 steps.
-    Every step must point at a symbol that exists in the file you name.
+    You trace control and data flow through a codebase for an engineer reading it in a code viewer.
+
+    Read the code with your tools and verify every step: the file exists at the repository-relative path you
+    give, and the symbol is a declaration in that file, not a call site, comment or string. Never guess a name.
+
+    Follow the path in execution order, one step per function, method, trait impl, channel hop or task boundary
+    that matters. A path may come back to a function it already visited. Prefer one coherent path that answers
+    the question over a list of every symbol involved; 4 to 25 steps.
+
+    Say how each step is reached (`link`). Keep direct calls apart from dynamic dispatch (name the impl that
+    runs, and how you know), callbacks and registered handlers, channel messages and spawned tasks. When you
+    believe two steps connect but cannot see the connection in the code, mark the step `inferred` and say what
+    the belief rests on. Do not invent a callee to close a gap.
+
+    Branches are alternatives, not a sequence. When the route depends on a condition (a cfg or feature gate, a
+    configuration value, an error, an enum variant), say which branch the path follows in that step's note,
+    for example "If the catalog is in read-only mode..." or "On error...", and name the other outcome.
+
+    When the path leaves code you can read (a dependency, generated code, the OS), end it at the last call you
+    verified, mark that step `boundary`, and say what happens beyond it as far as you know.
+
+    If the question names no configuration and the answer depends on one, follow the default and say so in the
+    title. Keep notes concrete: the arguments, fields, messages or state that carry the flow. If nothing you can
+    verify answers the question, return no steps and explain why in the summary.
     """
 
     static func tracePrompt(question: String, anchor: String?) -> String {
@@ -53,6 +74,10 @@ enum ClaudeTasks {
         p += "\nReturn the ordered steps."
         return p
     }
+
+    /// Note prefixes for the ways a step is reached other than a direct call.
+    static let linkLabels = ["dispatch": "dispatch", "callback": "callback", "channel": "channel", "spawn": "spawned task",
+                             "inferred": "inferred", "boundary": "boundary"]
 
     /// Resolves model-proposed steps against real outlines, fixing line numbers.
     @MainActor
@@ -66,9 +91,11 @@ enum ClaudeTasks {
             var loc = CodeLocation(path: path, range: SourceRange(line: max(0, (s.line ?? 1) - 1)))
             var verified = false
             var snippet = ""
+            var anchor: CodeAnchor?
             if let doc = docs.document(path) {
                 let hint = max(0, (s.line ?? 1) - 1)
-                let items = doc.syntax.flatOutline.filter { $0.name == bare }
+                var items = doc.syntax.flatOutline.filter { $0.qualifiedName == s.symbol }
+                if items.isEmpty { items = doc.syntax.flatOutline.filter { $0.name == bare } }
                 if let best = items.min(by: { abs($0.nameRange.start.line - hint) < abs($1.nameRange.start.line - hint) }) {
                     loc = CodeLocation(path: path, range: best.nameRange)
                     verified = true
@@ -77,10 +104,13 @@ enum ClaudeTasks {
                     verified = true
                 }
                 snippet = doc.lineText(loc.line).trimmingCharacters(in: .whitespaces)
+                anchor = CodeAnchor.make(loc, in: doc)
             }
             loc.version = version
-            t.steps.append(TraceStep(title: s.symbol, location: loc, note: s.note, edge: .claude, source: .claude,
-                                     verified: verified, snippet: snippet))
+            var note = s.note
+            if let link = s.link, let label = Self.linkLabels[link] { note = "[\(label)] " + note }
+            t.steps.append(TraceStep(title: s.symbol, location: loc, note: note, edge: .claude, source: .claude,
+                                     verified: verified, snippet: snippet, anchor: anchor))
         }
         return t
     }

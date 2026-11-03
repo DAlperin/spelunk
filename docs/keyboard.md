@@ -103,6 +103,8 @@ there is one. Typing filters by title and by the subtitle shown under it.
 | Close Review | | a review other than the working copy is shown |
 | Add Location to Code Path | ⇧⌘T | a file is open |
 | New Code Path, New Code Path from Cursor | | always / a file is open |
+| Import Code Path from Clipboard | | always |
+| Copy Code Path as Text | | a path is active |
 | Next Code Path Step / Previous Code Path Step | ⌥⌘↓ / ⌥⌘↑ | a code path is active |
 | Copy Code Path as Markdown | | a code path is active |
 | Open Code Path: *title* | | one entry per code path (first 20) |

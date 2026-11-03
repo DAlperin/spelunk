@@ -74,7 +74,9 @@ final class Workspace {
     var visibleFileCount = 0
 
     var sidebarTab: SidebarTab = .files
-    var document: SourceDocument?
+    var document: SourceDocument? {
+        didSet { if let d = document, d !== oldValue, d.isWorkingCopy { reanchor(in: d) } }
+    }
     var selection: SourceRange?
     var highlightRanges: [SourceRange] = []
     var revealRequest = 0
@@ -555,12 +557,30 @@ final class Workspace {
         let item = d.syntax.enclosingItem(line: p.line)
         let title = item?.qualifiedName ?? context?.name ?? d.path.lastPathComponent
         let edge: TraceEdge = (traces.active?.steps.isEmpty ?? true) ? .start : (arrival?.edge ?? .manual)
-        let step = TraceStep(title: title, location: CodeLocation(path: d.path, range: selection ?? SourceRange(line: p.line, col: p.col),
-                                                                  version: d.isWorkingCopy ? nil : d.version),
-                             edge: edge, source: arrival?.source ?? .manual,
-                             snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces))
+        let loc = CodeLocation(path: d.path, range: SourceRange(start: p, end: p), version: d.isWorkingCopy ? nil : d.version)
+        let step = TraceStep(title: title, location: loc, edge: edge, source: arrival?.source ?? .manual,
+                             snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces), anchor: CodeAnchor.make(loc, in: d))
         traces.insert(step)
         editingStepID = step.id
+    }
+
+    /// Adds a code path from `Trace.plainText()`'s format, finding each step by its symbol.
+    func importCodePath(_ text: String) {
+        guard let parsed = Trace.parsePlainText(text) else {
+            statusMessage = "No code path found: expected a title line, then file:symbol:note lines"
+            return
+        }
+        let resp = ClaudeTasks.TraceResponse(title: parsed.title, summary: nil,
+                                             steps: parsed.steps.map { .init(file: $0.file, symbol: $0.symbol, line: nil, note: $0.note, link: nil) })
+        var t = ClaudeTasks.materialize(resp, question: "", docs: docs)
+        t.origin = .manual
+        t.question = nil
+        t.steps = t.steps.map { var s = $0; s.edge = .manual; s.source = .manual; return s }
+        traces.add(t)
+        inspectorPane = .paths
+        showInspector = true
+        let missing = t.steps.filter { !$0.verified }.count
+        statusMessage = "Imported \(t.title): \(t.steps.count) steps" + (missing > 0 ? ", \(missing) not found" : "")
     }
 
     func newCodePath(fromCursor: Bool) {
@@ -572,10 +592,9 @@ final class Workspace {
     func toggleBookmark() {
         guard let d = document, let p = cursor else { return }
         let item = d.syntax.enclosingItem(line: p.line)
+        let loc = CodeLocation(path: d.path, range: SourceRange(line: p.line, col: p.col), version: d.isWorkingCopy ? nil : d.version)
         bookmarks.toggle(Bookmark(title: context?.name ?? item?.qualifiedName ?? d.path.lastPathComponent,
-                                  location: CodeLocation(path: d.path, range: SourceRange(line: p.line, col: p.col),
-                                                         version: d.isWorkingCopy ? nil : d.version),
-                                  context: reviewContextLabel))
+                                  location: loc, context: reviewContextLabel, anchor: CodeAnchor.make(loc, in: d)))
     }
 
     var reviewContextLabel: String {
@@ -587,7 +606,52 @@ final class Workspace {
         guard let t = traces.active, index >= 0, index < t.steps.count else { return }
         let gen = beginNavigation(.step)
         traces.currentStep = index
-        open(t.steps[index].location, record: true, generation: gen)
+        let step = t.steps[index]
+        let (loc, anchor, found) = reanchored(step.location, step.anchor)
+        if loc != step.location || anchor != step.anchor { traces.updateStep(step.id) { $0.location = loc; $0.anchor = anchor } }
+        if !found { statusMessage = "\(step.title) is not where it was saved; showing its last known line" }
+        open(loc, record: true, generation: gen)
+    }
+
+    func openBookmark(_ b: Bookmark) {
+        let (loc, anchor, found) = reanchored(b.location, b.anchor)
+        if loc != b.location || anchor != b.anchor {
+            bookmarks.updateAll { if $0.id == b.id { $0.location = loc; $0.anchor = anchor } }
+        }
+        if !found { statusMessage = "\(b.title) is not where it was saved; showing its last known line" }
+        open(loc)
+    }
+
+    /// A saved working-copy location checked against its file's current text: where it is now, a
+    /// refreshed anchor, and whether it was found. Locations in a commit never move.
+    func reanchored(_ loc: CodeLocation, _ anchor: CodeAnchor?, in doc: SourceDocument? = nil) -> (CodeLocation, CodeAnchor?, Bool) {
+        guard loc.isWorkingCopy, let doc = doc ?? docs.document(loc.path) else { return (loc, anchor, true) }
+        guard let anchor else { return (loc, CodeAnchor.make(loc, in: doc), true) }
+        switch anchor.resolve(line: loc.line, in: doc) {
+        case .unchanged:
+            return (loc, anchor.fileHash == CodeAnchor.hash(doc.text) ? anchor : CodeAnchor.make(loc, in: doc), true)
+        case .moved(let l):
+            let moved = loc.onLine(l)
+            return (moved, CodeAnchor.make(moved, in: doc), true)
+        case .lost:
+            return (loc, anchor, false)
+        }
+    }
+
+    /// Moves every saved step and bookmark in this file to where its code is now.
+    func reanchor(in doc: SourceDocument) {
+        traces.updateAllSteps { s in
+            guard s.location.path == doc.path, s.location.isWorkingCopy else { return }
+            let (loc, anchor, _) = reanchored(s.location, s.anchor, in: doc)
+            s.location = loc
+            s.anchor = anchor
+        }
+        bookmarks.updateAll { b in
+            guard b.location.path == doc.path, b.location.isWorkingCopy else { return }
+            let (loc, anchor, _) = reanchored(b.location, b.anchor, in: doc)
+            b.location = loc
+            b.anchor = anchor
+        }
     }
 
     // MARK: Review
