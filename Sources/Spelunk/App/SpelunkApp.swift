@@ -65,6 +65,10 @@ struct SpelunkApp: App {
                 Button("Toggle Bookmark") { model.workspace?.toggleBookmark() }.keyboardShortcut("b", modifiers: [.command, .shift])
             }
             CommandMenu("Review") {
+                Button("Close Review, Back to Working Copy") { model.workspace?.closeActiveReview() }
+                    .keyboardShortcut("w", modifiers: [.command, .option])
+                    .disabled(model.workspace?.activeReviewKey == nil)
+                Divider()
                 Button("Next Hunk") { model.workspace.map(ReviewNav.next) }.keyboardShortcut("j", modifiers: [.command])
                 Button("Previous Hunk") { model.workspace.map(ReviewNav.previous) }.keyboardShortcut("j", modifiers: [.command, .shift])
                 Button("Mark Hunk Viewed") {

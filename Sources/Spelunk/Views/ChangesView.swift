@@ -120,6 +120,7 @@ struct ChangesView: View {
                 }
                 if let e = review.githubError { Text(e).font(.caption).foregroundStyle(.red).lineLimit(2) }
             }
+            if !review.rangeCommits.isEmpty { CommitStepper(review: review) }
             ImportanceBar(review: review)
             HStack(spacing: 8) {
                 let p = review.progress
@@ -550,7 +551,7 @@ struct HeadIntelButton: View {
     @Bindable var review: ReviewSession
     var body: some View {
         let _ = review.headIntelVersion
-        if review.afterIsWorkingCopy || !review.files.contains(where: { $0.path.hasSuffix(".rs") }) {
+        if review.afterIsWorkingCopy || review.tracksWorkingCopy || !review.files.contains(where: { $0.path.hasSuffix(".rs") }) {
             EmptyView()
         } else if let h = review.headIntel {
             TimelineView(.periodic(from: .now, by: 2)) { _ in
@@ -565,5 +566,48 @@ struct HeadIntelButton: View {
                 .buttonStyle(.link).font(.caption)
                 .help("Start a rust-analyzer on this PR's head so answers come from the PR's own code (a second full index)")
         }
+    }
+}
+
+/// Picks the whole range or one of its commits, with buttons to step through them.
+struct CommitStepper: View {
+    @Bindable var review: ReviewSession
+
+    var body: some View {
+        let commits = review.rangeCommits
+        let index = review.selectedCommit.flatMap { c in commits.firstIndex { $0.id == c } }
+        VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 6) {
+            Menu {
+                Button { review.selectCommit(nil) } label: {
+                    if index == nil { Label("All \(commits.count) commits", systemImage: "checkmark") } else { Text("All \(commits.count) commits") }
+                }
+                Divider()
+                ForEach(Array(commits.enumerated()), id: \.element.id) { i, c in
+                    Button { review.selectCommit(c.id) } label: {
+                        let title = "\(i + 1). \(c.short)  \(c.title)"
+                        if index == i { Label(title, systemImage: "checkmark") } else { Text(title) }
+                    }
+                }
+            } label: {
+                Label(index.map { "Commit \($0 + 1) of \(commits.count)" } ?? "All \(commits.count) commits", systemImage: "list.number")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Review the whole range, or one commit at a time")
+            Spacer(minLength: 4)
+            Button { review.stepCommit(-1) } label: { Image(systemName: "chevron.left") }
+                .help("Previous commit")
+            Button { review.stepCommit(1) } label: { Image(systemName: "chevron.right") }
+                .help("Next commit")
+        }
+        if let i = index {
+            Text(verbatim: "\(commits[i].short) · \(commits[i].title) · \(commits[i].author)")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2).padding(.leading, 2)
+        }
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(index == nil ? Color.clear : Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
     }
 }

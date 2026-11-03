@@ -117,6 +117,11 @@ final class ReviewSession {
     var listMode: ListMode = ListMode(rawValue: UserDefaults.standard.string(forKey: "review.listMode") ?? "") ?? .importance {
         didSet { UserDefaults.standard.set(listMode.rawValue, forKey: "review.listMode") }
     }
+    /// Commits in the review's range, oldest first (empty for a single commit).
+    var rangeCommits: [RangeCommit] = []
+    /// One commit of the range being shown on its own, or nil for the whole range.
+    var selectedCommit: String?
+
     /// The head's own rust-analyzer, when started.
     @ObservationIgnored var headIntel: HeadIntel? { didSet { headIntelVersion += 1 } }
     var headIntelVersion = 0
@@ -166,9 +171,9 @@ final class ReviewSession {
     var groupState: String?
 
     /// Resolved revisions used to fetch file contents.
-    private(set) var oldRev: String = ""
-    private(set) var newRev: String?
-    private var vcs: VCSKind = .git
+    var oldRev: String = ""
+    var newRev: String?
+    var vcs: VCSKind = .git
     private var prBaseOid: String?
     private var prHeadOid: String?
 
@@ -232,7 +237,7 @@ final class ReviewSession {
     }
 
     private func saveSnapshot(_ diff: String) {
-        guard !tracksWorkingCopy, diff.utf8.count < 20_000_000 else { return }
+        guard !tracksWorkingCopy, selectedCommit == nil, diff.utf8.count < 20_000_000 else { return }
         let snap = Snapshot(format: Snapshot.currentFormat, identity: identity, diff: diff, analyses: analyses, title: title, body: body, oldRev: oldRev, newRev: newRev,
                             prBaseOid: prBaseOid, prHeadOid: prHeadOid, vcs: vcs == .jj ? "jj" : "git")
         Task.detached { [url = snapshotURL] in
@@ -273,8 +278,10 @@ final class ReviewSession {
         if first, restoreSnapshot() { first = false }
         if first { state = .loading("Computing diff") }
         do {
-            let diffText = try await fetchDiff()
+            var diffText = try await fetchDiff()
             identity = await resolveIdentity()
+            await loadRangeCommits()
+            if let c = selectedCommit { diffText = try await commitDiff(c) }
             let newFiles = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
             oldDocs = [:]
             newDocs = [:]

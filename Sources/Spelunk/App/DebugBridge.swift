@@ -190,6 +190,17 @@ final class DebugBridge {
         case "hovershown":
             let shown = NSApp.windows.contains { $0.isVisible && $0.className.contains("Popover") }
             Log.debug("hovershown: \(shown)")
+        case "closereview": ws.closeActiveReview()
+        case "commit":
+            // commit next | prev | all | <n>
+            if let r = ws.review {
+                switch arg {
+                case "next": r.stepCommit(1)
+                case "prev": r.stepCommit(-1)
+                case "all": r.selectCommit(nil)
+                default: if let n = Int(arg), r.rangeCommits.indices.contains(n - 1) { r.selectCommit(r.rangeCommits[n - 1].id) }
+                }
+            }
         case "headintel": Task { await ws.review?.startHeadIntel() }
         case "openjobtrace":
             if let j = ws.jobs.last(where: { $0.kind == .trace && $0.traceID != nil }) { ws.openJobTrace(j.id) }

@@ -39,6 +39,18 @@ extension Workspace {
         review != nil && changeContext != nil && contextFocus == .hunk && !contextPinned
     }
 
+    /// Closes the review being shown and returns to the working copy: its head rust-analyzer stops,
+    /// and a file open at the review's version reopens as the working copy at the same line.
+    func closeActiveReview() {
+        guard let key = activeReviewKey else { return }
+        let doc = document, line = cursor?.line ?? 0
+        closeReview(key)
+        if let doc, !doc.isWorkingCopy, doc.side != .old {
+            open(CodeLocation(path: doc.path, range: SourceRange(line: line)), record: false, reason: .manual)
+        }
+        statusMessage = "Back to the working copy"
+    }
+
     /// Makes a review active (nil: the working-copy review). Selection that belongs to the previous
     /// review is cleared, then the new review's first hunk is selected.
     func activateReview(_ key: String?) {

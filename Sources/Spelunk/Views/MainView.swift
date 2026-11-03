@@ -193,6 +193,10 @@ struct MainToolbar: ToolbarContent {
 
             ReviewTargetMenu(ws: ws, showPicker: $showReviewPicker)
                 .popover(isPresented: $showReviewPicker) { ReviewPicker(ws: ws, dismiss: { showReviewPicker = false }) }
+            if ws.activeReviewKey != nil {
+                Button { ws.closeActiveReview() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .help("Close this review and go back to the working copy (⌥⌘W)")
+            }
 
             if ws.documentInReview {
                 Picker("Diff", selection: Binding(get: { ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
@@ -234,7 +238,8 @@ struct ReviewTargetMenu: View {
             Button("Compare Revisions…") { showPicker = true }
             if ws.activeReviewKey != nil {
                 Divider()
-                Button("Close \(ws.review?.shortLabel ?? "Review")") { ws.review = nil }
+                Button("Close \(ws.review?.shortLabel ?? "Review")") { ws.closeActiveReview() }
+                    .keyboardShortcut("w", modifiers: [.command, .option])
             }
         } label: {
             HStack(spacing: 5) {

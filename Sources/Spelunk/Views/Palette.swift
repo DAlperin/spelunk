@@ -297,6 +297,14 @@ enum PaletteCommands {
 
         // Claude
         add("Ask Claude…", nil, "⌘L", icon: "sparkles") { ws.openAsk() }
+        if ws.activeReviewKey != nil {
+            add("Close Review, Back to Working Copy", ws.review?.shortLabel, "⌥⌘W", icon: "xmark.circle") { ws.closeActiveReview() }
+        }
+        if let r = ws.review, !r.rangeCommits.isEmpty {
+            add("Next Commit in Review", r.selectedCommitInfo?.title, nil, icon: "chevron.right") { r.stepCommit(1) }
+            add("Previous Commit in Review", nil, nil, icon: "chevron.left") { r.stepCommit(-1) }
+            add("Review All Commits Together", "\(r.rangeCommits.count) commits", nil, icon: "list.number") { r.selectCommit(nil) }
+        }
         add("New Review Rule from Description…", nil, nil, icon: "wand.and.stars") { ws.showRuleWriter = true }
 
         // Navigation aids
