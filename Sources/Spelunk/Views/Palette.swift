@@ -386,10 +386,6 @@ enum PaletteCommands {
         add("Edit My Review Rules", "~/Library/Application Support/Spelunk/review.rules", icon: "list.bullet.rectangle") { RulesFiles.openUserRules() }
         add("Edit Repository Review Rules", ".spelunk/review.rules", icon: "list.bullet.rectangle") { RulesFiles.openRepoRules(ws.root) }
         add("View Default Review Rules", icon: "list.bullet.rectangle") { RulesFiles.openDefaults() }
-        add("Convert Rules Files", "rewrites rules in the old line-based format", icon: "arrow.triangle.2.circlepath") {
-            ws.statusMessage = RulesFiles.convertLegacy(root: ws.root)
-            Task { await ws.review?.load() }
-        }
         add("Settings…", nil, "⌘,", icon: "gearshape") { openSettings() }
         add("Install Language Grammar…", "Settings › Languages", icon: "chevron.left.forwardslash.chevron.right") { openSettings() }
         return c

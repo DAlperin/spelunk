@@ -14,8 +14,7 @@ material (a command's output, a plot, a Claude summary) to matching hunks.
 
 Opening a rules file that does not exist creates it from a commented template that lists the syntax.
 Files are re-read when their modification time changes. Parse errors appear above the review list as
-"N rule errors"; hover for the messages, each prefixed with the file and line. A file still in the
-old line-based format also shows a note there (see [Old rule files](#old-rule-files)).
+"N rule errors"; hover for the messages, each prefixed with the file and line.
 
 ## Precedence
 
@@ -361,19 +360,3 @@ Commands in your own rules file, and `claude` attachments from either file, do n
 from a sentence. It can read the repository and is given this syntax and the defaults. The draft is
 checked with the real parser before you can add it to your rules or to the repository's file, and
 the review re-classifies once it is added.
-
-## Old rule files
-
-Rules used to be written one condition per line:
-
-```text
-rule critical "design doc" collect
-  path ~ doc/developer/design/**
-  not hunk in-test
-```
-
-A file in that format still loads: it is converted as it is read, and "N rule errors" includes a
-note saying so. The palette's Convert Rules Files (or Settings › General › Convert Old Rules Files)
-rewrites it. Your file keeps the old text beside it as `review.rules.old`; a repository's file is
-rewritten in place, since version control has the old text. Comments are kept, and a line that
-cannot be converted becomes a comment and is reported.

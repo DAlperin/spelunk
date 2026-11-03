@@ -207,40 +207,8 @@ final class RulesTests: XCTestCase {
         XCTAssertTrue(RuleSet(rules: blocked).evaluate(facts).pending.isEmpty)
     }
 
-    func testLegacyFormatConverts() {
-        let legacy = """
-        # mine
-        rule critical "join path" collect
-          path ~ src/compute/src/render/**   # rendering
-          not hunk in-test
-          called-from /render_join|a\\/b/ depth 2
-        attach "History" per file
-          path ~ src/x/**
-          run git log --oneline -8 -- {file}
-          model sonnet
-        disable "comment wording"
-        """
-        XCTAssertTrue(LegacyRules.isLegacy(legacy))
-        let c = LegacyRules.convert(legacy)
-        XCTAssertEqual(c.errors, [])
-        XCTAssertFalse(LegacyRules.isLegacy(c.text))
-        let p = RuleParser.parseAll(c.text, source: "t")
-        XCTAssertEqual(p.errors, [])
-        XCTAssertEqual(p.rules.first?.reason, "join path")
-        XCTAssertEqual(p.rules.first?.collect, true)
-        XCTAssertEqual(p.attachments.first?.model, "sonnet")
-        if case .run(let cmd) = p.attachments.first?.action { XCTAssertEqual(cmd, "git log --oneline -8 -- {file}") } else { XCTFail("expected run") }
-        XCTAssertEqual(p.disabled, ["comment wording"])
-        XCTAssertTrue(c.text.contains("; rendering"))
-        // Read as converted, with a note that the file is in the old format.
-        let direct = RuleParser.parseAll(legacy, source: "t")
-        XCTAssertEqual(direct.rules.count, 1)
-        XCTAssertEqual(direct.errors.count, 1)
-    }
-
     func testDefaultsParse() {
         XCTAssertEqual(RuleParser.parse(DefaultRules.text, source: "defaults").errors, [])
-        XCTAssertFalse(LegacyRules.isLegacy(DefaultRules.text))
         XCTAssertEqual(RuleParser.parseAll(RulesFiles.template, source: "template").errors, [])
     }
 }

@@ -185,14 +185,7 @@ enum RuleParser {
     }
 
     static func parseAll(_ text: String, source: String) -> (rules: [ReviewRule], attachments: [AttachRule], disabled: Set<String>, errors: [String]) {
-        var text = text
         var errors: [String] = []
-        if LegacyRules.isLegacy(text) {
-            let converted = LegacyRules.convert(text)
-            text = converted.text
-            errors += converted.errors.map { "\(source):\($0)" }
-            errors.append("\(source): uses the old line-based rule format; it was read as converted, and Convert Rules Files (in the palette) rewrites it")
-        }
         let forms: [SExpr]
         do { forms = try SExpr.read(text) } catch let e as SExpr.ReadError {
             return ([], [], [], errors + ["\(source):\(e.line): \(e.message)"])
@@ -772,28 +765,6 @@ enum RulesFiles {
         var existing = (try? String(contentsOf: u, encoding: .utf8)) ?? (root == nil ? template : template.replacingOccurrences(of: "(yours)", with: "(this repository)"))
         if !existing.hasSuffix("\n") { existing += "\n" }
         try (existing + "\n" + text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n").write(to: u, atomically: true, encoding: .utf8)
-    }
-
-    /// Rewrites rules files still in the line-based format as s-expressions. Your file keeps a copy
-    /// of the old text beside it (`review.rules.old`); a repository's file is under version control,
-    /// so it is rewritten in place. Returns a summary for the status bar.
-    static func convertLegacy(root: URL?) -> String {
-        var done: [String] = [], failed: [String] = []
-        let files = [(ReviewRules.userURL, true)] + (root.map { [(ReviewRules.repoURL($0), false)] } ?? [])
-        for (u, backup) in files {
-            guard let text = try? String(contentsOf: u, encoding: .utf8), LegacyRules.isLegacy(text) else { continue }
-            let c = LegacyRules.convert(text)
-            do {
-                if backup { try text.write(to: u.appendingPathExtension("old"), atomically: true, encoding: .utf8) }
-                try c.text.write(to: u, atomically: true, encoding: .utf8)
-                done.append(backup ? "your rules" : ".spelunk/review.rules")
-                if !c.errors.isEmpty { failed.append("\(c.errors.count) lines left as comments in \(u.path)") }
-            } catch {
-                failed.append("\(u.path): \(error.localizedDescription)")
-            }
-        }
-        if done.isEmpty && failed.isEmpty { return "No rules files use the old format" }
-        return (done.isEmpty ? "" : "Converted " + done.joined(separator: " and ")) + (failed.isEmpty ? "" : "; " + failed.joined(separator: "; "))
     }
 
     static func openUserRules() {

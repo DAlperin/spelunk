@@ -111,7 +111,6 @@ fatal. The conventions that follow from it:
 | `Classifier.swift` | Tiers, the Rust token lexer, and the per-hunk facts that rules test |
 | `Rules.swift` | The rule language: forms and conditions, rule loading and precedence, three-valued evaluation, rules file template |
 | `SExpr.swift` | The s-expression reader rules files are written in |
-| `LegacyRules.swift` | Converts rules files from the earlier line-based format |
 | `DefaultRules.swift` | The built-in rules |
 | `SecondPass.swift` | Semantic and `llm` conditions after the first pass, and attachments (matching, running, caching, trust) |
 | `Grouping.swift` | Symbol-based hunk groups, Claude groups, and the tier sections of the review list |
