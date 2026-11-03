@@ -131,6 +131,7 @@ final class ReviewSession {
     var linkedPRHead: String?
     var linkedInSync: Bool?
     var groups: [HunkGroup] = [] { didSet { layoutCache = nil } }
+    @ObservationIgnored var groupsGeneration = 0
     var claudeGroups: [HunkGroup] = [] { didSet { layoutCache = nil } }
     /// Related hunks shown together inside the importance list.
     var groupRelated = UserDefaults.standard.object(forKey: "review.groupRelated") as? Bool ?? true {
@@ -259,7 +260,7 @@ final class ReviewSession {
         files = restored
         analyses = snap.analyses
         identity = snap.identity
-        recomputeGroups()
+        Task { await recomputeGroups() }
         state = .ready
         return true
     }
@@ -331,7 +332,7 @@ final class ReviewSession {
             facts = newFacts
             semantic = [:]
             analyses = newAnalyses
-            recomputeGroups()
+            await recomputeGroups()
             // Viewed marks and triage are keyed by hunk content, so entries for hunks that no longer
             // exist simply stop matching. The overview describes the whole change; flag it once stale.
             await hydrate()

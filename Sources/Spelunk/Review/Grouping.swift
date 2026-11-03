@@ -163,8 +163,15 @@ extension ReviewSession {
 
     func fileCount(of g: HunkGroup) -> Int { Set(hunks(of: g).map(\.path)).count }
 
-    func recomputeGroups() {
-        groups = HunkGrouper.group(files) { FileClassifier.isGenerated($0) || $0.hasSuffix(".lock") }
+    /// Regroups the current files off the main thread; a newer call supersedes an older one still running.
+    func recomputeGroups() async {
+        groupsGeneration += 1
+        let generation = groupsGeneration
+        let files = self.files
+        let grouped = await Task.detached(priority: .userInitiated) {
+            HunkGrouper.group(files) { FileClassifier.isGenerated($0) || $0.hasSuffix(".lock") }
+        }.value
+        if generation == groupsGeneration { groups = grouped }
     }
 
     /// Asks a cheap model to group the important hunks into logical changes. Diff text only, no tools.
