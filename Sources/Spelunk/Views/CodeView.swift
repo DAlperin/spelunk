@@ -170,13 +170,13 @@ struct CodeView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         /// Embedded views (threads, composer) and the display lines reserved for each.
-        var blockSpecs: [(id: String, afterLine: Int)] = []
+        var blockSpecs: [(id: String, afterLine: Int, otherSide: Bool)] = []
         private var blockHeights: [String: Int] = [:]
         private var hosts: [String: NSHostingController<InlineBlockView>] = [:]
         static let blockWidth: CGFloat = 680
 
-        func blocks(for specs: [(id: String, afterLine: Int)]) -> [DisplayDoc.Block] {
-            specs.map { DisplayDoc.Block(id: $0.id, afterLine: $0.afterLine, lines: blockHeights[$0.id] ?? 3) }
+        func blocks(for specs: [(id: String, afterLine: Int, otherSide: Bool)]) -> [DisplayDoc.Block] {
+            specs.map { DisplayDoc.Block(id: $0.id, afterLine: $0.afterLine, lines: blockHeights[$0.id] ?? 3, otherSide: $0.otherSide) }
         }
 
         private var lineHeight: CGFloat {
@@ -216,6 +216,7 @@ struct CodeView: NSViewRepresentable {
                 let rebuilt = DisplayDoc(doc: doc, phantoms: secondary ? [:] : ws.phantomLines(for: doc), blocks: blocks(for: blockSpecs))
                 self.display = rebuilt
                 load(rebuilt, into: tv, keepScroll: true)
+                applyBackgrounds(selection: secondary ? nil : ws.selection, highlights: secondary ? [] : ws.highlightRanges)
                 DispatchQueue.main.async { [weak self] in self?.layoutBlocks() }
             }
         }
@@ -226,6 +227,8 @@ struct CodeView: NSViewRepresentable {
         weak var minimap: MinimapView?
         let hover = HoverController()
         var vim: VimController?
+        /// The caret's display line and column, kept so a re-render can put it back.
+        var caretAt: (line: DisplayDoc.Entry, col: Int)?
         /// Follows the minimap preferences while the editor is open.
         var minimapWidth: NSLayoutConstraint?
         var hunkRegions: [HunkRegion] = []
@@ -266,6 +269,7 @@ struct CodeView: NSViewRepresentable {
             guard r.location <= display.ns.length else { return }
             let dpos = display.lines.position(of: r.location)
             gutter?.needsDisplay = true
+            caretAt = display.entry(dpos.line).map { ($0, dpos.col) }
             guard let pos = display.realPos(dpos) else {
                 if case .phantom(let p) = display.entry(dpos.line) { ws.removedLineAtCaret = p.otherLine + 1 }
                 return
@@ -367,7 +371,17 @@ struct CodeView: NSViewRepresentable {
                 lm.ensureLayout(for: tc)
                 tv.sizeToFit()
             }
-            tv.setSelectedRange(NSRange(location: 0, length: 0))
+            // A re-render of the same file keeps the caret on the same line, real or phantom.
+            var caret = 0
+            if keepScroll, !secondary, let at = caretAt {
+                let line: Int? = switch at.line {
+                case .real(let l): display.displayLine(l)
+                case .phantom(let p): display.entries.firstIndex { if case .phantom(let q) = $0 { q == p } else { false } }
+                case .block: nil
+                }
+                if let line { caret = min(display.lines.lineRange(line).location + at.col, NSMaxRange(display.lines.lineRange(line))) }
+            }
+            tv.setSelectedRange(NSRange(location: min(caret, display.ns.length), length: 0))
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
             if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {

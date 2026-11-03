@@ -623,11 +623,30 @@ final class Workspace {
     }
 
     /// Starts a review comment on the cursor line, on whichever side of the diff is showing.
-    func draftComment() {
-        guard let r = review, let d = document, let c = cursor else { return }
-        let side = d.side == .old ? "LEFT" : "RIGHT"
-        let path = side == "LEFT" ? (r.files.first { $0.oldPath == d.path }?.oldPath ?? d.path) : d.path
-        commentDraft = PendingComment(path: path, line: c.line + 1, side: side, body: "")
+    /// Starts a review comment at the caret, or across `lines` (1-based). A caret on an inline removed
+    /// line comments on the old side.
+    func draftComment(lines: ClosedRange<Int>? = nil) {
+        guard let r = review, let d = document else { return }
+        guard r.pullRequest != nil else {
+            statusMessage = "Comments go to a pull request, and this review has none linked"
+            return
+        }
+        var side = d.side == .old ? "LEFT" : "RIGHT"
+        let line: Int
+        if let lines {
+            line = lines.upperBound
+        } else if let old = removedLineAtCaret {
+            side = "LEFT"
+            line = old
+        } else if let c = cursor {
+            line = c.line + 1
+        } else {
+            return
+        }
+        let path = side == "LEFT" && d.side != .old ? (r.files.first { $0.newPath == d.path }?.oldPath ?? d.path) : d.path
+        var draft = PendingComment(path: path, line: line, side: side, body: "")
+        if let lines, lines.lowerBound < lines.upperBound { draft.startLine = lines.lowerBound }
+        commentDraft = draft
     }
 
     /// Sends a working-copy document to its language server, starting the server on first use.
@@ -836,22 +855,30 @@ final class Workspace {
 
     /// Embedded views to show under lines of this document: review threads, your pending comments,
     /// and the comment composer. Each is (id, zero-based line it follows).
-    func inlineBlocks(for doc: SourceDocument) -> [(id: String, afterLine: Int)] {
+    /// Items on the other version's lines follow their inline phantom line (`otherSide`).
+    func inlineBlocks(for doc: SourceDocument) -> [(id: String, afterLine: Int, otherSide: Bool)] {
         guard let r = review, r.pullRequest != nil || commentDraft != nil else { return [] }
         let side = doc.side == .old ? "LEFT" : "RIGHT"
-        guard inlineThreads else {
-            if let d = commentDraft, d.path == doc.path, d.side == side { return [("draft", d.line - 1)] }
-            return []
+        let file = r.files.first { doc.side == .old ? $0.oldPath == doc.path : $0.newPath == doc.path }
+        let otherPath = doc.side == .old ? file?.newPath : file?.oldPath
+        /// Whether an item at (path, side) shows in this document, and on which version's lines.
+        func placement(_ path: String, _ s: String) -> Bool? {
+            if path == doc.path, s == side { return false }
+            if inlineDiff, s != side, path == otherPath { return true }
+            return nil
         }
-        var out: [(String, Int)] = []
-        for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
-            if let l = t.anchorLine { out.append(("thread:" + t.id, l - 1)) }
+        var out: [(String, Int, Bool)] = []
+        if let d = commentDraft, let other = placement(d.path, d.side) { out.append(("draft", d.line - 1, other)) }
+        guard inlineThreads else { return out }
+        for t in r.pullRequest?.threads ?? [] {
+            if let other = placement(t.path, t.side), let l = t.anchorLine { out.append(("thread:" + t.id, l - 1, other)) }
         }
-        for c in r.pendingForCurrentPR where c.path == doc.path && c.side == side { out.append(("pending:" + c.id.uuidString, c.line - 1)) }
-        if let d = commentDraft, d.path == doc.path, d.side == side { out.append(("draft", d.line - 1)) }
+        for c in r.pendingForCurrentPR {
+            if let other = placement(c.path, c.side) { out.append(("pending:" + c.id.uuidString, c.line - 1, other)) }
+        }
         // On one line: existing threads, then your pending comments, then the composer.
         func rank(_ id: String) -> Int { id.hasPrefix("thread:") ? 0 : id.hasPrefix("pending:") ? 1 : 2 }
-        return out.sorted { $0.1 == $1.1 ? (rank($0.0), $0.0) < (rank($1.0), $1.0) : $0.1 < $1.1 }
+        return out.sorted { ($0.1, $0.2 ? 1 : 0, rank($0.0), $0.0) < ($1.1, $1.2 ? 1 : 0, rank($1.0), $1.0) }
     }
 
     /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.

@@ -484,12 +484,17 @@ struct StatusBar: View {
         .frame(height: 24)
     }
 
+    /// The review keys; with vim navigation on, the ones that work in the code view.
     func keyHints(labels: Bool) -> some View {
         HStack(spacing: 4) {
             KeyCap("J"); KeyCap("K"); if labels { Text("hunk") }
-            KeyCap("⇧J"); if labels { Text("next important") }
-            KeyCap("V"); if labels { Text("viewed") }
-            if ws.review?.pullRequest != nil { KeyCap("C"); if labels { Text("comment") }; KeyCap("N"); KeyCap("P"); if labels { Text("thread") } }
+            KeyCap(vim ? "]u" : "⇧J"); if labels { Text("next important") }
+            KeyCap(vim ? "␣v" : "V"); if labels { Text("viewed") }
+            if ws.review?.pullRequest != nil {
+                KeyCap("C"); if labels { Text("comment") }
+                if vim { KeyCap("]t"); KeyCap("[t") } else { KeyCap("N"); KeyCap("P") }
+                if labels { Text("thread") }
+            }
         }
         .fixedSize()
     }

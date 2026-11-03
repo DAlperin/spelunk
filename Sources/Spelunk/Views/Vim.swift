@@ -1,8 +1,9 @@
 import AppKit
 
 /// Vim-style navigation for the read-only code view: motions with counts, search, visual selection
-/// and yank, plus bracket and leader bindings for review commands (since `j`, `k` and `v` are
-/// motions here). Editing commands do not exist; the text never changes.
+/// and yank. In a review, `J` and `K` move between hunks and `c` drafts a comment, since editing
+/// commands do not exist and the text never changes; `gh` shows the hover card (`K` too outside a
+/// review). Bracket and leader bindings cover the other review commands.
 @MainActor
 final class VimController {
     enum Mode: Equatable { case normal, visual(anchor: Int), visualLine(anchor: Int) }
@@ -91,7 +92,9 @@ final class VimController {
         case "v": toggleVisual(line: false)
         case "V": toggleVisual(line: true)
         case "y": yank()
-        case "K": showHover()
+        case "J": if ws?.review != nil { for _ in 0..<n { ReviewNav.next(ws!) } }
+        case "K": if let ws, ws.review != nil { for _ in 0..<n { ReviewNav.previous(ws) } } else { showHover() }
+        case "c", "C": comment()
         case "g", "z", "]", "[", " ", "f", "F", "t", "T": pending = String(c); pendingCount = n
         default: break
         }
@@ -123,6 +126,7 @@ final class VimController {
         switch p {
         case "gg": move(lastCountWasEmpty ? .documentStart : .line(n), count: 1)
         case "gd": if let pos = realCaret() { ws.goToDefinition(at: pos) }
+        case "gh": showHover()
         case "zz": scrollCaret(0.5)
         case "zt": scrollCaret(0.0)
         case "zb": scrollCaret(1.0)
@@ -133,7 +137,7 @@ final class VimController {
         case "[t": ws.moveThread(-n)
         case " v":
             if let id = ws.selectedHunkID { ws.review?.toggleViewed(id); ReviewNav.nextImportant(ws) }
-        case " c": if ws.review?.pullRequest != nil { ws.draftComment() }
+        case " c": comment()
         case " r": ws.resolveCurrentThread()
         case " a": ws.openAsk()
         case " p": ws.addCurrentToTrace()
@@ -431,6 +435,21 @@ final class VimController {
         var r = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc)
         r.origin.x += tv.textContainerInset.width
         r.origin.y += tv.textContainerInset.height
-        tv.coordinator?.hover.showNow(at: NSPoint(x: r.midX, y: r.midY))
+        // The glyph's leading edge, so the insertion index resolves to this character, not the next.
+        tv.coordinator?.hover.showNow(at: NSPoint(x: r.minX + 1, y: r.midY))
+    }
+
+    /// A review comment on the caret's line, or on the selected lines in visual mode.
+    private func comment() {
+        guard let ws, let tv = textView, let d = tv.coordinator?.display else { return }
+        var lines: ClosedRange<Int>?
+        if mode != .normal {
+            let sel = tv.selectedRange()
+            let a = d.realPos(d.lines.position(of: sel.location))
+            let b = d.realPos(d.lines.position(of: max(sel.location, NSMaxRange(sel) - 1)))
+            if let a, let b { lines = (a.line + 1)...(b.line + 1) }
+            exitVisual()
+        }
+        ws.draftComment(lines: lines)
     }
 }

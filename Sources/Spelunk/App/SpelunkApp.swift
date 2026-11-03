@@ -314,9 +314,7 @@ enum ReviewKeys {
             guard let id = ws.selectedHunkID else { return false }
             ws.review?.toggleViewed(id)
             ReviewNav.nextImportant(ws)
-        case "c":
-            guard ws.review?.pullRequest != nil else { return false }
-            ws.draftComment()
+        case "c": ws.draftComment()
         case "n": ws.moveThread(1)
         case "p": ws.moveThread(-1)
         case "r": ws.resolveCurrentThread()

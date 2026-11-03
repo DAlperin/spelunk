@@ -30,8 +30,11 @@ final class DisplayDoc {
     /// An embedded view after a real line, `lines` display lines tall.
     struct Block: Hashable {
         var id: String
+        /// The zero-based line the block follows: a real line, or with `otherSide` the other version's
+        /// line shown inline as a phantom.
         var afterLine: Int
         var lines: Int
+        var otherSide = false
     }
 
     let doc: SourceDocument
@@ -60,22 +63,14 @@ final class DisplayDoc {
             blockLines = [:]
             return
         }
-        let blocksAfter = Dictionary(grouping: blocks, by: \.afterLine)
+        let blocksAfter = Dictionary(grouping: blocks.filter { !$0.otherSide }, by: \.afterLine)
+        let blocksAfterOther = Dictionary(grouping: blocks.filter(\.otherSide), by: \.afterLine)
         var blockRanges: [String: Range<Int>] = [:]
         var out: [String] = []
         var entries: [Entry] = []
         var map: [Int] = []
-        let count = doc.lines.lineCount
-        for line in 0...count {
-            for p in phantoms[line] ?? [] {
-                out.append(p.text)
-                entries.append(.phantom(p))
-            }
-            guard line < count else { break }
-            map.append(entries.count)
-            out.append(doc.lineText(line))
-            entries.append(.real(line))
-            for b in blocksAfter[line] ?? [] {
+        func emit(_ bs: [Block]?) {
+            for b in bs ?? [] {
                 let start = entries.count
                 for i in 0..<max(1, b.lines) {
                     out.append("")
@@ -83,6 +78,19 @@ final class DisplayDoc {
                 }
                 blockRanges[b.id] = start..<entries.count
             }
+        }
+        let count = doc.lines.lineCount
+        for line in 0...count {
+            for p in phantoms[line] ?? [] {
+                out.append(p.text)
+                entries.append(.phantom(p))
+                emit(blocksAfterOther[p.otherLine])
+            }
+            guard line < count else { break }
+            map.append(entries.count)
+            out.append(doc.lineText(line))
+            entries.append(.real(line))
+            emit(blocksAfter[line])
         }
         text = out.joined(separator: "\n")
         ns = text as NSString
