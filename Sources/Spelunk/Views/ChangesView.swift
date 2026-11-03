@@ -93,6 +93,22 @@ struct ChangesView: View {
                     }
                 }
                 Text(review.title).font(.headline).lineLimit(3)
+                if let n = review.linkedPR {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.pull").font(.caption)
+                        Text(verbatim: "PR #\(n)").font(.caption.monospaced().weight(.semibold))
+                        if let b = review.linkedBookmark { Text(verbatim: b).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1) }
+                        if let pr = review.pullRequest { ChecksSummary(checks: pr.checks) }
+                        Spacer()
+                        if review.linkedInSync == false {
+                            Text("local ahead of push").font(.caption).foregroundStyle(.orange)
+                                .help("The pull request's comments anchor to the pushed head; lines may not match until you push.")
+                        }
+                        Button("Conversation") { ws.inspectorPane = .conversation; ws.showInspector = true }.buttonStyle(.link).font(.caption)
+                    }
+                    .padding(6)
+                    .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+                }
                 if let e = review.githubError { Text(e).font(.caption).foregroundStyle(.red).lineLimit(2) }
             }
             ImportanceBar(review: review)
@@ -153,6 +169,18 @@ struct ChangesView: View {
             }
         }
         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        if let b = review.linkedBookmark {
+            HStack(spacing: 4) {
+                Image(systemName: "link").font(.caption2)
+                Text(verbatim: "local review of \(b)").lineLimit(1).truncationMode(.middle)
+                if let sync = review.linkedInSync {
+                    Text("·")
+                    Text(sync ? "matches pushed head" : "local ahead of push").foregroundStyle(sync ? .green : .orange)
+                        .help(sync ? "" : "Comments anchor to the pushed head; lines may not match until you push.")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
         if !review.body.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text(review.body).font(.caption).foregroundStyle(.secondary).lineLimit(descriptionOpen ? 30 : 2)

@@ -63,6 +63,16 @@ group, filed under the tier of its most important member. "Group with Claude" (T
 model for logical groups as well. The Change context pane lists the rest of the selected hunk's group.
 J / K follow the list as shown.
 
+The editor shows the selected hunk's extent with a tier-colored bar and dashed rules, and a minimap
+of the whole file: diff colors, every hunk tinted by tier, the selected one outlined, the visible area.
+Hover a hunk on the minimap to see what it is; click to scroll there. Esc returns the context pane to
+the selected hunk after you have clicked around.
+
+A local review (the working copy, a jj change, a git branch) whose bookmark has an open pull request
+picks up that PR's threads, checks and review composer, while the diff is still computed locally. PR
+reviews fetch the PR head into the local repository once and diff locally; the last result is shown
+immediately on reopen while it refreshes.
+
 ### Review rules
 
 Classification is a rule file: `.spelunk/review.rules` in the repository, then

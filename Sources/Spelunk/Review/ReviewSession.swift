@@ -103,6 +103,11 @@ final class ReviewSession {
     var listMode: ListMode = ListMode(rawValue: UserDefaults.standard.string(forKey: "review.listMode") ?? "") ?? .importance {
         didSet { UserDefaults.standard.set(listMode.rawValue, forKey: "review.listMode") }
     }
+    /// The open pull request for a local review's bookmark, when there is one.
+    var linkedPR: Int?
+    var linkedBookmark: String?
+    var linkedPRHead: String?
+    var linkedInSync: Bool?
     var groups: [HunkGroup] = [] { didSet { layoutCache = nil } }
     var claudeGroups: [HunkGroup] = [] { didSet { layoutCache = nil } }
     /// Related hunks shown together inside the importance list.
@@ -326,6 +331,7 @@ final class ReviewSession {
             saveSnapshot(diffText)
             if Self.autoClassify { Task { await quickClassify() } }
             Task { await resolvePendingRules() }
+            if linkedPR == nil { Task { await linkPullRequest() } } else { Task { await checkLinkedHead() } }
         } catch {
             state = .failed(error.localizedDescription)
         }
