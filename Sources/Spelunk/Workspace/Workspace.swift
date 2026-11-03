@@ -177,7 +177,7 @@ final class Workspace {
         scm = SCMService(root: self.root)
         loadJobs()
         let store = Store.shared(for: self.root)
-        Task { await store.prune() }
+        Task { await store.prune(days: Prefs.cacheDays) }
         grammarObserver = NotificationCenter.default.addObserver(forName: .grammarsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reloadCurrentDocument() }
         }
@@ -209,7 +209,7 @@ final class Workspace {
         loadingFiles = false
         Log.debug("tree built")
         let isRust = FileManager.default.fileExists(atPath: root.appendingPathComponent("Cargo.toml").path)
-        if isRust && UserDefaults.standard.object(forKey: "autoStartRA") as? Bool ?? true { ra.start() }
+        if isRust && Prefs.autoStartServers { ra.start() }
         scip.loadCached(sourceFiles: allFiles)
         startWatching()
         Task { await refreshWorkingReview() }
@@ -247,7 +247,7 @@ final class Workspace {
         if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
         refreshTask?.cancel()
         refreshTask = Task {
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            try? await Task.sleep(for: .seconds(Prefs.refreshDelay))
             guard !Task.isCancelled else { return }
             await refreshWorkingReview()
             if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
@@ -616,7 +616,7 @@ final class Workspace {
     /// Sends a working-copy document to its language server, starting the server on first use.
     func openInServer(_ d: SourceDocument) {
         guard let srv = server(for: d.path) else { return }
-        if srv.status == .off, UserDefaults.standard.object(forKey: "autoStartRA") as? Bool ?? true { srv.start() }
+        if srv.status == .off, Prefs.autoStartServers { srv.start() }
         srv.didOpen(path: d.path, text: d.text, language: d.language)
     }
 

@@ -155,7 +155,10 @@ actor ProcessBudget {
     }
 
     private func key(_ tool: String) -> String { limits[tool] != nil ? tool : "*" }
-    private func limit(_ k: String) -> Int { limits[k] ?? defaultLimit }
+    private func limit(_ k: String) -> Int {
+        if k == "claude" { return Prefs.claudeConcurrency }
+        return limits[k] ?? defaultLimit
+    }
 
     func acquire(_ tool: String) async throws {
         let k = key(tool)

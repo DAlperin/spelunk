@@ -105,6 +105,7 @@ final class AppModel {
     init() {
         // Writes to a child process that has exited must fail with EPIPE, not kill the app.
         signal(SIGPIPE, SIG_IGN)
+        Prefs.register()
         Log.debug("AppModel.init")
         DebugBridge.shared.install(self)
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in

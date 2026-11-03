@@ -97,8 +97,8 @@ final class HoverController: NSObject, NSPopoverDelegate {
     private var shownRange: NSRange?
 
     /// Seconds the pointer must rest before the card appears.
-    static var delay: TimeInterval { UserDefaults.standard.object(forKey: "hover.delay") as? Double ?? 0.6 }
-    static var enabled: Bool { UserDefaults.standard.object(forKey: "hover.enabled") as? Bool ?? true }
+    static var delay: TimeInterval { Prefs.hoverDelay }
+    static var enabled: Bool { Prefs.hoverEnabled }
 
     func mouseMoved(at point: NSPoint) {
         guard Self.enabled, let tv = textView else { return }

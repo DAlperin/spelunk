@@ -47,7 +47,7 @@ extension Workspace {
                 for j in old { if let e = try? JSONEncoder().encode(j) { await store.putJob(id: j.id.uuidString, value: e, created: j.started) } }
                 try? FileManager.default.moveItem(at: legacy, to: legacy.appendingPathExtension("imported"))
             }
-            let saved = await store.jobs().compactMap { try? JSONDecoder().decode(ClaudeJob.self, from: $0) }
+            let saved = await store.jobs(limit: Prefs.keepJobs).compactMap { try? JSONDecoder().decode(ClaudeJob.self, from: $0) }
             let running = jobs
             jobs = saved.filter { s in !running.contains { $0.id == s.id } } + running
         }

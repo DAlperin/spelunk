@@ -24,7 +24,7 @@ final class IntelHub {
 
     /// While rust-analyzer is still warming up, the on-disk SCIP index answers instantly; it may
     /// trail the working copy, so rust-analyzer takes over as soon as it is ready.
-    private var scipFirst: Bool { !ra.isWarm && scip.index != nil }
+    private var scipFirst: Bool { Prefs.scipFirst && !ra.isWarm && scip.index != nil }
 
     /// File glob and item keywords for text-search fallbacks in a file's language.
     private func searchProfile(_ path: String) -> (glob: String, items: String) {

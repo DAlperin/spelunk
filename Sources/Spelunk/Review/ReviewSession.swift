@@ -108,7 +108,7 @@ final class ReviewSession {
     private var reloadPending = false
     var viewed: Set<String> = []
     var notes: [String: String] = [:]
-    var hideTiers: Set<ChangeTier> = [.mechanical]
+    var hideTiers: Set<ChangeTier> = Prefs.hideMechanical ? [.mechanical] : []
     var pullRequest: GitHubService.PullRequestDetails?
     var pendingComments: [PendingComment] = []
     var githubError: String?
@@ -663,8 +663,8 @@ final class ReviewSession {
     // MARK: Quick classification
 
     static var autoClassify: Bool {
-        get { UserDefaults.standard.object(forKey: "review.autoClassify") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "review.autoClassify") }
+        get { Prefs.autoClassify }
+        set { UserDefaults.standard.set(newValue, forKey: Prefs.Key.autoClassify) }
     }
 
     var classifyState: String?
@@ -688,7 +688,7 @@ final class ReviewSession {
         let model = ClaudeModels.label(Claude.model(for: .classify))
         var total = 0, cost = 0.0
         while true {
-            let batch = Array(classifyCandidates.prefix(120))
+            let batch = Array(classifyCandidates.prefix(Prefs.quickBatch))
             guard !batch.isEmpty else { break }
             classifyState = "Classifying \(batch.count) new hunks with \(model)…"
             var prompt = "Change: \(title)\n\nHunks:\n"

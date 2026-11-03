@@ -212,7 +212,7 @@ final class DocumentCache {
         cache[path] = (mtime, doc)
         touch(path)
         // Evict the least recently used documents rather than dropping the whole cache.
-        while cache.count > 300, let oldest = recent.first {
+        while cache.count > Prefs.documentCacheSize, let oldest = recent.first {
             recent.removeFirst()
             cache[oldest] = nil
         }

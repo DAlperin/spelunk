@@ -44,7 +44,7 @@ enum HunkGrouper {
         let inner = s.dropFirst()
         if s.contains("_") || inner.contains(where: \.isUppercase) || s.contains(where: \.isNumber) { return true }
         // A single plain word, capitalized or not, is usually English or a common type name.
-        return s.count >= 14
+        return s.count >= Prefs.groupDistinctLength
     }
 
     private static let identRE = try! NSRegularExpression(pattern: #"[A-Za-z_][A-Za-z0-9_]*"#)
@@ -122,7 +122,7 @@ enum HunkGrouper {
                     && Set(k.members.map { hunks[$0].path }).intersection(c.members.map { hunks[$0].path }).count > 0
                 // Compare against the group's original seed, not its grown union, so merging does not snowball.
                 let inter = Double(k.seed.intersection(c.members).count)
-                return related || inter / Double(k.seed.union(c.members).count) >= 0.6
+                return related || inter / Double(k.seed.union(c.members).count) >= Prefs.groupOverlap
             }) {
                 if !kept[i].symbols.contains(c.symbols[0]) { kept[i].symbols.append(c.symbols[0]) }
                 kept[i].members.formUnion(c.members)
@@ -132,7 +132,7 @@ enum HunkGrouper {
             var seeded = c
             seeded.seed = c.members
             kept.append(seeded)
-            if kept.count >= 80 { break }
+            if kept.count >= Prefs.groupMaxGroups { break }
         }
 
         return kept.map { c in

@@ -238,7 +238,7 @@ extension ReviewSession {
                     if let d = try? JSONEncoder().encode(r) { await store.putResults(task: ResultTask.attachment, [(a.key, d)]) }
                 }
             }
-            for a in missing where a.rule.auto && attachmentResults[a.key] == nil && (!a.needsTrust || repoCommandsTrusted) { runAttachment(a) }
+            for a in missing where Prefs.autoAttachments && a.rule.auto && attachmentResults[a.key] == nil && (!a.needsTrust || repoCommandsTrusted) { runAttachment(a) }
         }
     }
 

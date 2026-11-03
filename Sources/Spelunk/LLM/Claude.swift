@@ -132,7 +132,7 @@ enum Claude {
         }
         // Chunks arrive in order from one reader thread; split them into complete lines.
         let out = try await ProcessRunner.run(bin, args, cwd: cwd, environment: Shell.environment, stdin: Data(prompt.utf8),
-                                              timeout: 1800) { chunk in
+                                              timeout: Prefs.claudeTimeout) { chunk in
             for line in state.lines(appending: chunk) { handle(line) }
         }
         for line in state.lines(appending: Data([10])) { handle(line) }

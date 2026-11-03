@@ -330,7 +330,7 @@ final class LanguageServer {
         guard let client, initialized else { queuedOpens[path] = text; return }
         openOrder.removeAll { $0 == path }
         openOrder.append(path)
-        while openOrder.count > 24 { didClose(openOrder.removeFirst()) }
+        while openOrder.count > Prefs.openDocuments { didClose(openOrder.removeFirst()) }
         if let v = versions[path] {
             versions[path] = v + 1
             client.notify("textDocument/didChange", [

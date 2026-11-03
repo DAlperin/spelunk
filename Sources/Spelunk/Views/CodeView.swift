@@ -62,15 +62,16 @@ struct CodeView: NSViewRepresentable {
         gutter.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(scroll)
         host.addSubview(gutter)
-        let mapWidth: CGFloat = secondary ? 0 : MinimapView.width
         let minimap = MinimapView(textView: tv, coordinator: context.coordinator)
         minimap.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(minimap)
+        let mapWidth = minimap.widthAnchor.constraint(equalToConstant: secondary || !Prefs.minimap ? 0 : CGFloat(Prefs.minimapWidth))
+        context.coordinator.minimapWidth = mapWidth
         NSLayoutConstraint.activate([
             minimap.trailingAnchor.constraint(equalTo: host.trailingAnchor),
             minimap.topAnchor.constraint(equalTo: host.topAnchor),
             minimap.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            minimap.widthAnchor.constraint(equalToConstant: mapWidth),
+            mapWidth,
             scroll.leadingAnchor.constraint(equalTo: host.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: minimap.leadingAnchor),
             scroll.topAnchor.constraint(equalTo: host.topAnchor),
@@ -147,6 +148,8 @@ struct CodeView: NSViewRepresentable {
             c.hunkRegions = []
             c.hunkRegionsKey = ""
         }
+        let width: CGFloat = secondary || !Prefs.minimap ? 0 : CGFloat(Prefs.minimapWidth)
+        if c.minimapWidth?.constant != width { c.minimapWidth?.constant = width }
         c.gutter?.needsDisplay = true
         c.minimap?.needsDisplay = true
     }
@@ -209,6 +212,8 @@ struct CodeView: NSViewRepresentable {
         weak var gutter: GutterView?
         weak var minimap: MinimapView?
         let hover = HoverController()
+        /// Follows the minimap preferences while the editor is open.
+        var minimapWidth: NSLayoutConstraint?
         var hunkRegions: [HunkRegion] = []
         var hunkRegionsKey = ""
         var minimapWidths: [LineShape] = []
@@ -281,9 +286,9 @@ struct CodeView: NSViewRepresentable {
             let font = Theme.codeFont
             let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
             let para = NSMutableParagraphStyle()
-            para.lineHeightMultiple = 1.18
+            para.lineHeightMultiple = Prefs.lineSpacing
             para.tabStops = []
-            para.defaultTabInterval = font.advancement(forGlyph: font.glyph(withName: "space")).width * 4
+            para.defaultTabInterval = font.advancement(forGlyph: font.glyph(withName: "space")).width * CGFloat(Prefs.tabWidth)
             let attr = NSMutableAttributedString(string: display.text, attributes: [
                 .font: font, .foregroundColor: Theme.text, .paragraphStyle: para,
             ])
@@ -478,6 +483,7 @@ final class SourceTextView: NSTextView {
 
     /// The selected review hunk: a tier-colored bar down its left edge and hairlines above and below.
     private func drawHunkBoundary(_ dirtyRect: NSRect) {
+        guard Prefs.hunkBoundary else { return }
         let (region, display) = MainActor.assumeIsolated { (coordinator?.hunkRegions.first(where: \.selected), coordinator?.display) }
         guard let region, let display, let lm = layoutManager, display.ns.length > 0 else { return }
         func fragment(_ dl: Int) -> NSRect {

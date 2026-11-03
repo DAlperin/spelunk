@@ -44,7 +44,7 @@ enum Theme {
     }
 
     static var codeFont: NSFont {
-        let size = CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonZero ?? 13)
+        let size = CGFloat(Prefs.fontSize.nonZero ?? 13)
         return NSFont(name: "SF Mono", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }
