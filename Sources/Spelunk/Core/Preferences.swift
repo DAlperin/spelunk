@@ -39,7 +39,7 @@ enum Prefs {
         static let headServer = "intel.headServer"
     }
 
-    static let defaults: [String: Any] = [
+    nonisolated(unsafe) static let defaults: [String: Any] = [
         Key.fontSize: 13.0,
         Key.lineSpacing: 1.18,
         Key.tabWidth: 4,

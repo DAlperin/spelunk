@@ -55,7 +55,7 @@ struct AttachmentPayload: Codable, Hashable {
 
     var isEmpty: Bool { summary == nil && (findings ?? []).isEmpty && (examples ?? []).isEmpty && (actions ?? []).isEmpty }
 
-    static let schema: [String: Any] = [
+    nonisolated(unsafe) static let schema: [String: Any] = [
         "type": "object",
         "properties": [
             "summary": ["type": "string", "description": "Two or three sentences of Markdown at most."],

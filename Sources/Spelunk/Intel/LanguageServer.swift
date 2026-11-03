@@ -115,18 +115,16 @@ final class LanguageServer {
     /// True once the server has finished its startup indexing.
     var isWarm: Bool { status == .ready }
 
-    private static let binaryLock = NSLock()
+    private nonisolated static let binaryLock = NSLock()
     nonisolated(unsafe) private static var cachedBinaries: [String: String?] = [:]
 
     /// Locates the server binary off the main thread; cached per server until the path setting changes.
     nonisolated static func resolveBinary(_ spec: LanguageServerSpec) async -> String? {
         let custom = UserDefaults.standard.string(forKey: spec.pathKey) ?? ""
         let key = spec.name + "\u{1}" + custom
-        binaryLock.lock()
-        if let c = cachedBinaries[key] { binaryLock.unlock(); return c }
-        binaryLock.unlock()
+        if let c = binaryLock.withLock({ cachedBinaries[key] }) { return c }
         let found = await Task.detached(priority: .userInitiated) { locateBinary(spec) }.value
-        binaryLock.lock(); cachedBinaries[key] = .some(found); binaryLock.unlock()
+        binaryLock.withLock { cachedBinaries[key] = .some(found) }
         return found
     }
 
@@ -179,7 +177,8 @@ final class LanguageServer {
         let c = LSPClient(executable: bin, args: spec.args, cwd: root)
         if Log.enabled, let filter = ProcessInfo.processInfo.environment["SPELUNK_RA_LOG"] { c.environment["RA_LOG"] = filter }
         c.onNotification = { [weak self] method, params in
-            Task { @MainActor in self?.handleNotification(method, params) }
+            let box = JSONBox(value: params)
+            Task { @MainActor in self?.handleNotification(method, box.value) }
         }
         let spec = self.spec
         c.onServerRequest = { method, params in
@@ -385,7 +384,7 @@ final class LanguageServer {
         }
     }
 
-    private func call(_ method: String, _ params: Any, timeout: TimeInterval = 30) async throws -> Any? {
+    private func call(_ method: String, _ params: sending Any, timeout: TimeInterval = 30) async throws -> Any? {
         guard let client, status.isUsable else { throw LSPError(message: "\(spec.name) is \(status.label.lowercased())") }
         return try await client.request(method, params, timeout: timeout)
     }

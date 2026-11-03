@@ -16,7 +16,7 @@ let package = Package(
                 "TreeSitterRustGrammar",
             ],
             path: "Sources/Spelunk",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "TreeSitterRustGrammar",
@@ -30,7 +30,7 @@ let package = Package(
             name: "SpelunkTests",
             dependencies: ["Spelunk"],
             path: "Tests/SpelunkTests",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
 )

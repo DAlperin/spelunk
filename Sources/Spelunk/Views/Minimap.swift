@@ -108,9 +108,7 @@ final class MinimapView: NSView {
         bounds.fill()
         NSColor.separatorColor.withAlphaComponent(0.4).setFill()
         NSRect(x: 0, y: 0, width: 1, height: bounds.height).fill()
-        let (display, regions, widths) = MainActor.assumeIsolated {
-            (coordinator?.display, coordinator?.hunkRegions ?? [], coordinator?.minimapWidths ?? [])
-        }
+        let (display, regions, widths) = (coordinator?.display, coordinator?.hunkRegions ?? [], coordinator?.minimapWidths ?? [])
         guard let display, let tv = textView, display.lines.lineCount > 0 else { return }
         let s = scale
         let barH = max(1, min(2, s - (s > 1.5 ? 0.5 : 0)))
@@ -173,7 +171,7 @@ final class MinimapView: NSView {
     }
 
     private func region(at y: CGFloat) -> HunkRegion? {
-        let regions = MainActor.assumeIsolated { coordinator?.hunkRegions ?? [] }
+        let regions = coordinator?.hunkRegions ?? []
         let l = line(atY: y)
         let slack = max(1, Int(3 / max(scale, 0.01)))
         return regions.first { $0.lines.lowerBound - slack <= l && l <= $0.lines.upperBound + slack }

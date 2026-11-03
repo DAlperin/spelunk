@@ -6,6 +6,12 @@ struct LSPError: Error, LocalizedError {
 }
 
 /// Minimal JSON-RPC 2.0 client over a child process's stdio.
+/// A decoded JSON value handed between threads. JSON values are trees of value types and
+/// Foundation containers that are not mutated after decoding.
+struct JSONBox: @unchecked Sendable {
+    let value: Any?
+}
+
 final class LSPClient: @unchecked Sendable {
     private let process = Process()
     private let input = Pipe()
@@ -14,7 +20,7 @@ final class LSPClient: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = Data()
     private var nextId = 1
-    private var pending: [Int: CheckedContinuation<Any?, Error>] = [:]
+    private var pending: [Int: CheckedContinuation<JSONBox, Error>] = [:]
     private let writeQueue = DispatchQueue(label: "spelunk.lsp.write")
 
     var onNotification: (@Sendable (String, Any?) -> Void)?
@@ -74,12 +80,12 @@ final class LSPClient: @unchecked Sendable {
         }
     }
 
-    func request(_ method: String, _ params: Any?, timeout: TimeInterval = 60) async throws -> Any? {
+    func request(_ method: String, _ params: sending Any?, timeout: TimeInterval = 60) async throws -> Any? {
         let id = allocateID()
         var msg: [String: Any] = ["jsonrpc": "2.0", "id": id, "method": method]
         if let params { msg["params"] = params }
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Any?, Error>) in
+        let box = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<JSONBox, Error>) in
                 lock.lock()
                 pending[id] = cont
                 lock.unlock()
@@ -92,6 +98,7 @@ final class LSPClient: @unchecked Sendable {
             self.notify("$/cancelRequest", ["id": id])
             self.fail(id, CancellationError())
         }
+        return box.value
     }
 
     private func allocateID() -> Int {
@@ -166,7 +173,7 @@ final class LSPClient: @unchecked Sendable {
             c?.resume(throwing: LSPError(message: (err["message"] as? String) ?? "LSP error"))
         } else {
             let r = m["result"]
-            c?.resume(returning: (r is NSNull) ? nil : r)
+            c?.resume(returning: JSONBox(value: (r is NSNull) ? nil : r))
         }
     }
 }

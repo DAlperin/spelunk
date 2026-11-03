@@ -456,7 +456,7 @@ final class SourceTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawHunkBoundary(dirtyRect)
-        let (pills, display) = MainActor.assumeIsolated { (coordinator?.stepPills ?? [:], coordinator?.display) }
+        let (pills, display) = (coordinator?.stepPills ?? [:], coordinator?.display)
         guard !pills.isEmpty, let display, let lm = layoutManager, display.ns.length > 0 else { return }
         let font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
         for (line, step) in pills {
@@ -484,7 +484,7 @@ final class SourceTextView: NSTextView {
     /// The selected review hunk: a tier-colored bar down its left edge and hairlines above and below.
     private func drawHunkBoundary(_ dirtyRect: NSRect) {
         guard Prefs.hunkBoundary else { return }
-        let (region, display) = MainActor.assumeIsolated { (coordinator?.hunkRegions.first(where: \.selected), coordinator?.display) }
+        let (region, display) = (coordinator?.hunkRegions.first(where: \.selected), coordinator?.display)
         guard let region, let display, let lm = layoutManager, display.ns.length > 0 else { return }
         func fragment(_ dl: Int) -> NSRect {
             let off = display.lines.starts[min(dl, display.lines.lineCount - 1)]
@@ -549,10 +549,8 @@ final class SourceTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let p = convert(event.locationInWindow, from: nil)
-        return MainActor.assumeIsolated {
-            guard let pos = coordinator?.position(at: p) else { return super.menu(for: event) }
-            return coordinator?.menu(at: pos)
-        }
+        guard let pos = coordinator?.position(at: p) else { return super.menu(for: event) }
+        return coordinator?.menu(at: pos)
     }
 
     override func flagsChanged(with event: NSEvent) {
@@ -586,11 +584,10 @@ final class GutterView: NSView {
         Theme.gutter.setFill()
         bounds.fill()
         guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
-        let (diff, diags, trace, marks, display, selLine, comments) = MainActor.assumeIsolated {
+        let (diff, diags, trace, marks, display, selLine, comments) =
             (coordinator?.diffMarkers ?? [:], coordinator?.diagnostics ?? [], coordinator?.traceLines ?? [],
              coordinator?.bookmarkedLines ?? [], coordinator?.display, coordinator?.ws.cursor?.line, coordinator?.commentLines ?? [:])
-        }
-        let (badges, currentStep) = MainActor.assumeIsolated { (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine) }
+        let (badges, currentStep) = (coordinator?.stepBadges ?? [:], coordinator?.currentStepLine)
         guard let display, display.ns.length > 0 else { return }
         let visible = tv.visibleRect
         let glyphRange = lm.glyphRange(forBoundingRect: visible, in: tc)

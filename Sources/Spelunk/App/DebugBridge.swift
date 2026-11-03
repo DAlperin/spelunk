@@ -320,6 +320,9 @@ final class DebugBridge {
     }
 
     private static var recordTimer: Timer?
+    /// A frame is being encoded; the next tick skips rather than queueing behind it.
+    private static var recordBusy = false
+    private static var recordIndex = 0
     private static let recordQueue = DispatchQueue(label: "spelunk.record")
 
     /// Writes the main window as JPEG frames plus `frames.txt` (index and seconds since start) into
@@ -329,25 +332,25 @@ final class DebugBridge {
         Self.recordTimer?.invalidate()
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let start = Date()
-        var index = 0
-        var busy = false
+        Self.recordIndex = 0
+        Self.recordBusy = false
         let log = URL(fileURLWithPath: dir).appendingPathComponent("frames.txt")
         FileManager.default.createFile(atPath: log.path, contents: nil)
         let handle = try? FileHandle(forWritingTo: log)
         Self.recordTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             MainActor.assumeIsolated {
-                guard !busy, let w = self.mainWindow,
+                guard !Self.recordBusy, let w = self.mainWindow,
                       let img = self.composited(w) else { return }
-                busy = true
-                let i = index, t = Date().timeIntervalSince(start)
-                index += 1
+                Self.recordBusy = true
+                let i = Self.recordIndex, t = Date().timeIntervalSince(start)
+                Self.recordIndex += 1
                 Self.recordQueue.async {
                     let name = String(format: "f%05d.jpg", i)
                     if let data = NSBitmapImageRep(cgImage: img).representation(using: .jpeg, properties: [.compressionFactor: 0.9]) {
                         try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
                         handle?.write(Data(String(format: "%@ %.3f\n", name, t).utf8))
                     }
-                    DispatchQueue.main.async { busy = false }
+                    Task { @MainActor in Self.recordBusy = false }
                 }
             }
         }

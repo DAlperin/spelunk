@@ -26,7 +26,7 @@ final class ChangeContext {
 }
 
 extension Workspace {
-    static let callKeywords: Set<String> = ["if", "while", "for", "match", "return", "Some", "Ok", "Err", "None", "loop", "fn",
+    nonisolated static let callKeywords: Set<String> = ["if", "while", "for", "match", "return", "Some", "Ok", "Err", "None", "loop", "fn",
                                              "assert", "assert_eq", "println", "format", "vec", "write", "writeln", "matches"]
 
     /// Locations a review hunk covers in the working copy's version of the file, for "in this change".

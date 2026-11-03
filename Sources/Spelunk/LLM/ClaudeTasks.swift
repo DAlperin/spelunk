@@ -16,7 +16,7 @@ enum ClaudeTasks {
         var steps: [Step]
     }
 
-    static let traceSchema: [String: Any] = [
+    nonisolated(unsafe) static let traceSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "title": ["type": "string", "description": "Short name for the path, e.g. 'SUBSCRIBE request to compute replica'"],
@@ -122,7 +122,7 @@ enum ClaudeTasks {
 
     struct RuleQuestionResponse: Decodable { var yes: [String] }
 
-    static let ruleQuestionSchema: [String: Any] = [
+    nonisolated(unsafe) static let ruleQuestionSchema: [String: Any] = [
         "type": "object",
         "properties": ["yes": ["type": "array", "items": ["type": "string"]]],
         "required": ["yes"],
@@ -168,7 +168,7 @@ enum ClaudeTasks {
         var groups: [Group]
     }
 
-    static let groupSchema: [String: Any] = [
+    nonisolated(unsafe) static let groupSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "groups": [
@@ -192,7 +192,7 @@ enum ClaudeTasks {
         var hunks: [Item]
     }
 
-    static let classifySchema: [String: Any] = [
+    nonisolated(unsafe) static let classifySchema: [String: Any] = [
         "type": "object",
         "properties": [
             "hunks": [
@@ -225,7 +225,7 @@ enum ClaudeTasks {
         var hunks: [Item]
     }
 
-    static let triageSchema: [String: Any] = [
+    nonisolated(unsafe) static let triageSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "overview": ["type": "string", "description": "What the change does and where the risk is, 3-6 sentences"],

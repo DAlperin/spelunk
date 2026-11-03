@@ -73,11 +73,11 @@ enum VCS {
     }
 }
 
-final class FileNode: Identifiable, Hashable {
+final class FileNode: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let path: String
-    var children: [FileNode]?
+    let children: [FileNode]?
     var isDirectory: Bool { children != nil }
 
     init(name: String, path: String, children: [FileNode]?) {

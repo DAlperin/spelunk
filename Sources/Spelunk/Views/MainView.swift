@@ -142,13 +142,14 @@ struct MainView: View {
         .onAppear {
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws, host] e in
-                MainActor.assumeIsolated {
+                let handled = MainActor.assumeIsolated { () -> Bool in
                     // Every window installs a monitor and each sees every key; only the window the
                     // key was typed in handles it.
                     guard let w = e.window, w === host.window, w.isVisible, w.attachedSheet == nil, !w.isSheet,
-                          !ReviewKeys.focusIsTextInput() else { return e }
-                    return ReviewKeys.handle(e, ws: ws) ? nil : e
+                          !ReviewKeys.focusIsTextInput() else { return false }
+                    return ReviewKeys.handle(e, ws: ws)
                 }
+                return handled ? nil : e
             }
         }
         .onDisappear { if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil } }

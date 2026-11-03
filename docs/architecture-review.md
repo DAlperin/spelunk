@@ -95,15 +95,13 @@ Each phase lands, builds and tests on its own.
 
 ## Status
 
-Phases 1 to 7 have landed, plus a storage phase that replaced the ad hoc JSON files with a
-per-repository SQLite store (results by content, review state by resolved identity, drafts, jobs).
-Not done yet:
+All phases have landed, plus a storage phase that replaced the ad hoc JSON files with a
+per-repository SQLite store (results by content, review state by resolved identity, drafts, jobs,
+code paths and bookmarks). Since then:
 
-- Swift 6 language mode. Both targets still build in Swift 5 mode, so `@unchecked Sendable` and
-  `assumeIsolated` claims are unchecked; turning it on file by file is the next concurrency step.
-- A code-intelligence instance for review heads. Answers for a pull request's head are still asked
-  of the working copy at the mapped position; a second rust-analyzer rooted at the head worktree
-  would make them exact.
-- Moving traces and bookmarks into the store (they still use JSON files, now with versioned
-  locations and debounced writes).
-- Out-of-process parsing for third-party grammars.
+- Both targets build in Swift 6 language mode, so isolation and `Sendable` are checked by the
+  compiler. The remaining `@unchecked Sendable` types are lock-protected or immutable after
+  construction (JSON payloads, documents, process handles); each is a deliberate exception.
+- Review heads can get their own rust-analyzer, so answers for PR code come from the PR's code.
+- Third-party grammars are checked in a child process before they load, and parses are time
+  limited. Parsing itself still runs in the app; moving it to a separate process remains open.
