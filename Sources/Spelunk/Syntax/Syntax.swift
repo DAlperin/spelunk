@@ -214,15 +214,23 @@ enum RustSyntax {
         let cursor = root.treeCursor
         var errors = 0
         // Iterative pre-order walk with a cursor: far cheaper than recursing through Node wrappers.
+        // The cursor's ancestors, so classifying needs no parent lookups, which tree-sitter answers by
+        // descending from the root again.
+        var ancestors: [Node?] = []
         var done = false
         while !done {
-            if let n = cursor.currentNode {
-                classify(n, ns: ns, into: &tokens)
+            let n = cursor.currentNode
+            if let n {
+                classify(n, parent: ancestors.last ?? nil, grandparent: ancestors.dropLast().last ?? nil, ns: ns, into: &tokens)
                 if n.nodeType == "ERROR" || n.isMissing { errors += 1 }
             }
-            if cursor.goToFirstChild() { continue }
+            if cursor.goToFirstChild() {
+                ancestors.append(n)
+                continue
+            }
             while !cursor.gotoNextSibling() {
                 if !cursor.gotoParent() { done = true; break }
+                _ = ancestors.popLast()
             }
         }
         info.tokens = tokens
@@ -323,7 +331,7 @@ enum RustSyntax {
         return t.trimmingCharacters(in: CharacterSet(charactersIn: "&* ")).replacingOccurrences(of: "mut ", with: "")
     }
 
-    private static func classify(_ n: Node, ns: NSString, into tokens: inout [Token]) {
+    private static func classify(_ n: Node, parent: Node?, grandparent: Node?, ns: NSString, into tokens: inout [Token]) {
         guard let type = n.nodeType else { return }
         let r = n.range
         func add(_ k: TokenKind) { tokens.append(Token(range: r, kind: k)) }
@@ -346,14 +354,14 @@ enum RustSyntax {
                 tokens.append(Token(range: NSRange(location: m.range.location, length: m.range.length + 1), kind: .macro))
             }
         case "identifier":
-            guard let p = n.parent, let pt = p.nodeType else { return }
+            guard let p = parent, let pt = p.nodeType else { return }
             switch pt {
             case "function_item", "function_signature_item":
                 if p.child(byFieldName: "name")?.range == r { add(.function) }
             case "call_expression":
                 if p.child(byFieldName: "function")?.range == r { add(.function) }
             case "scoped_identifier":
-                if p.child(byFieldName: "name")?.range == r, let gp = p.parent, gp.nodeType == "call_expression" {
+                if p.child(byFieldName: "name")?.range == r, let gp = grandparent, gp.nodeType == "call_expression" {
                     add(.function)
                 } else if p.child(byFieldName: "path")?.range == r {
                     let s = ns.substring(with: r)
@@ -371,7 +379,7 @@ enum RustSyntax {
                 else if let f = s.first, f.isUppercase { add(.type) }
             }
         case "field_expression":
-            if let gp = n.parent, gp.nodeType == "call_expression", let f = n.child(byFieldName: "field") {
+            if let gp = parent, gp.nodeType == "call_expression", let f = n.child(byFieldName: "field") {
                 tokens.append(Token(range: f.range, kind: .function))
             }
         default:
