@@ -1,38 +1,84 @@
 import SwiftUI
 
+/// One window: a repository, or the welcome screen until one is chosen.
 struct RootView: View {
+    @SceneStorage("repoPath") private var path = ""
     @Environment(AppModel.self) var model
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.controlActiveState) private var activeState
+    @State private var ws: Workspace?
+    @State private var window: NSWindow?
 
     var body: some View {
         Group {
-            if let ws = model.workspace {
+            if let ws {
                 MainView(ws: ws).id(ObjectIdentifier(ws))
             } else {
-                WelcomeView()
+                WelcomeView(path: $path)
             }
         }
+        .background(WindowReader { window = $0; register() })
         .onAppear {
-            Log.debug("RootView appeared")
             model.openSettings = { openSettings() }
+            model.openBlankWindow = { openWindow(id: "main") }
+            // A restored window whose repository is open elsewhere, or a new window, takes a queued one.
+            if !path.isEmpty, model.isOpen(path) { path = "" }
+            if path.isEmpty, let p = model.takePendingPath() { path = p }
+            attach()
         }
+        .onChange(of: path) { old, _ in
+            if !old.isEmpty, old != path { model.release(old) }
+            attach()
+        }
+        .onChange(of: activeState) { if activeState == .key, !path.isEmpty { model.activePath = path } }
+        .onDisappear { if !path.isEmpty { model.release(path) } }
     }
+
+    private func attach() {
+        guard !path.isEmpty else { ws = nil; return }
+        ws = model.workspace(for: path)
+        register()
+        if activeState == .key || model.activePath == nil { model.activePath = path }
+    }
+
+    private func register() {
+        if let window, !path.isEmpty { model.windows[path] = window }
+    }
+}
+
+/// Hands back the NSWindow hosting a view.
+struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow) -> Void
+    init(_ found: @escaping (NSWindow) -> Void) { self.found = found }
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { if let w = v.window { found(w) } }
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
 struct WelcomeView: View {
     @Environment(AppModel.self) var model
+    @Binding var path: String
+
+    /// Opens here, unless the repository already has a window, which comes forward instead.
+    private func choose(_ p: String) {
+        if model.isOpen(p) { model.open(URL(fileURLWithPath: p)) } else { path = p }
+    }
 
     var body: some View {
         VStack(spacing: 18) {
             Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 44)).foregroundStyle(.secondary)
             Text("Spelunk").font(.largeTitle.weight(.semibold))
-            Text("Read, trace and review Rust code.").foregroundStyle(.secondary)
-            Button("Open Repository…") { model.openPanel() }.keyboardShortcut("o").controlSize(.large)
+            Text("Read, trace and review code.").foregroundStyle(.secondary)
+            Button("Open Repository…") { if let u = model.chooseRepository() { choose(u.standardizedFileURL.path) } }.controlSize(.large)
             if !model.recent.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Recent").font(.caption).foregroundStyle(.secondary)
                     ForEach(model.recent, id: \.self) { p in
-                        Button { model.open(URL(fileURLWithPath: p)) } label: {
+                        Button { choose(p) } label: {
                             HStack {
                                 Image(systemName: "folder")
                                 Text(p.lastPathComponent).fontWeight(.medium)

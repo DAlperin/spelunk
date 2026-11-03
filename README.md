@@ -6,13 +6,17 @@ A native macOS code viewer for reading, tracing and reviewing Rust code.
 
 ```sh
 ./scripts/bundle.sh            # release build -> dist/Spelunk.app
-open dist/Spelunk.app --args ~/path/to/repo
+open dist/Spelunk.app --args -repo ~/path/to/repo
 swift test                     # unit tests
 SPELUNK_IT_REPO=~/some/cargo/repo swift test --filter IntegrationTests
 ```
 
 Requires macOS 15+, Xcode 16+. Optional tools, found on `PATH` or in the usual places:
-`rust-analyzer` (also picked up from Zed and VS Code installs), `rg`, `jj`, `git`, `gh`, `cargo`, `claude`.
+`rust-analyzer` (also picked up from Zed and VS Code installs), `sourcekit-lsp` (from Xcode), `rg`,
+`jj`, `git`, `gh`, `cargo`, `claude`.
+
+Each repository opens in its own window (⌘O, or ⌘N for a new window); windows come back on relaunch.
+Swift support needs the Swift grammar from Settings › Languages › Presets.
 
 ## Code intelligence
 

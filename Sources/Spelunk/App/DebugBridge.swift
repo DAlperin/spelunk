@@ -25,6 +25,15 @@ final class DebugBridge {
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
         guard let verb = parts.first else { return }
         let arg = parts.count > 1 ? parts[1] : ""
+        switch verb {
+        case "openrepo": model?.open(URL(fileURLWithPath: arg)); return
+        case "newwindow": model?.openBlankWindow?(); return
+        case "windows":
+            Log.debug("windows: " + NSApp.windows.map { "\($0.title)[\(Int($0.frame.width)) visible=\($0.isVisible)]" }.joined(separator: ", ")
+                      + " workspaces=\(model?.workspaces.keys.sorted() ?? []) active=\(model?.activePath ?? "-")")
+            return
+        default: break
+        }
         guard let ws = model?.workspace else {
             if verb == "snapshot" { snapshot(arg) }
             return
@@ -82,7 +91,7 @@ final class DebugBridge {
         case "dump": dump(ws)
         case "hitchain":
             let n = arg.split(separator: " ").compactMap { Double($0) }
-            guard n.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }),
+            guard n.count == 2, let w = mainWindow,
                   let root = w.contentView?.superview else { break }
             let p = NSPoint(x: n[0], y: w.frame.height - n[1])
             func walk(_ v: NSView, _ depth: Int) {
@@ -95,7 +104,7 @@ final class DebugBridge {
         case "mode": ws.setDiffMode(DiffMode(rawValue: arg.capitalized) ?? .inline)
         case "key":
             // key <chars>, posted through the event queue so local monitors see it.
-            guard let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }) else { break }
+            guard let w = mainWindow else { break }
             w.makeKeyAndOrderFront(nil)
             w.makeFirstResponder(w.contentView?.firstSubview(ofType: SourceTextView.self))
             for ch in arg {
@@ -109,7 +118,7 @@ final class DebugBridge {
         case "clickat":
             // clickat <x> <y> in points from the window's top-left; goes through normal event dispatch.
             let n = arg.split(separator: " ").compactMap { Double($0) }
-            guard n.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }) else { break }
+            guard n.count == 2, let w = mainWindow else { break }
             let p = NSPoint(x: n[0], y: w.frame.height - n[1])
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -164,7 +173,7 @@ final class DebugBridge {
         case "winframe":
             // x y w h in screen points, measured from the top-left of the main screen.
             let n = arg.split(separator: " ").compactMap { Double($0) }
-            if n.count == 4, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet }), let screen = NSScreen.screens.first {
+            if n.count == 4, let w = mainWindow, let screen = NSScreen.screens.first {
                 w.setFrame(NSRect(x: n[0], y: screen.frame.height - n[1] - n[3], width: n[2], height: n[3]), display: true, animate: false)
             }
         case "geom":
@@ -216,6 +225,12 @@ final class DebugBridge {
         Log.debug("DUMP\n" + s)
     }
 
+    /// The active repository's window, else the first main window on screen.
+    private var mainWindow: NSWindow? {
+        if let p = model?.activePath, let w = model?.windows[p], w.isVisible { return w }
+        return NSApp.windows.first { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && !$0.title.contains("Settings") }
+    }
+
     /// Output paths are confined to temporary directories.
     private func allowed(_ path: String) -> Bool {
         let p = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
@@ -225,7 +240,7 @@ final class DebugBridge {
 
     private func snapshot(_ path: String, viaWindowServer: Bool = true) {
         guard allowed(path) else { Log.debug("snapshot path refused: \(path)"); return }
-        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && $0.title != "Settings" && !$0.title.contains("Settings") }) else { return }
+        guard let window = mainWindow else { return }
         if viaWindowServer { capture(window, to: path); return }
         guard let view = window.contentView?.superview ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
@@ -291,7 +306,7 @@ final class DebugBridge {
         let handle = try? FileHandle(forWritingTo: log)
         Self.recordTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             MainActor.assumeIsolated {
-                guard !busy, let w = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && !$0.title.contains("Settings") }),
+                guard !busy, let w = self.mainWindow,
                       let img = self.composited(w) else { return }
                 busy = true
                 let i = index, t = Date().timeIntervalSince(start)

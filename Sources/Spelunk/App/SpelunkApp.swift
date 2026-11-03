@@ -7,15 +7,19 @@ struct SpelunkApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("Spelunk") {
+        // One repository per window. Each window keeps its repository in scene storage, so windows
+        // come back on relaunch; opening a repository that already has a window brings it forward.
+        WindowGroup("Spelunk", id: "main") {
             RootView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 640)
         }
+
         .defaultSize(width: 1560, height: 980)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("New Window") { model.openBlankWindow?() }.keyboardShortcut("n")
                 Button("Open Repository…") { model.openPanel() }.keyboardShortcut("o")
             }
             CommandMenu("Navigate") {
@@ -77,11 +81,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
+/// App-wide state: the open workspaces (one per repository window), the window in front, and
+/// recently opened repositories.
 @MainActor @Observable
 final class AppModel {
-    var workspace: Workspace?
+    /// Open workspaces by repository path.
+    private(set) var workspaces: [String: Workspace] = [:]
+    /// The repository of the key window.
+    var activePath: String?
+    /// The key window's workspace; menu commands act on it.
+    var workspace: Workspace? { activePath.flatMap { workspaces[$0] } }
     var focusFilter = false
     @ObservationIgnored var openSettings: (() -> Void)?
+    @ObservationIgnored var openBlankWindow: (() -> Void)?
+    /// Repositories waiting for a new window to take them.
+    @ObservationIgnored private var pendingOpens: [String] = []
+    /// Each repository's window, to bring forward instead of opening a second one.
+    @ObservationIgnored var windows: [String: NSWindow] = [:]
+    /// A repository passed on the command line, taken by the first window that appears.
+    @ObservationIgnored private var launchPath: String?
     var recent: [String] = UserDefaults.standard.stringArray(forKey: "recentRepos") ?? []
 
     init() {
@@ -90,32 +108,70 @@ final class AppModel {
         Log.debug("AppModel.init")
         DebugBridge.shared.install(self)
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.workspace?.shutdown() }
+            MainActor.assumeIsolated { self?.workspaces.values.forEach { $0.shutdown() } }
         }
+        // `-repo <path>` arrives through the arguments defaults domain. A bare path argument is
+        // treated by AppKit as a document to open, which suppresses the first window.
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
-        if let p = args.first {
+        if let p = UserDefaults.standard.string(forKey: "repo") ?? args.first {
             let url = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
-            if FileManager.default.fileExists(atPath: url.path) { open(url) }
+            if FileManager.default.fileExists(atPath: url.path) { launchPath = url.standardizedFileURL.path }
         }
     }
 
-    func openPanel() {
+    /// A repository for a window that has none: the command-line one, then any queued by `open`.
+    func takePendingPath() -> String? {
+        if let p = launchPath { launchPath = nil; return p }
+        return pendingOpens.isEmpty ? nil : pendingOpens.removeFirst()
+    }
+
+    /// The workspace for a repository window, created and started on first use.
+    func workspace(for path: String) -> Workspace {
+        if let ws = workspaces[path] { return ws }
+        let ws = Workspace(root: URL(fileURLWithPath: path))
+        workspaces[path] = ws
+        remember(path)
+        Task { await ws.start() }
+        return ws
+    }
+
+    /// Called when a repository's window closes.
+    func release(_ path: String) {
+        workspaces.removeValue(forKey: path)?.shutdown()
+        windows[path] = nil
+        if activePath == path { activePath = nil }
+    }
+
+    func isOpen(_ path: String) -> Bool { workspaces[path] != nil }
+
+    private func remember(_ path: String) {
+        recent.removeAll { $0 == path }
+        recent.insert(path, at: 0)
+        recent = Array(recent.prefix(10))
+        UserDefaults.standard.set(recent, forKey: "recentRepos")
+    }
+
+    func chooseRepository() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = "Open"
-        if panel.runModal() == .OK, let url = panel.url { open(url) }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// Opens a repository in its own window (or brings its window forward).
+    func openPanel() {
+        if let url = chooseRepository() { open(url) }
     }
 
     func open(_ url: URL) {
-        workspace?.shutdown()
-        let ws = Workspace(root: url)
-        workspace = ws
-        recent.removeAll { $0 == url.path }
-        recent.insert(url.path, at: 0)
-        recent = Array(recent.prefix(10))
-        UserDefaults.standard.set(recent, forKey: "recentRepos")
-        Task { await ws.start() }
+        let path = url.standardizedFileURL.path
+        if let w = windows[path] {
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        pendingOpens.append(path)
+        openBlankWindow?()
     }
 }
 
