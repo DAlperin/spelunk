@@ -166,9 +166,10 @@ final class IntelHub {
         opts.globs = [profile.glob]
         opts.limit = 50
         let hits = (try? await TextSearch.search(root: root, query: pattern, options: opts)) ?? []
+        let found = await docs.documents(hits.map(\.path))
         var out: [CodeLocation] = []
         for h in hits {
-            guard let doc = docs.document(h.path) else { continue }
+            guard let doc = found[h.path] else { continue }
             if let item = doc.syntax.flatOutline.first(where: { $0.name == name && $0.nameRange.start.line == h.line }) {
                 out.append(CodeLocation(path: h.path, range: item.nameRange))
             }
@@ -263,7 +264,15 @@ final class IntelHub {
 
     func expand(_ node: CallNode, _ direction: CallDirection) async {
         guard node.children == nil, !node.isLoading else { return }
-        defer { node.children?.forEach(markTest) }
+        await expandChildren(node, direction)
+        guard let children = node.children else { return }
+        let found = await docs.documents(children.map(\.location.path))
+        for n in children {
+            n.isTest = FileClassifier.isTest(n.location.path) || (found[n.location.path]?.syntax.isTestLine(n.location.line) ?? false)
+        }
+    }
+
+    private func expandChildren(_ node: CallNode, _ direction: CallDirection) async {
         if node.isRecursive { node.children = []; node.note = "Recursive branch stopped"; return }
         node.isLoading = true
         defer { node.isLoading = false }
@@ -280,11 +289,6 @@ final class IntelHub {
             ? await fallbackCallers(of: node, ancestry: ancestry)
             : await fallbackCallees(of: node, ancestry: ancestry)
         if node.children?.isEmpty == true { node.note = direction == .incoming ? "No callers found" : "No calls found" }
-    }
-
-    private func markTest(_ n: CallNode) {
-        let path = n.location.path
-        n.isTest = FileClassifier.isTest(path) || (docs.document(path)?.syntax.isTestLine(n.location.line) ?? false)
     }
 
     /// Callers of a function known only by name (for example one a diff removed calls to), found by
@@ -312,10 +316,11 @@ final class IntelHub {
             sites = ((try? await TextSearch.search(root: root, query: q, options: opts)) ?? []).map(\.location)
             source = .textSearch
         }
+        let found = await docs.documents(sites.map(\.path))
         var groups: [String: (OutlineItem, String, [CodeLocation])] = [:]
         var order: [String] = []
         for s in sites {
-            guard let doc = docs.document(s.path), let item = doc.syntax.enclosingItem(line: s.line),
+            guard let doc = found[s.path], let item = doc.syntax.enclosingItem(line: s.line),
                   item.kind == .function || item.kind == .method else { continue }
             if item.nameRange.start.line == s.line && item.name == node.name { continue }
             let key = "\(s.path)#\(item.nameRange.start.line)"

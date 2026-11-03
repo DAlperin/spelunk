@@ -203,12 +203,49 @@ final class DocumentCache {
 
     func url(for path: String) -> URL { path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path) }
 
+    nonisolated private static func mtime(_ u: URL) -> Date {
+        (try? FileManager.default.attributesOfItem(atPath: u.path)[.modificationDate] as? Date) ?? .distantPast
+    }
+
+    nonisolated private static func read(_ path: String, _ u: URL) -> SourceDocument? {
+        guard let data = try? Data(contentsOf: u), data.count < 8_000_000 else { return nil }
+        return SourceDocument(path: path, text: String(decoding: data, as: UTF8.self))
+    }
+
     func document(_ path: String) -> SourceDocument? {
         let u = url(for: path)
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: u.path)[.modificationDate] as? Date) ?? .distantPast
+        let mtime = Self.mtime(u)
         if let (t, d) = cache[path], t == mtime { touch(path); return d }
-        guard let data = try? Data(contentsOf: u), data.count < 8_000_000 else { return nil }
-        let doc = SourceDocument(path: path, text: String(decoding: data, as: UTF8.self))
+        guard let doc = Self.read(path, u) else { return nil }
+        insert(doc, mtime: mtime)
+        return doc
+    }
+
+    /// The documents for `paths`, reading and parsing those not cached or changed off the main thread.
+    @discardableResult
+    func documents(_ paths: some Sequence<String>) async -> [String: SourceDocument] {
+        var out: [String: SourceDocument] = [:]
+        var missing: [(String, URL)] = []
+        for p in Set(paths).prefix(Prefs.documentCacheSize) {
+            let u = url(for: p)
+            if let (t, d) = cache[p], t == Self.mtime(u) { touch(p); out[p] = d } else { missing.append((p, u)) }
+        }
+        guard !missing.isEmpty else { return out }
+        let loaded = await Task.detached(priority: .userInitiated) {
+            missing.compactMap { p, u -> (Date, SourceDocument)? in
+                let t = DocumentCache.mtime(u)
+                return DocumentCache.read(p, u).map { (t, $0) }
+            }
+        }.value
+        for (t, d) in loaded {
+            if cache[d.path]?.0 != t { insert(d, mtime: t) }
+            out[d.path] = cache[d.path]?.1 ?? d
+        }
+        return out
+    }
+
+    private func insert(_ doc: SourceDocument, mtime: Date) {
+        let path = doc.path
         cache[path] = (mtime, doc)
         touch(path)
         // Evict the least recently used documents rather than dropping the whole cache.
@@ -216,7 +253,6 @@ final class DocumentCache {
             recent.removeFirst()
             cache[oldest] = nil
         }
-        return doc
     }
 
     func invalidate() { cache.removeAll() }
