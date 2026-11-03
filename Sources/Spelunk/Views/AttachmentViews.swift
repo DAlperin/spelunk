@@ -22,6 +22,7 @@ struct AttachmentCard: View {
     let hunk: Hunk
     let attachment: Attachment
     @State private var expanded = true
+    @State private var confirmTrust = false
 
     var body: some View {
         let result = review.attachmentResults[attachment.key]
@@ -52,10 +53,19 @@ struct AttachmentCard: View {
                 if let result {
                     content(result)
                 } else if !running {
-                    Button(attachment.isClaude ? "Generate with \(ClaudeModels.label(attachment.rule.model ?? Claude.model(for: .attach)))" : "Run") {
-                        review.runAttachment(attachment)
+                    Button(attachment.isClaude ? "Generate with \(ClaudeModels.label(attachment.rule.model ?? Claude.model(for: .attach)))"
+                           : attachment.needsTrust && !review.repoCommandsTrusted ? "Run Repository Command…" : "Run") {
+                        if attachment.needsTrust && !review.repoCommandsTrusted { confirmTrust = true } else { review.runAttachment(attachment) }
                     }
                     .controlSize(.small)
+                    .confirmationDialog("Run a command from this repository's review rules?", isPresented: $confirmTrust) {
+                        Button("Trust This Repository's Rule Commands") { review.trustRepoCommands(); review.runAttachment(attachment) }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        if case .run(let cmd) = attachment.rule.action {
+                            Text("\(cmd)\n\nThis comes from .spelunk/review.rules in the repository, so whoever wrote the code under review controls it.")
+                        }
+                    }
                 }
             }
         }

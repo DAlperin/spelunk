@@ -85,6 +85,8 @@ final class AppModel {
     var recent: [String] = UserDefaults.standard.stringArray(forKey: "recentRepos") ?? []
 
     init() {
+        // Writes to a child process that has exited must fail with EPIPE, not kill the app.
+        signal(SIGPIPE, SIG_IGN)
         Log.debug("AppModel.init")
         DebugBridge.shared.install(self)
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }

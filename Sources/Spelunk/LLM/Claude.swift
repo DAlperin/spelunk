@@ -87,7 +87,9 @@ enum Claude {
         var args = [
             "-p", "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#,
-            "--disable-slash-commands", "--setting-sources", "project",
+            // Sessions often run inside a checkout of someone else's change: never load its project
+            // settings, and run no hooks at all.
+            "--disable-slash-commands", "--setting-sources", "user", "--settings", #"{"disableAllHooks":true}"#,
             "--model", modelOverride ?? model(for: task),
             "--append-system-prompt", system,
         ]

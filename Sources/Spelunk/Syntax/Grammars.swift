@@ -164,7 +164,7 @@ final class GrammarRegistry: @unchecked Sendable {
         log("Cloning \(url)")
         var cloneArgs = ["clone", "--depth", "1", "--quiet"]
         if let revision, !revision.isEmpty { cloneArgs += ["--branch", revision] }
-        let r = try await Shell.run("git", cloneArgs + [url, work.path])
+        let r = try await Shell.run("git", cloneArgs + ["--", url, work.path])
         guard r.ok else { throw InstallError(message: "git clone failed: \(r.stderr)") }
 
         var targets = discover(in: work, url: url)

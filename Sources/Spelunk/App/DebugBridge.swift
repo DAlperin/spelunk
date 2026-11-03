@@ -1,17 +1,19 @@
 import AppKit
 import Foundation
 
-/// Scriptable hooks for driving the UI from outside the process, enabled with SPELUNK_DEBUG=1.
-/// Post a distributed notification named `dev.spelunk.debug` whose object is a command string.
+/// Scriptable hooks for driving the UI from outside the process. Off unless the app is launched with
+/// SPELUNK_BRIDGE=<token>; commands are distributed notifications named `dev.spelunk.debug.<token>`
+/// whose object is the command string, so only a sender that knows the launch token can drive it.
+/// Files it writes (snapshots, recordings) must be under the temporary directory.
 @MainActor
 final class DebugBridge {
     static let shared = DebugBridge()
     weak var model: AppModel?
 
     func install(_ model: AppModel) {
-        guard Log.enabled else { return }
+        guard let token = ProcessInfo.processInfo.environment["SPELUNK_BRIDGE"], token.count >= 8 else { return }
         self.model = model
-        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("dev.spelunk.debug"), object: nil, queue: .main) { n in
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("dev.spelunk.debug.\(token)"), object: nil, queue: .main) { n in
             let cmd = (n.object as? String) ?? ""
             MainActor.assumeIsolated { DebugBridge.shared.run(cmd) }
         }
@@ -37,7 +39,7 @@ final class DebugBridge {
         case "snapshotwin":
             // snapshotwin <title-substring> <path>
             let p = arg.split(separator: " ", maxSplits: 1).map(String.init)
-            if p.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.title.localizedCaseInsensitiveContains(p[0]) }) {
+            if p.count == 2, allowed(p[1]), let w = NSApp.windows.first(where: { $0.isVisible && $0.title.localizedCaseInsensitiveContains(p[0]) }) {
                 capture(w, to: p[1])
             }
         case "open":
@@ -202,7 +204,15 @@ final class DebugBridge {
         Log.debug("DUMP\n" + s)
     }
 
+    /// Output paths are confined to temporary directories.
+    private func allowed(_ path: String) -> Bool {
+        let p = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        let roots = [URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath().path, "/private/tmp", "/tmp"]
+        return roots.contains { p.hasPrefix($0 + "/") }
+    }
+
     private func snapshot(_ path: String, viaWindowServer: Bool = true) {
+        guard allowed(path) else { Log.debug("snapshot path refused: \(path)"); return }
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 400 && !$0.isSheet && $0.title != "Settings" && !$0.title.contains("Settings") }) else { return }
         if viaWindowServer { capture(window, to: path); return }
         guard let view = window.contentView?.superview ?? window.contentView,
@@ -258,6 +268,7 @@ final class DebugBridge {
     /// Writes the main window as JPEG frames plus `frames.txt` (index and seconds since start) into
     /// `dir`, about ten per second, until `recordstop`.
     private func startRecording(_ dir: String) {
+        guard allowed(dir) else { Log.debug("record path refused: \(dir)"); return }
         Self.recordTimer?.invalidate()
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let start = Date()

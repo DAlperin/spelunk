@@ -14,6 +14,13 @@ struct Attachment: Identifiable, Hashable {
     func hash(into h: inout Hasher) { h.combine(key) }
 
     var isClaude: Bool { if case .claude = rule.action { true } else { false } }
+
+    /// A shell command from the repository's own rules file: it comes with the code under review, so
+    /// it runs only once the user has trusted that repository's commands.
+    var needsTrust: Bool {
+        guard rule.source == ".spelunk/review.rules", case .run = rule.action else { return false }
+        return true
+    }
 }
 
 /// What an attachment returns when it is structured: a Claude attachment always (through a JSON
@@ -214,7 +221,17 @@ extension ReviewSession {
         for a in out where attachmentResults[a.key] == nil {
             if let r = loadAttachmentResult(a.key) { attachmentResults[a.key] = r }
         }
-        for a in out where a.rule.auto && attachmentResults[a.key] == nil { runAttachment(a) }
+        for a in out where a.rule.auto && attachmentResults[a.key] == nil && (!a.needsTrust || repoCommandsTrusted) { runAttachment(a) }
+    }
+
+    var repoCommandsTrusted: Bool {
+        (UserDefaults.standard.stringArray(forKey: "rules.trustedRepos") ?? []).contains(root.path)
+    }
+
+    func trustRepoCommands() {
+        var list = UserDefaults.standard.stringArray(forKey: "rules.trustedRepos") ?? []
+        if !list.contains(root.path) { list.append(root.path) }
+        UserDefaults.standard.set(list, forKey: "rules.trustedRepos")
     }
 
     func attachments(for h: Hunk) -> [Attachment] {
@@ -244,7 +261,7 @@ extension ReviewSession {
     /// Runs the rule's command or Claude prompt. Results are stored next to their output files and
     /// reused until the rule or the matched hunks change.
     func runAttachment(_ a: Attachment) {
-        guard !attachmentsRunning.contains(a.key), let action = a.rule.action else { return }
+        guard !attachmentsRunning.contains(a.key), let action = a.rule.action, !a.needsTrust || repoCommandsTrusted else { return }
         attachmentsRunning.insert(a.key)
         let dir = attachmentDir(a.key)
         let out = dir.appendingPathComponent("out", isDirectory: true)
