@@ -282,6 +282,12 @@ final class ReviewSession {
             await loadRangeCommits()
             if let c = selectedCommit { diffText = try await commitDiff(c) }
             let newFiles = DiffParser.parse(diffText).filter { !$0.hunks.isEmpty || $0.isBinary || $0.status != .modified }
+            // Documents whose text did not change keep their identity, so an open editor does not reload.
+            let (previousOld, previousNew) = (oldDocs, newDocs)
+            func keep(_ d: SourceDocument, _ previous: [String: SourceDocument]) -> SourceDocument {
+                if let p = previous[d.path], p.version == d.version, p.text == d.text { return p }
+                return d
+            }
             oldDocs = [:]
             newDocs = [:]
             if case .githubPR(let n) = target, pullRequest == nil { Task { await refreshPullRequest(n) } }
@@ -306,8 +312,8 @@ final class ReviewSession {
                 return out
             }
             for r in results {
-                if let d = r.oldDoc { oldDocs[d.path] = d }
-                if let d = r.newDoc { newDocs[d.path] = d }
+                if let d = r.oldDoc { oldDocs[d.path] = keep(d, previousOld) }
+                if let d = r.newDoc { newDocs[d.path] = keep(d, previousNew) }
                 for (id, a, f) in r.hunks { newAnalyses[id] = a; newFacts[id] = f }
             }
             // A PR whose commits are not local reads contents from GitHub, one file at a time.

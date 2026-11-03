@@ -117,10 +117,12 @@ struct CodeView: NSViewRepresentable {
         c.foldRanges = secondary ? [] : ws.foldedRanges(for: document)
         let display = DisplayDoc(doc: document, phantoms: phantoms, blocks: c.blocks(for: specs), folds: c.foldRanges)
         if c.documentID != document.id {
+            // A new instance of the text already shown (a review reload) keeps the scroll position and caret.
+            let same = c.document.map { $0.path == document.path && $0.version == document.version && $0.text == document.text } ?? false
             c.documentID = document.id
             c.document = document
             c.display = display
-            c.load(display, into: tv, keepScroll: false)
+            c.load(display, into: tv, keepScroll: same)
         } else if c.display?.fingerprint != display.fingerprint {
             // Same file, different inline diff (live refresh or toggled): keep the scroll position.
             c.display = display
@@ -411,7 +413,7 @@ struct CodeView: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: min(caret, display.ns.length), length: 0))
             lastBackgroundKey = ""
             gutter?.invalidateLineCache()
-            if keepScroll, let r = revealed, Date().timeIntervalSince(r.at) < 1.5 {
+            if let r = revealed, r.path == display.doc.path, Date().timeIntervalSince(r.at) < 1.5 {
                 // Text arriving right after a jump (inline diff, embedded views, folds) keeps the jump's target in view.
                 scrollTo(r.range)
             } else if keepScroll, let origin, let clip = tv.enclosingScrollView?.contentView {
@@ -424,8 +426,12 @@ struct CodeView: NSViewRepresentable {
                 }
                 clip.setBoundsOrigin(NSPoint(x: origin.x, y: y))
                 tv.enclosingScrollView?.reflectScrolledClipView(clip)
-            } else {
-                tv.scroll(.zero)
+            } else if let clip = tv.enclosingScrollView?.contentView {
+                // The top-left of the content sits at minus the left inset; plain `scroll(.zero)` would
+                // cut off the start of every line by the inset's width.
+                let left = tv.enclosingScrollView?.contentInsets.left ?? 0
+                clip.setBoundsOrigin(NSPoint(x: -left, y: 0))
+                tv.enclosingScrollView?.reflectScrolledClipView(clip)
             }
         }
 
@@ -467,11 +473,12 @@ struct CodeView: NSViewRepresentable {
             }
         }
 
-        /// The last location scrolled to and when; a re-render soon after scrolls there again.
-        private var revealed: (range: SourceRange, at: Date)?
+        /// The last location scrolled to, in which file, and when; a re-render of that file soon after
+        /// scrolls there again.
+        private var revealed: (range: SourceRange, path: String, at: Date)?
 
         func reveal(_ range: SourceRange) {
-            revealed = (range, Date())
+            revealed = (range, document?.path ?? "", Date())
             // Defer one turn so a freshly loaded document has a laid-out frame to scroll within. The
             // target is mapped into the text shown when the scroll happens, not when it was asked for.
             DispatchQueue.main.async { [weak self] in self?.scrollTo(range) }
