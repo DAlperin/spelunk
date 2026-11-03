@@ -19,7 +19,7 @@ extension CodeView.Coordinator {
     /// Regions of the review's hunks in the shown file, mapped through the inline-diff display.
     func computeHunkRegions(ws: Workspace, document: SourceDocument, display: DisplayDoc) -> [HunkRegion] {
         guard let r = ws.review else { return [] }
-        let isOld = document.revisionLabel == "Before"
+        let isOld = document.side == .old
         let hunks = r.files.filter { (isOld ? $0.oldPath : $0.newPath) == document.path }.flatMap(\.hunks)
         guard !hunks.isEmpty else { return [] }
         var realToHunk: [Int: Int] = [:]

@@ -112,7 +112,7 @@ struct CodeView: NSViewRepresentable {
             c.load(display, into: tv, keepScroll: true)
         }
         c.diffMarkers = ws.diffMarkers(for: document)
-        c.diagnostics = !secondary && document.revisionLabel == nil ? (ws.clippy.byFile[document.path] ?? []) : []
+        c.diagnostics = !secondary && document.isWorkingCopy ? (ws.clippy.byFile[document.path] ?? []) : []
         let markers = secondary ? (badges: [Int: Int](), pills: [Int: Int]()) : ws.pathMarkers(for: document)
         c.stepBadges = markers.badges
         c.stepPills = markers.pills

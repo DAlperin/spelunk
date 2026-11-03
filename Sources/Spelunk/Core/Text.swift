@@ -19,10 +19,22 @@ struct SourceRange: Hashable, Codable, Sendable {
     func contains(_ p: SourcePos) -> Bool { start <= p && p <= end }
 }
 
-/// A position inside the repository. `path` is relative to the workspace root.
+/// Which text a position refers to: the files on disk, or a commit (a review's base or head).
+enum CodeVersion: Hashable, Codable, Sendable {
+    case workingCopy
+    case revision(String)
+}
+
+/// The side of a diff a review document shows.
+enum DiffSide: String, Codable, Sendable { case old, new }
+
+/// A position inside the repository. `path` is relative to the workspace root; `version` names the
+/// text the range belongs to (nil: the working copy).
 struct CodeLocation: Hashable, Codable, Identifiable, Sendable {
     var path: String
     var range: SourceRange
+    var version: CodeVersion?
+    var isWorkingCopy: Bool { version == nil || version == .workingCopy }
     var id: String { "\(path):\(range.start.line):\(range.start.col)" }
     var line: Int { range.start.line }
     var displayLine: Int { range.start.line + 1 }

@@ -203,7 +203,8 @@ extension Workspace {
                     }
                 }
                 let resp = try Claude.decode(ClaudeTasks.TraceResponse.self, from: res)
-                let trace = ClaudeTasks.materialize(resp, question: question, docs: place.cwd == root ? docs : DocumentCache(root: place.cwd))
+                let trace = ClaudeTasks.materialize(resp, question: question, docs: place.cwd == root ? docs : DocumentCache(root: place.cwd),
+                                                    version: place.cwd == root ? nil : reviewAtStart?.headVersion)
                 let previous = traces.activeID, previousStep = traces.currentStep
                 traces.add(trace)
                 // A finished path never moves the editor; it waits to be opened.

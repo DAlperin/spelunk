@@ -179,7 +179,7 @@ final class Workspace {
     /// Re-parses open documents, e.g. after grammars change.
     func reloadCurrentDocument(keepPosition: Bool = false) {
         docs.invalidate()
-        guard let d = document, d.revisionLabel == nil, let fresh = docs.document(d.path) else { return }
+        guard let d = document, d.isWorkingCopy, let fresh = docs.document(d.path) else { return }
         document = fresh
         ra.didOpen(path: fresh.path, text: fresh.text, language: fresh.language)
         if !keepPosition { revealRequest += 1 }
@@ -225,7 +225,7 @@ final class Workspace {
     /// Debounced reaction to edits on disk (yours, Claude's, a checkout): refresh the open file,
     /// the working-copy review, and the change graph when it is visible.
     private func filesChanged(_ paths: [String]) {
-        if let d = document, d.revisionLabel == nil, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
+        if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
         refreshTask?.cancel()
         refreshTask = Task {
             try? await Task.sleep(nanoseconds: 600_000_000)
@@ -314,15 +314,28 @@ final class Workspace {
               reason: NavReason = .manual, generation: Int? = nil) {
         if let generation { guard isCurrentNavigation(generation) else { return } } else { beginNavigation(reason) }
         if record, let cur = currentLocation, cur != loc { backStack.append(cur); forwardStack.removeAll() }
-        // While reviewing a change that is not the working copy, files it changes open at its head;
-        // files it leaves alone are the same on both sides.
-        let head = review.flatMap { r -> SourceDocument? in
-            guard !r.afterIsWorkingCopy, r.files.contains(where: { $0.newPath == loc.path && $0.status != .deleted }) else { return nil }
-            return r.cachedDocument(loc.path, side: .new)
-        }
-        if let head, document !== head {
-            document = head
-        } else if head == nil, document?.path != loc.path || document?.revisionLabel != nil {
+        // A location names the text it belongs to. Review-side locations open that side's document;
+        // everything else (code intelligence answers, files, history) is the working copy.
+        if let v = loc.version, v != .workingCopy {
+            guard let r = review, v == r.headVersion || v == r.baseVersion else {
+                statusMessage = "\(loc.path) is from a review that is not open"
+                return
+            }
+            let side: ReviewSession.Side = v == r.baseVersion && v != r.headVersion ? .old : .new
+            if let d = r.cachedDocument(loc.path, side: side) {
+                if document !== d { document = d }
+            } else {
+                let gen = navGeneration
+                Task {
+                    guard let d = await r.document(loc.path, side: side), isCurrentNavigation(gen) else { return }
+                    document = d
+                    selection = loc.range
+                    cursor = loc.range.start
+                    revealRequest += 1
+                }
+                return
+            }
+        } else if document?.path != loc.path || !(document?.isWorkingCopy ?? false) {
             guard let d = docs.document(loc.path) else { statusMessage = "Could not open \(loc.path)"; return }
             recentFiles.removeAll { $0 == loc.path }
             recentFiles.insert(loc.path, at: 0)
@@ -340,9 +353,9 @@ final class Workspace {
     /// Shows a document that is not the working copy (review before/after).
     func show(_ doc: SourceDocument, line: Int, reason: NavReason = .manual, generation: Int? = nil) {
         if let generation { guard isCurrentNavigation(generation) else { return } } else { beginNavigation(reason) }
-        if let cur = currentLocation, cur.path != doc.path || document?.revisionLabel != doc.revisionLabel { backStack.append(cur) }
+        if let cur = currentLocation, cur.path != doc.path || document?.version != doc.version { backStack.append(cur) }
         document = doc
-        if doc.revisionLabel == nil { ra.didOpen(path: doc.path, text: doc.text, language: doc.language) }
+        if doc.isWorkingCopy { ra.didOpen(path: doc.path, text: doc.text, language: doc.language) }
         selection = SourceRange(line: line)
         cursor = SourcePos(line: line, col: 0)
         revealRequest += 1
@@ -369,15 +382,11 @@ final class Workspace {
         beginNavigation(.click)
         if contextPinned { return }
         if context?.name == name && context?.path == d.path && context?.pos.line == p.line { return }
-        let isWorkingCopy = d.revisionLabel == nil
+        let isWorkingCopy = d.isWorkingCopy
         // Code intelligence answers about the files on disk. For a Before/After view, query the same
         // symbol at its nearest occurrence in the working-copy file (falls back to name-based search
         // when the file no longer exists there).
-        var queryPos = range.start
-        if !isWorkingCopy, let wc = docs.document(d.path),
-           let mapped = ClaudeTasks.nearestOccurrence(of: name, in: wc, near: p.line) {
-            queryPos = mapped.start
-        }
+        let queryPos = intelPosition(in: d, name: name, range: range)
         let ctx = SymbolContext(name: name, path: d.path, pos: queryPos)
         context = ctx
         highlightRanges = []
@@ -465,12 +474,21 @@ final class Workspace {
         ctx.loadingImpls = false
     }
 
+    /// Code intelligence answers about the working copy. For a symbol in another version, the
+    /// position of the same identifier nearest that line in the working-copy file.
+    func intelPosition(in d: SourceDocument, name: String, range: SourceRange) -> SourcePos {
+        guard !d.isWorkingCopy, let wc = docs.document(d.path),
+              let mapped = ClaudeTasks.nearestOccurrence(of: name, in: wc, near: range.start.line) else { return range.start }
+        return mapped.start
+    }
+
     func goToDefinition(at p: SourcePos) {
         guard let d = document, let (name, range) = d.word(at: p) else { return }
         let gen = beginNavigation(.definition)
+        let pos = intelPosition(in: d, name: name, range: range)
         Task {
             statusMessage = "Resolving \(name)…"
-            let (defs, src) = await intel.definitions(path: d.path, at: range.start, name: name)
+            let (defs, src) = await intel.definitions(path: d.path, at: pos, name: name)
             guard isCurrentNavigation(gen) else { return }
             statusMessage = nil
             guard let first = defs.first else { statusMessage = "No definition found for \(name)"; return }
@@ -494,7 +512,8 @@ final class Workspace {
         let item = d.syntax.enclosingItem(line: p.line)
         let title = item?.qualifiedName ?? context?.name ?? d.path.lastPathComponent
         let edge: TraceEdge = (traces.active?.steps.isEmpty ?? true) ? .start : (arrival?.edge ?? .manual)
-        let step = TraceStep(title: title, location: CodeLocation(path: d.path, range: selection ?? SourceRange(line: p.line, col: p.col)),
+        let step = TraceStep(title: title, location: CodeLocation(path: d.path, range: selection ?? SourceRange(line: p.line, col: p.col),
+                                                                  version: d.isWorkingCopy ? nil : d.version),
                              edge: edge, source: arrival?.source ?? .manual,
                              snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces))
         traces.insert(step)
@@ -511,7 +530,8 @@ final class Workspace {
         guard let d = document, let p = cursor else { return }
         let item = d.syntax.enclosingItem(line: p.line)
         bookmarks.toggle(Bookmark(title: context?.name ?? item?.qualifiedName ?? d.path.lastPathComponent,
-                                  location: CodeLocation(path: d.path, range: SourceRange(line: p.line, col: p.col)),
+                                  location: CodeLocation(path: d.path, range: SourceRange(line: p.line, col: p.col),
+                                                         version: d.isWorkingCopy ? nil : d.version),
                                   context: reviewContextLabel))
     }
 
@@ -568,7 +588,7 @@ final class Workspace {
     /// Starts a review comment on the cursor line, on whichever side of the diff is showing.
     func draftComment() {
         guard let r = review, let d = document, let c = cursor else { return }
-        let side = d.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        let side = d.side == .old ? "LEFT" : "RIGHT"
         let path = side == "LEFT" ? (r.files.first { $0.oldPath == d.path }?.oldPath ?? d.path) : d.path
         commentDraft = PendingComment(path: path, line: c.line + 1, side: side, body: "")
     }
@@ -713,7 +733,7 @@ final class Workspace {
     func phantomLines(for doc: SourceDocument) -> [Int: [PhantomLine]] {
         guard inlineDiff, let r = review,
               let f = r.files.first(where: { $0.newPath == doc.path || $0.oldPath == doc.path }) else { return [:] }
-        let isOld = doc.revisionLabel == "Before"
+        let isOld = doc.side == .old
         if f.status == (isOld ? .deleted : .added) { return [:] }
         let other = r.cachedDocument(isOld ? f.newPath : f.oldPath, side: isOld ? .new : .old)
         let phantomKind: DiffLineKind = isOld ? .added : .removed
@@ -752,7 +772,7 @@ final class Workspace {
     /// and the comment composer. Each is (id, zero-based line it follows).
     func inlineBlocks(for doc: SourceDocument) -> [(id: String, afterLine: Int)] {
         guard let r = review, r.pullRequest != nil || commentDraft != nil else { return [] }
-        let side = doc.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        let side = doc.side == .old ? "LEFT" : "RIGHT"
         guard inlineThreads else {
             if let d = commentDraft, d.path == doc.path, d.side == side { return [("draft", d.line - 1)] }
             return []
@@ -771,7 +791,7 @@ final class Workspace {
     /// Lines carrying review threads (true when unresolved) or pending comments, for the shown side.
     func commentLines(for doc: SourceDocument) -> [Int: Bool] {
         guard let r = review else { return [:] }
-        let side = doc.revisionLabel == "Before" ? "LEFT" : "RIGHT"
+        let side = doc.side == .old ? "LEFT" : "RIGHT"
         var out: [Int: Bool] = [:]
         for t in r.pullRequest?.threads ?? [] where t.path == doc.path && t.side == side {
             if let l = t.anchorLine { out[l - 1] = (out[l - 1] ?? false) || !t.isResolved }
@@ -783,7 +803,7 @@ final class Workspace {
     /// Per-line diff markers for the document currently shown, when it belongs to the review.
     func diffMarkers(for doc: SourceDocument) -> [Int: DiffLineKind] {
         guard let r = review, let f = r.files.first(where: { $0.newPath == doc.path || $0.oldPath == doc.path }) else { return [:] }
-        let isOld = doc.revisionLabel == "Before"
+        let isOld = doc.side == .old
         var m: [Int: DiffLineKind] = [:]
         for h in f.hunks {
             for l in h.lines {
@@ -812,6 +832,10 @@ final class Workspace {
         let line = parts.count > 1 ? (Int(parts[1]) ?? 1) - 1 : 0
         var p = String(path)
         if !allFileSet.contains(p), let match = allFiles.first(where: { $0.hasSuffix("/" + p) }) { p = match }
-        open(CodeLocation(path: p, range: SourceRange(line: max(0, line))), edge: .manual, source: .claude, reason: .citation)
+        // Claude reads the head of a review that is not the working copy, so its citations do too.
+        let version = review.flatMap { $0.afterIsWorkingCopy ? nil : $0.headVersion }
+        let inReview = review?.files.contains { $0.newPath == p } ?? false
+        open(CodeLocation(path: p, range: SourceRange(line: max(0, line)), version: inReview ? version : nil),
+             edge: .manual, source: .claude, reason: .citation)
     }
 }

@@ -188,7 +188,8 @@ final class DebugBridge {
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
         }
-        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-") line=\(ws.cursor.map { String($0.line + 1) } ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
+        s += "nav: reason=\(ws.navReason) step=\(ws.traces.currentStep.map(String.init) ?? "-") pane=\(ws.inspectorPane.rawValue) hunkContext=\(ws.showsHunkContext) hunk=\(ws.selectedHunkID.map { String($0.suffix(14)) } ?? "-") doc=\(ws.document?.path.lastPathComponent ?? "-")[\(ws.document?.revisionLabel ?? "wc")] line=\(ws.cursor.map { String($0.line + 1) } ?? "-") review=\(ws.review?.shortLabel ?? "-")\n"
+        if let cc = ws.changeContext { s += "changecontext: enclosing=\(cc.enclosing ?? "-") callers=\(cc.callers.map(\.name).prefix(4).joined(separator: ",")) loading=\(cc.loading)\n" }
         if let r = ws.review { s += "state: identity=\(r.identity ?? "-") viewed=\(r.viewed.count) drafts=\(r.pendingComments.count) llm=\(r.llm.count)\n" }
         if let r = ws.review { s += "classify: candidates=\(r.classifyCandidates.count) cached=\(r.allHunks.filter { r.llm[$0.contentKey] != nil }.count) hunks=\(r.allHunks.count)\n" }
         for a in ws.review?.attachments ?? [] { s += "attach: \(a.rule.title) [\(a.label)] result=\(ws.review?.attachmentResults[a.key] != nil)\n" }

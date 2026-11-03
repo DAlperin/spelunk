@@ -331,8 +331,14 @@ final class ReviewSession {
         switch target {
         case .jj(let from, let to):
             vcs = .jj
-            oldRev = from
-            newRev = to == "@" ? nil : to
+            // Record commit ids, not revsets: `@-` names a different commit after the next `jj new`,
+            // and versions recorded on locations must keep meaning the same text.
+            func commit(_ rev: String) async -> String {
+                let id = try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", rev, "-T", "commit_id"], cwd: root)
+                return id?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? rev
+            }
+            oldRev = await commit(from)
+            newRev = to == "@" ? nil : await commit(to)
             let desc = try? await Shell.output("jj", ["log", "--no-graph", "-r", to, "-T", "description"], cwd: root)
             let lines = (desc ?? "").split(separator: "\n", omittingEmptySubsequences: false)
             title = lines.first.map(String.init) ?? target.label
@@ -343,8 +349,12 @@ final class ReviewSession {
             return try await Shell.output("jj", ["diff", "--git", "--context", "3", "--from", from, "--to", to], cwd: root)
         case .git(let base, let head):
             vcs = .git
-            oldRev = base
-            newRev = head
+            func commit(_ rev: String) async -> String {
+                let id = try? await Shell.output("git", ["rev-parse", rev], cwd: root)
+                return id?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? rev
+            }
+            oldRev = await commit(base)
+            newRev = head == nil ? nil : await commit(head!)
             title = target.label
             if let head { return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", base, head], cwd: root) }
             return try await Shell.output("git", ["diff", "--no-color", "--no-ext-diff", base], cwd: root)
@@ -415,8 +425,8 @@ final class ReviewSession {
         let ot = await oldText, nt = await newText
         // Missing contents (a PR not fetched locally) fall back to the main-actor path.
         if (f.status != .added && ot == nil) || (f.status != .deleted && nt == nil) { return FileResult(hunks: []) }
-        let oldDoc = ot.map { SourceDocument(path: f.oldPath, text: $0, revisionLabel: "Before") }
-        let newDoc = nt.map { SourceDocument(path: f.newPath, text: $0, revisionLabel: source.newRev == nil ? nil : "After") }
+        let oldDoc = ot.map { SourceDocument(path: f.oldPath, text: $0, version: .revision(source.oldRev), side: .old) }
+        let newDoc = nt.map { SourceDocument(path: f.newPath, text: $0, version: source.newRev.map { .revision($0) } ?? .workingCopy, side: .new) }
         let hunks = f.hunks.map { h in
             let r = ChangeClassifier.analyze(file: f, hunk: h, oldDoc: oldDoc, newDoc: newDoc, root: source.root)
             return (h.id, r.analysis, r.facts)
@@ -446,8 +456,8 @@ final class ReviewSession {
             text = try? await Shell.output("gh", ["api", "-H", "Accept: application/vnd.github.raw", "repos/\(repo)/contents/\(encoded)?ref=\(ref)"], cwd: root)
         }
         guard let text else { return nil }
-        let label = side == .old ? "Before" : (side == .new && newRev == nil ? nil : "After")
-        let doc = SourceDocument(path: path, text: text, revisionLabel: label)
+        let version: CodeVersion = side == .old ? baseVersion : headVersion
+        let doc = SourceDocument(path: path, text: text, version: version, side: side == .old ? .old : .new)
         if side == .old { oldDocs[path] = doc } else { newDocs[path] = doc }
         return doc
     }
@@ -459,6 +469,9 @@ final class ReviewSession {
 
     /// True when the "after" side is the working copy, so the code view can use live navigation.
     var afterIsWorkingCopy: Bool { newRev == nil }
+    /// The versions of the review's two sides, as recorded on documents and locations.
+    var baseVersion: CodeVersion { .revision(oldRev) }
+    var headVersion: CodeVersion { afterIsWorkingCopy ? .workingCopy : .revision(newRev ?? "") }
 
     // MARK: Derived
 

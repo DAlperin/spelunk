@@ -56,7 +56,8 @@ enum ClaudeTasks {
 
     /// Resolves model-proposed steps against real outlines, fixing line numbers.
     @MainActor
-    static func materialize(_ r: TraceResponse, question: String, docs: DocumentCache) -> Trace {
+    /// - Parameter version: the text the steps were found in, recorded on each step's location.
+    static func materialize(_ r: TraceResponse, question: String, docs: DocumentCache, version: CodeVersion? = nil) -> Trace {
         var t = Trace(title: r.title, question: question, summary: r.summary, origin: .claude)
         for s in r.steps {
             var path = s.file.hasPrefix("./") ? String(s.file.dropFirst(2)) : s.file
@@ -77,6 +78,7 @@ enum ClaudeTasks {
                 }
                 snippet = doc.lineText(loc.line).trimmingCharacters(in: .whitespaces)
             }
+            loc.version = version
             t.steps.append(TraceStep(title: s.symbol, location: loc, note: s.note, edge: .claude, source: .claude,
                                      verified: verified, snippet: snippet))
         }

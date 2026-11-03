@@ -153,10 +153,15 @@ final class SourceDocument: Identifiable, @unchecked Sendable {
     let language: SourceLanguage
     let syntax: SyntaxInfo
     let languageName: String
-    /// Nil when this is the on-disk working copy; otherwise a label such as "Before @-".
-    let revisionLabel: String?
+    /// The text this document holds: the working copy, or a commit.
+    let version: CodeVersion
+    /// For review documents, which side of the diff.
+    let side: DiffSide?
+    var isWorkingCopy: Bool { version == .workingCopy }
+    /// Display label: nil for the working copy, otherwise Before or After.
+    var revisionLabel: String? { isWorkingCopy ? nil : (side == .old ? "Before" : "After") }
 
-    init(path: String, text: String, revisionLabel: String? = nil) {
+    init(path: String, text: String, version: CodeVersion = .workingCopy, side: DiffSide? = nil) {
         self.path = path
         self.text = text
         self.ns = text as NSString
@@ -164,7 +169,8 @@ final class SourceDocument: Identifiable, @unchecked Sendable {
         self.language = SourceLanguage.from(path: path)
         self.syntax = SyntaxAnalyzer.analyze(text, language: language, path: path)
         self.languageName = language == .rust ? "Rust" : (GrammarRegistry.shared.grammar(forPath: path)?.spec.displayName ?? language.displayName)
-        self.revisionLabel = revisionLabel
+        self.version = version
+        self.side = side
     }
 
     func lineText(_ line: Int) -> String { ns.line(lines, line) }

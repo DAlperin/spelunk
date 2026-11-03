@@ -43,9 +43,13 @@ extension Workspace {
 
     /// For the open file: step numbers at their lines, and call sites that lead to another step.
     func pathMarkers(for doc: SourceDocument) -> (badges: [Int: Int], pills: [Int: Int]) {
-        guard doc.revisionLabel == nil, let t = traces.active else { return ([:], [:]) }
+        guard let t = traces.active else { return ([:], [:]) }
         var badges: [Int: Int] = [:], pills: [Int: Int] = [:]
-        for (i, s) in t.steps.enumerated() where s.location.path == doc.path { badges[s.location.line] = i + 1 }
+        // Steps mark only the text they were recorded against.
+        for (i, s) in t.steps.enumerated() where s.location.path == doc.path && (s.location.version ?? .workingCopy) == doc.version {
+            badges[s.location.line] = i + 1
+        }
+        guard doc.isWorkingCopy else { return (badges, pills) }
         for (i, c) in activeConnectors().enumerated() {
             guard let site = c.site, site.path == doc.path else { continue }
             let target = c.kind == .calls ? i + 2 : i + 1

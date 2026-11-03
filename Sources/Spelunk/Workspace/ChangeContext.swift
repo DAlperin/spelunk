@@ -32,6 +32,8 @@ extension Workspace {
     /// Locations a review hunk covers in the working copy's version of the file, for "in this change".
     func isInReview(_ loc: CodeLocation) -> Bool {
         guard let r = review, let f = r.files.first(where: { $0.newPath == loc.path }) else { return false }
+        // Hunk line numbers are in the review head; only locations in that text can be compared.
+        guard (loc.version ?? .workingCopy) == r.headVersion else { return false }
         return f.hunks.contains { h in loc.line >= h.newStart - 1 && loc.line < h.newStart - 1 + max(1, h.newCount) }
     }
 
@@ -40,14 +42,19 @@ extension Workspace {
         let cc = ChangeContext(hunkID: h.id)
         changeContext = cc
         Task {
-            // The changed function, located in the file on disk so code intelligence can answer.
-            let doc = docs.document(f.newPath)
+            // The changed function, found in the review's head (where the hunk's lines are), then asked
+            // about at the same item in the working copy, which is what code intelligence answers for.
+            let headDoc = r.afterIsWorkingCopy ? docs.document(f.newPath) : await r.document(f.newPath, side: .new)
+            let wcDoc = docs.document(f.newPath)
             let anchor = h.anchorNewLine
-            if let doc, let item = doc.syntax.enclosingItem(line: min(anchor, doc.lines.lineCount - 1)),
+            if let headDoc, headDoc.lines.lineCount > 0, let item = headDoc.syntax.enclosingItem(line: min(anchor, headDoc.lines.lineCount - 1)),
                item.kind == .function || item.kind == .method {
                 cc.enclosing = item.qualifiedName
-                cc.enclosingLocation = CodeLocation(path: f.newPath, range: item.nameRange)
-                let callers = await intel.callRoots(.incoming, path: f.newPath, at: item.nameRange.start, name: item.name)
+                cc.enclosingLocation = CodeLocation(path: f.newPath, range: item.nameRange, version: headDoc.isWorkingCopy ? nil : headDoc.version)
+                let wcItem = headDoc === wcDoc ? item : wcDoc?.syntax.flatOutline.first { $0.qualifiedName == item.qualifiedName && $0.kind == item.kind }
+                let callers = wcItem != nil
+                    ? await intel.callRoots(.incoming, path: f.newPath, at: wcItem!.nameRange.start, name: item.name)
+                    : await intel.callersByName(item.name)
                 guard changeContext === cc else { return }
                 cc.source = callers.first?.source
                 cc.callers = callers.filter { !$0.isTest }
