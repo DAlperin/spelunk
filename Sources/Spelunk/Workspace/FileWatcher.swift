@@ -41,10 +41,22 @@ final class FileWatcher: @unchecked Sendable {
 
     deinit { stop() }
 
+    /// The root as given and with symlinks resolved; FSEvents reports the resolved path (a repository
+    /// under /tmp arrives as /private/tmp).
+    private lazy var prefixes: [String] = {
+        var out = [root.path + "/"]
+        if let real = realpath(root.path, nil) {
+            let r = String(cString: real) + "/"
+            free(real)
+            if r != out[0] { out.append(r) }
+        }
+        return out
+    }()
+
     private func handle(_ absolute: [String]) {
-        let prefix = root.path + "/"
+        let prefixes = self.prefixes
         let relevant = absolute.compactMap { p -> String? in
-            guard p.hasPrefix(prefix) else { return nil }
+            guard let prefix = prefixes.first(where: { p.hasPrefix($0) }) else { return nil }
             let rel = String(p.dropFirst(prefix.count))
             if rel.split(separator: "/").contains(where: { Self.ignoredComponents.contains(String($0)) }) { return nil }
             return rel
