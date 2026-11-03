@@ -2,7 +2,7 @@ import Foundation
 import SwiftTreeSitter
 import TreeSitterRust
 
-enum TokenKind: String, Sendable {
+enum TokenKind: String, Sendable, CaseIterable {
     case keyword, type, function, macro, string, number, comment, docComment, attribute, lifetime,
          field, constant, module, selfKeyword, operatorToken, plain
 }

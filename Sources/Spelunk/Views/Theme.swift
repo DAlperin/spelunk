@@ -25,7 +25,12 @@ enum Theme {
     static let traceLine = dynamic(hex(0x8250df, 0.10), hex(0xa371f7, 0.16))
     static let testRegion = dynamic(hex(0x000000, 0.025), hex(0xffffff, 0.025))
 
-    static func color(_ k: TokenKind) -> NSColor {
+    /// One color object per kind, so adjacent tokens of a kind share attributes and merge into one run.
+    private static let tokenColors = Dictionary(uniqueKeysWithValues: TokenKind.allCases.map { ($0, makeColor($0)) })
+
+    static func color(_ k: TokenKind) -> NSColor { tokenColors[k] ?? text }
+
+    private static func makeColor(_ k: TokenKind) -> NSColor {
         switch k {
         case .keyword: dynamic(hex(0xcf222e), hex(0xff7b72))
         case .selfKeyword: dynamic(hex(0xcf222e), hex(0xff7b72))
