@@ -315,20 +315,26 @@ final class Workspace {
         refreshTask = Task {
             try? await Task.sleep(for: .seconds(Prefs.refreshDelay))
             guard !Task.isCancelled else { return }
-            await refreshWorkingReview()
-            // After the review's diff, which snapshots a jj working copy, so the list includes new files.
-            if fileListStale {
-                fileListStale = false
-                allFiles = await VCS.listFiles(root, vcs: vcs.kind)
-                allFileSet = Set(allFiles)
-                // Paths that exist but stay out of the list (ignored files, folders) do not trigger it again.
-                let fm = FileManager.default
-                unlistedPaths.formUnion(pendingListPaths.filter { !allFileSet.contains($0) && fm.fileExists(atPath: root.appendingPathComponent($0).path) })
-                pendingListPaths = []
-                await rebuildTreeAsync()
-            }
-            if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
+            // A later change cancels only the wait. The refresh runs to completion, and a review
+            // that is already loading queues one more load.
+            Task { await self.refreshAfterChanges() }
         }
+    }
+
+    private func refreshAfterChanges() async {
+        await refreshWorkingReview()
+        // After the review's diff, which snapshots a jj working copy, so the list includes new files.
+        if fileListStale {
+            fileListStale = false
+            allFiles = await VCS.listFiles(root, vcs: vcs.kind)
+            allFileSet = Set(allFiles)
+            // Paths that exist but stay out of the list (ignored files, folders) do not trigger it again.
+            let fm = FileManager.default
+            unlistedPaths.formUnion(pendingListPaths.filter { !allFileSet.contains($0) && fm.fileExists(atPath: root.appendingPathComponent($0).path) })
+            pendingListPaths = []
+            await rebuildTreeAsync()
+        }
+        if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
     }
 
     /// What "the current revision" means: @ when it has changes, otherwise the change below it

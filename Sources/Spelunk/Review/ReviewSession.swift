@@ -344,6 +344,14 @@ final class ReviewSession {
             if Self.autoClassify { Task { await quickClassify() } }
             Task { await resolvePendingRules() }
             if linkedPR == nil { Task { await linkPullRequest() } } else { Task { await checkLinkedHead() } }
+        } catch is CancellationError {
+            // The caller gave up on this load and the review keeps what it shows. One with nothing
+            // to show, or with a reload queued, loads again in a task of its own.
+            if state != .ready || reloadPending {
+                reloadPending = false
+                Task { await self.load() }
+            }
+            return
         } catch {
             state = .failed(error.localizedDescription)
         }
