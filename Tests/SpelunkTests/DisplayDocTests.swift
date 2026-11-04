@@ -49,4 +49,11 @@ final class DisplayDocTests: XCTestCase {
         let b = doc.ns.range(of: "fn b")
         XCTAssertEqual(d.ns.substring(with: NSRange(location: d.displayOffset(realOffset: b.location), length: 4)), "fn b")
     }
+
+    func testFunctionsStartingOnOneLineFoldOnce() {
+        let text = "fn outer() { fn inner() {\n    one();\n    two();\n}\n    three();\n}\n"
+        let regions = Workspace.foldRegions(SourceDocument(path: "src/x.rs", text: text))
+        XCTAssertEqual(regions.map(\.id), [0])
+        XCTAssertEqual(regions.map(\.hidden), [1...4])
+    }
 }

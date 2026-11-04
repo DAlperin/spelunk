@@ -60,12 +60,15 @@ extension Workspace {
     /// Folds are kept per document version, and separately in review mode, where unchanged code folds.
     func foldKey(_ d: SourceDocument) -> String { "\(d.path)|\(d.version)\(reviewedFile(d) != nil ? "|review" : "")" }
 
+    /// Foldable function bodies. A fold is named by the line its function starts on, so of several
+    /// functions starting on one line only the outermost folds.
     nonisolated static func foldRegions(_ d: SourceDocument) -> [FoldRegion] {
-        d.syntax.flatOutline.compactMap { i in
+        var seen: Set<Int> = []
+        return d.syntax.flatOutline.compactMap { i in
             guard i.kind == .function || i.kind == .method else { return nil }
             let lo = i.headerEndLine + 1, hi = i.range.end.line - 1
             // A fold hides at least two lines; one line is no shorter than its placeholder.
-            guard hi - lo >= 1 else { return nil }
+            guard hi - lo >= 1, seen.insert(i.range.start.line).inserted else { return nil }
             return FoldRegion(item: i.range.start.line...i.range.end.line, hidden: lo...hi)
         }
     }
