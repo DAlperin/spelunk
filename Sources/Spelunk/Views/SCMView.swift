@@ -46,12 +46,12 @@ struct ChangeGraphView: View {
                     .onTapGesture { scm.lastOutput = nil }
             }
             HStack(spacing: 6) {
-                TextField(scm.kind == .jj ? "revset (default log)" : "git log args (default --all)", text: $scm.revset)
+                TextField(scm.kind == .jj ? "revset (default: log + recent ancestors)" : "git log args (default --all)", text: $scm.revset)
                     .textFieldStyle(.roundedBorder).font(.caption.monospaced())
                     .onSubmit { Task { await scm.refresh(kind: ws.vcs.kind) } }
                 if scm.kind == .jj {
                     Menu {
-                        Button("Default log") { setRevset("") }
+                        Button("Default: jj log and the last \(SCMService.recentAncestors) ancestors of @") { setRevset("") }
                         Button("My stack: trunk()..@") { setRevset("trunk()..@") }
                         Button("Mine: mine() ~ ::trunk()") { setRevset("mine() ~ ::trunk()") }
                         Button("Recent: latest(all(), 50)") { setRevset("latest(all(), 50)") }

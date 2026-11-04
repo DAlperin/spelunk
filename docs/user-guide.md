@@ -59,8 +59,10 @@ query).
 
 History has two sections:
 
-- Changes shows the jj change graph (the default log, or any revset typed into the field; the menu
-  has presets such as `trunk()..@`), or for a git repository without jj, the git log. In a jj
+- Changes shows the jj change graph, or for a git repository without jj, the git log. With the
+  revset field empty it shows what `jj log` shows plus the last 30 ancestors of `@`, so history
+  under a pushed stack stays in view; type any revset to replace it, or pick a preset such as
+  `trunk()..@` from the menu. In a jj
   repository the working-copy box lets you describe `@`, commit, start a new change, or review `@`.
   Each change's context menu can review it, review from it to `@`, edit, start a new change on top,
   squash into the parent, set or push bookmarks, abandon, or copy its id. Push and abandon ask for

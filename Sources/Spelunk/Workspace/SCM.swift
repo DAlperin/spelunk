@@ -75,9 +75,24 @@ final class SCMService {
         if let id = selectedID, rows.contains(where: { $0.change?.id == id }) { await loadSelectedFiles() } else { selectedFiles = [] }
     }
 
+    /// How many ancestors of the working copy the default view adds to the configured log.
+    static let recentAncestors = 30
+    @ObservationIgnored private var defaultRevset: String?
+
+    /// The configured `jj log` revset plus recent ancestors of the working copy, so history under it
+    /// stays in view once the stack is pushed and immutable. Nil when the configuration cannot be read.
+    private func defaultJJRevset() async -> String? {
+        if let r = defaultRevset { return r }
+        guard let out = try? await Shell.output("jj", ["config", "get", "revsets.log"], cwd: root) else { return nil }
+        let configured = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !configured.isEmpty else { return nil }
+        defaultRevset = "(\(configured)) | ancestors(@, \(Self.recentAncestors))"
+        return defaultRevset
+    }
+
     private func refreshJJ() async {
         var args = ["log", "--no-graph", "--color", "never", "--limit", "300", "-T", Self.jjTemplate]
-        if !revset.isEmpty { args += ["-r", revset] }
+        if let r = revset.isEmpty ? await defaultJJRevset() : revset { args += ["-r", r] }
         do {
             let out = try await Shell.output("jj", args, cwd: root)
             var entries: [(Change, String, [String])] = []
