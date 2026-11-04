@@ -70,6 +70,7 @@ final class DebugBridge {
         case "addstep": ws.addCurrentToTrace()
         case "newpath": ws.newCodePath(fromCursor: true)
         case "step": ws.playStep((Int(arg) ?? 1) - 1)
+        case "closepath": ws.closeCodePath()
         case "path":
             // path <title prefix>: makes the first code path whose title starts with it the active one
             if let t = ws.traces.traces.first(where: { $0.title.lowercased().hasPrefix(arg.lowercased()) }) { ws.traces.activeID = t.id }

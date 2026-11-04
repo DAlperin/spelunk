@@ -662,6 +662,13 @@ final class Workspace {
         return vcs.kind == .none ? "" : (vcs.description.isEmpty ? vcs.revision : vcs.description)
     }
 
+    /// Puts the open code path away and returns the inspector to the context it follows.
+    func closeCodePath() {
+        traces.close()
+        editingStepID = nil
+        if inspectorPane == .paths { inspectorPane = .context }
+    }
+
     func playStep(_ index: Int) {
         guard let t = traces.active, index >= 0, index < t.steps.count else { return }
         let gen = beginNavigation(.step)

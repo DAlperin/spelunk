@@ -57,6 +57,7 @@ struct SpelunkApp: App {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(t.plainText(), forType: .string)
                 }.disabled(model.workspace?.traces.active == nil)
+                Button("Close Code Path") { model.workspace?.closeCodePath() }.disabled(model.workspace?.traces.active == nil)
                 Divider()
                 Button("Next Step ") {
                     guard let ws = model.workspace else { return }

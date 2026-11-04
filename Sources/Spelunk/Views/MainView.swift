@@ -800,33 +800,22 @@ struct TraceStepBanner: View {
 
     var body: some View {
         let step = trace.steps[index]
-        let connectors = ws.activeConnectors()
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: "point.topleft.down.to.point.bottomright.curvepath").foregroundStyle(.purple)
-                Text(trace.title).font(.callout.weight(.semibold)).lineLimit(1)
-                HStack(spacing: 3) {
-                    ForEach(Array(trace.steps.enumerated()), id: \.element.id) { i, s in
-                        if i > 0 {
-                            Rectangle().fill(connectors.indices.contains(i - 1) && connectors[i - 1].kind == .inferred ? Color.orange.opacity(0.6) : Color.secondary.opacity(0.4))
-                                .frame(width: 6, height: 1.5)
-                        }
-                        Button { ws.playStep(i) } label: {
-                            ZStack {
-                                Circle().strokeBorder(i == index ? Color.purple : Color.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1.3, dash: s.verified ? [] : [2, 2]))
-                                    .background(Circle().fill(i == index ? Color.purple : .clear))
-                                Text(verbatim: String(i + 1)).font(.system(size: 9, weight: .bold)).foregroundStyle(i == index ? .white : .secondary)
-                            }
-                            .frame(width: 18, height: 18)
-                        }
-                        .buttonStyle(.plain)
-                        .help(s.title)
-                    }
+                Text(trace.title).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.tail)
+                    .help(trace.title)
+                Spacer(minLength: 4)
+                Text(verbatim: "\(index + 1) of \(trace.steps.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).fixedSize()
+                HStack(spacing: 2) {
+                    Button { ws.playStep(index - 1) } label: { Image(systemName: "chevron.left") }
+                        .disabled(index == 0).help("Previous step (⌥[)")
+                    Button { ws.playStep(index + 1) } label: { Image(systemName: "chevron.right") }
+                        .disabled(index + 1 >= trace.steps.count).help("Next step (⌥])")
+                    Button { ws.closeCodePath() } label: { Image(systemName: "xmark") }.help("Close the code path")
                 }
-                Spacer()
-                Button { ws.playStep(index - 1) } label: { HStack(spacing: 3) { KeyCap("⌥["); Text("prev") } }.disabled(index == 0)
-                Button { ws.playStep(index + 1) } label: { HStack(spacing: 3) { KeyCap("⌥]"); Text("next") } }.disabled(index + 1 >= trace.steps.count)
-                Button { ws.traces.currentStep = nil } label: { Image(systemName: "xmark") }.help("Close the banner")
+                .buttonStyle(.borderless)
+                .fixedSize()
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(verbatim: String(index + 1)).font(.callout.weight(.bold)).foregroundStyle(.purple)

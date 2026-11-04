@@ -121,7 +121,6 @@ final class TraceStore {
         Task {
             let loaded = await sync.load()
             traces = loaded + traces.filter { t in !loaded.contains { $0.id == t.id } }
-            if activeID == nil { activeID = traces.first?.id }
         }
     }
 
@@ -171,8 +170,14 @@ final class TraceStore {
 
     func delete(_ id: UUID) {
         traces.removeAll { $0.id == id }
-        if activeID == id { activeID = traces.first?.id; currentStep = nil }
+        if activeID == id { close() }
         save()
+    }
+
+    /// Puts the active path away: no path open, so no step badges, markers or banner.
+    func close() {
+        activeID = nil
+        currentStepID = nil
     }
 
     /// Appends to the active trace, creating a recorded trace if none is active.

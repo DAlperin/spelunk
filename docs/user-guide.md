@@ -205,13 +205,18 @@ value is built, where a bug travels. Paths are kept per repository.
   implementation, or added by hand. Navigating never adds steps on its own.
 - New paths come from the Code Paths pane's menu or the palette: New Code Path, New Code Path from
   Cursor, or Generate with Claude….
-- In the Code Paths pane, right-click a step to edit its note, move it up or down, set its location
-  to the cursor, or remove it. The path menu also has Rename…, Duplicate and Delete.
+- In the Code Paths pane, click a step to go to it. The current step shows its whole note and an
+  "Edit note" link; right-click any step to edit its note, move it up or down, set its location to
+  the cursor, or remove it. The path menu at the top of the pane also has Rename…, Duplicate and
+  Delete.
 
 ### Following a path
 
-When the current step is in the open file, a banner above the editor shows the path's steps as
-numbered dots and its note. ⌥] and ⌥[ (or ⌥⌘↓ and ⌥⌘↑) move to the next and previous step. Steps are
+No path is open until you pick one, from the Code Paths pane or its menu. While one is open, a
+banner above the editor shows the path, which step you are on and its note. ⌥] and ⌥[ (or ⌥⌘↓ and
+⌥⌘↑), or the banner's arrows, move to the next and previous step. The × in the banner or the pane,
+or Code Paths › Close Code Path, closes the path and clears its marks from the editor and the file
+tree. Steps are
 numbered in the gutter, and a "→ step N" marker follows a call site that leads to another step.
 Between steps, Spelunk looks for a call from one step's function to the next; a hop where it finds
 none (a channel, a trait object, an async boundary) is marked inferred.

@@ -739,8 +739,6 @@ struct TracePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            contextStrip
-            Divider()
             pathPicker
             if ws.showGenerateTrace || ws.jobs.contains(where: { $0.kind == .trace && $0.running }) { generateBox }
             if let t = traces.active {
@@ -755,6 +753,25 @@ struct TracePanel: View {
                 Divider()
                 footer(t)
             } else {
+                if !traces.traces.isEmpty {
+                    List(traces.traces) { t in
+                        Button { traces.activeID = t.id; traces.currentStep = nil } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: t.origin == .claude ? "sparkles" : "point.topleft.down.to.point.bottomright.curvepath")
+                                    .font(.caption).foregroundStyle(.purple)
+                                Text(t.title).lineLimit(2)
+                                Spacer(minLength: 4)
+                                Text(verbatim: "\(t.steps.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { Button("Delete", role: .destructive) { traces.delete(t.id) } }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .frame(maxHeight: .infinity)
+                }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("A code path is an ordered list of places with a note on each: how a request flows, how a value is built, where a bug travels.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -762,7 +779,7 @@ struct TracePanel: View {
                     Button("Generate with Claude…") { ws.showGenerateTrace = true }
                 }
                 .buttonStyle(.link).padding(12)
-                Spacer()
+                if traces.traces.isEmpty { Spacer() }
             }
         }
         .alert("Rename code path", isPresented: $renaming) {
@@ -772,33 +789,14 @@ struct TracePanel: View {
         }
     }
 
-    /// The context pane, collapsed to one line while a path is open.
-    var contextStrip: some View {
-        Button { ws.inspectorPane = .context } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
-                Text("Context").font(.caption.weight(.semibold))
-                if let c = ws.context {
-                    Text(c.name).font(.caption.monospaced()).lineLimit(1)
-                    Text(verbatim: [c.details?.kindLabel, c.callers.isEmpty ? nil : "\(c.callers.count) callers", c.callees.isEmpty ? nil : "\(c.callees.count) callees"]
-                        .compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 12).frame(height: 26)
-    }
-
+    /// The open path, a menu of all paths and the actions on them, and a button that closes the path.
     var pathPicker: some View {
         HStack(spacing: 6) {
-            Text("Code Path").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Menu {
                 ForEach(traces.traces) { t in
                     Button { traces.activeID = t.id; traces.currentStep = nil } label: {
-                        if t.id == traces.activeID { Label("\(t.title) (\(t.steps.count))", systemImage: "checkmark") }
-                        else { Text(verbatim: "\(t.title) (\(t.steps.count))") }
+                        let label = "\(Self.short(t.title)) (\(t.steps.count))"
+                        if t.id == traces.activeID { Label(label, systemImage: "checkmark") } else { Text(verbatim: label) }
                     }
                 }
                 Divider()
@@ -812,13 +810,23 @@ struct TracePanel: View {
                     Button("Delete", role: .destructive) { traces.delete(t.id) }
                 }
             } label: {
-                Text(traces.active?.title ?? "None").lineLimit(1)
+                Text(traces.active?.title ?? (traces.traces.isEmpty ? "No code paths" : "Choose a code path")).lineLimit(1)
             }
-            .menuStyle(.button)
-            .controlSize(.small)
+            .menuStyle(.borderlessButton)
+            .help(traces.active?.title ?? "")
+            if let t = traces.active {
+                Text(verbatim: "\(t.steps.count) steps").font(.caption).foregroundStyle(.secondary).fixedSize()
+                Button { ws.closeCodePath() } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                    .help("Close the code path: hide its steps in the editor and the file tree")
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .font(.callout.weight(.semibold))
+        .padding(.horizontal, 12).padding(.vertical, 8)
     }
+
+    /// A path title short enough for a menu item.
+    static func short(_ title: String) -> String { title.count > 72 ? title.prefix(70) + "…" : title }
 
     var generateBox: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -956,7 +964,7 @@ struct ConnectorRow: View {
                 Text("inferred").font(.system(size: 9, weight: .semibold))
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(Color.orange.opacity(0.16), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.orange)
-                Text("no direct call found (channel, trait object or async hop?)").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                    .help("No direct call between these steps was found: a channel, trait object or async hop, or a step whose location did not match")
             }
             Spacer()
         }
@@ -1003,9 +1011,9 @@ struct TraceStepRow: View {
                         KeyCap("esc")
                     }
                 } else if !step.note.isEmpty {
-                    Text(step.note).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        .onTapGesture(count: 2) { ws.editingStepID = step.id }
-                } else {
+                    Text(step.note).font(.callout).lineLimit(current ? nil : 2).fixedSize(horizontal: false, vertical: true)
+                    if current { Button("Edit note") { ws.editingStepID = step.id }.buttonStyle(.link).font(.caption) }
+                } else if current {
                     Button("Add a note") { ws.editingStepID = step.id }.buttonStyle(.link).font(.caption)
                 }
                 Text(verbatim: "\(step.location.path):\(step.location.displayLine)").font(.system(size: 10, design: .monospaced))
