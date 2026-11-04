@@ -248,6 +248,46 @@ final class GroupingTests: XCTestCase {
     }
 }
 
+final class DeclaredGroupingTests: XCTestCase {
+    func testNewModuleGroupsWithItsDeclarationAndLibraryMethodsDoNot() {
+        let diff = """
+        diff --git a/src/server/mod.rs b/src/server/mod.rs
+        --- a/src/server/mod.rs
+        +++ b/src/server/mod.rs
+        @@ -1,2 +1,3 @@
+         pub mod binder;
+        +pub mod effector;
+         pub mod executor;
+        diff --git a/src/server/effector.rs b/src/server/effector.rs
+        new file mode 100644
+        --- /dev/null
+        +++ b/src/server/effector.rs
+        @@ -0,0 +1,3 @@
+        +pub fn run() {
+        +    if outcomes.is_empty() { for o in outcomes.into_iter() {} }
+        +}
+        diff --git a/src/a.rs b/src/a.rs
+        --- a/src/a.rs
+        +++ b/src/a.rs
+        @@ -1,2 +1,3 @@
+         fn a() {
+        +    if rows.is_empty() { return rows.into_iter().count(); }
+         }
+        diff --git a/src/b.rs b/src/b.rs
+        --- a/src/b.rs
+        +++ b/src/b.rs
+        @@ -1,2 +1,3 @@
+         fn b() {
+        +    let keys = seen.into_iter().filter(|k| !k.is_empty());
+         }
+        """
+        let groups = HunkGrouper.group(DiffParser.parse(diff))
+        let module = groups.first { $0.symbols == ["effector"] }
+        XCTAssertEqual(module?.keys.count, 2)
+        XCTAssertFalse(groups.contains { $0.symbols.contains("into_iter") || $0.symbols.contains("is_empty") })
+    }
+}
+
 final class GroupingDiffTests: XCTestCase {
     /// Prints the groups for a real diff: SPELUNK_GROUP_DIFF=/path/to.diff swift test --filter GroupingDiffTests
     func testPrintGroups() throws {
@@ -257,6 +297,7 @@ final class GroupingDiffTests: XCTestCase {
         for g in HunkGrouper.group(files) {
             let paths = Set(g.keys.compactMap { byKey[$0]?.path })
             print("GROUP \(g.title)  hunks=\(g.keys.count) files=\(paths.count)")
+            for k in g.keys { if let h = byKey[k] { print("    \(h.path):\(h.newStart)") } }
         }
     }
 }

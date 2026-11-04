@@ -138,7 +138,9 @@ enum ChangeClassifier {
     /// Names the hunk after the first changed line that sits inside an item, so a hunk that starts
     /// with import churn is still titled by the item it actually touches.
     static func enclosing(file: FileDiff, hunk: Hunk, oldDoc: SourceDocument?, newDoc: SourceDocument?) -> String? {
-        hunk.added.lazy.compactMap { $0.newLine }.compactMap { newDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
+        // A hunk that adds or deletes a whole file is about the file, not its first item.
+        if file.status == .added || file.status == .deleted, file.hunks.count == 1 { return file.path.lastPathComponent }
+        return hunk.added.lazy.compactMap { $0.newLine }.compactMap { newDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.removed.lazy.compactMap { $0.oldLine }.compactMap { oldDoc?.syntax.enclosingItem(line: $0, strict: true)?.qualifiedName }.first
             ?? hunk.added.first?.newLine.flatMap { newDoc?.syntax.enclosingItem(line: $0)?.qualifiedName }
             ?? (FileClassifier.isGenerated(file.path) || hunk.header.isEmpty ? nil : headerName(hunk.header))

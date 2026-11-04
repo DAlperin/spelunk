@@ -23,9 +23,11 @@ struct HunkGroup: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-/// Deterministic grouping: identifiers (including those inside string literals, which is how
-/// config flags and metric names show up) that the change removes everywhere, adds fresh, or edits
-/// across several files. Common words and identifiers that appear in most of the diff are ignored.
+/// Deterministic grouping around the names a change declares: a function, type, variant, field,
+/// constant or module that the change adds, removes or redefines, with every hunk that mentions it,
+/// in code or in a string literal (which is how config flags show up). A new or deleted file
+/// declares its own name, so it groups with the `mod` line that declares it. Names the change only
+/// uses, such as library methods, do not form groups.
 enum HunkGrouper {
     static let stop: Set<String> = [
         "self", "Self", "super", "crate", "true", "false", "None", "Some", "Ok", "Err", "Option", "Result", "String", "Vec",
@@ -35,12 +37,14 @@ enum HunkGrouper {
         "mut", "ref", "fn", "for", "while", "loop", "else", "type", "dyn", "move", "unsafe", "Debug", "Clone",
         "Default", "Serialize", "Deserialize", "PartialEq", "Eq", "Hash", "derive", "test", "assert", "assert_eq",
         "format", "println", "tracing", "debug", "info", "warn", "error", "config", "value", "name", "result", "this",
-        "that", "with", "should", "when", "then", "TODO",
+        "that", "with", "should", "when", "then", "TODO", "main", "lib", "index", "tests", "__init__",
     ]
 
     /// Distinctive enough to tie hunks together: snake case, camel case or digits, or simply long.
-    static func distinctive(_ s: String) -> Bool {
+    /// A module's name ties its file to its declaration whatever its shape.
+    static func distinctive(_ s: String, module: Bool = false) -> Bool {
         guard s.count >= 4, !stop.contains(s), s.first?.isNumber == false else { return false }
+        if module { return true }
         let inner = s.dropFirst()
         if s.contains("_") || inner.contains(where: \.isUppercase) || s.contains(where: \.isNumber) { return true }
         // A single plain word, capitalized or not, is usually English or a common type name.
@@ -48,19 +52,62 @@ enum HunkGrouper {
     }
 
     private static let identRE = try! NSRegularExpression(pattern: #"[A-Za-z_][A-Za-z0-9_]*"#)
+    private static let keywordDeclRE = try! NSRegularExpression(
+        pattern: #"\b(fn|struct|enum|trait|mod|type|const|static|union|func|class|protocol|def|interface)\s+([A-Za-z_][A-Za-z0-9_]*)"#)
+    /// A variant on a line of its own: `Name,` `Name(..),` or `Name { .. },`.
+    private static let variantRE = try! NSRegularExpression(pattern: #"^\s*([A-Z][A-Za-z0-9_]*)\s*(\(.*\)|\{.*\})?\s*,?\s*$"#)
+    /// A field on a line of its own: `name: Type,` with an optional `pub`.
+    private static let fieldRE = try! NSRegularExpression(pattern: #"^\s*(?:pub(?:\([^)]*\))?\s+)?([a-z_][a-z0-9_]*)\s*:\s*[A-Za-z&(\[][^=]*,?\s*$"#)
+
+    /// The code of a changed line, without its comment; nil for a comment line.
+    private static func code(_ line: String) -> String? {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("//") || t.hasPrefix("#") || t.hasPrefix("*") || t.hasPrefix("/*") { return nil }
+        if let r = t.range(of: " //") { t = String(t[..<r.lowerBound]) }
+        return t
+    }
 
     /// Identifiers on a changed line, with line comments dropped.
     static func identifiers(_ line: String) -> Set<String> {
-        var t = line.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("//") || t.hasPrefix("#") || t.hasPrefix("*") || t.hasPrefix("/*") { return [] }
-        if let r = t.range(of: " //") { t = String(t[..<r.lowerBound]) }
+        guard let t = code(line) else { return [] }
         let ns = t as NSString
         var out: Set<String> = []
         for m in identRE.matches(in: t, range: NSRange(location: 0, length: ns.length)) {
             let s = ns.substring(with: m.range)
-            if distinctive(s) { out.insert(s) }
+            if s.count >= 4 { out.insert(s) }
         }
         return out
+    }
+
+    /// Names a changed line declares, each with whether it names a module.
+    static func declarations(_ line: String) -> [(name: String, module: Bool)] {
+        guard let t = code(line) else { return [] }
+        let ns = t as NSString
+        let all = NSRange(location: 0, length: ns.length)
+        var out: [(String, Bool)] = keywordDeclRE.matches(in: t, range: all).map {
+            (ns.substring(with: $0.range(at: 2)), ns.substring(with: $0.range(at: 1)) == "mod")
+        }
+        for re in [variantRE, fieldRE] {
+            if let m = re.firstMatch(in: t, range: all) { out.append((ns.substring(with: m.range(at: 1)), false)) }
+        }
+        return out
+    }
+
+    private static let moduleExtensions: Set<String> = [
+        "rs", "py", "go", "ts", "tsx", "js", "jsx", "mjs", "swift", "rb", "java", "kt", "scala", "ml", "ex", "hs",
+    ]
+
+    /// The module a source file declares by existing: its stem, or its folder's for a module file.
+    static func fileModule(_ path: String) -> String? {
+        let name = (path as NSString).lastPathComponent as NSString
+        guard moduleExtensions.contains(name.pathExtension) else { return nil }
+        let stem = name.deletingPathExtension
+        guard ["mod", "index", "__init__"].contains(stem) else { return stem }
+        return ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+    }
+
+    static func isProse(_ path: String) -> Bool {
+        ["md", "markdown", "rst", "txt", "adoc"].contains((path as NSString).pathExtension.lowercased())
     }
 
     /// Spelling-insensitive key, so `ENABLE_HALF_JOIN2`, `enable_half_join2` and `EnableHalfJoin2`
@@ -71,11 +118,32 @@ enum HunkGrouper {
         struct Use { var removed: Set<Int> = []; var added: Set<Int> = []; var spellings: [String: Int] = [:] }
         var hunks: [Hunk] = []
         var uses: [String: Use] = [:]
+        /// Declared names by key, with the spelling of the declaration.
+        var declared: [String: String] = [:]
+        /// The hunks that declare each name.
+        var declaredIn: [String: Set<Int>] = [:]
+        /// Names of files the change adds or deletes.
+        var modules: Set<String> = []
+        func declare(_ name: String, module: Bool, in hunk: Int) {
+            guard distinctive(name, module: module) else { return }
+            let k = normalize(name)
+            declared[k] = declared[k] ?? name
+            declaredIn[k, default: []].insert(hunk)
+        }
         for f in files where !skipPaths(f.path) {
+            let module = f.status == .added || f.status == .deleted ? fileModule(f.path) : nil
             for h in f.hunks {
                 let i = hunks.count
                 hunks.append(h)
+                if let module {
+                    modules.insert(normalize(module))
+                    declare(module, module: true, in: i)
+                    var u = uses[normalize(module)] ?? Use()
+                    if f.status == .deleted { u.removed.insert(i) } else { u.added.insert(i) }
+                    uses[normalize(module)] = u
+                }
                 for l in h.lines where l.kind != .context {
+                    for d in declarations(l.text) { declare(d.name, module: d.module, in: i) }
                     for id in identifiers(l.text) {
                         let k = normalize(id)
                         var u = uses[k] ?? Use()
@@ -87,26 +155,33 @@ enum HunkGrouper {
             }
         }
         guard hunks.count >= 2 else { return [] }
-        let cap = max(12, hunks.count / 4)
+        // A declared name in up to a third of the hunks still reads as one change.
+        let cap = max(16, hunks.count / 3)
 
         struct Candidate { var seed: Set<Int> = []; var keys: Set<String>; var kind: HunkGroup.Kind; var symbols: [String]; var members: Set<Int>; var score: Int }
         var candidates: [Candidate] = []
-        for (key, u) in uses {
-            let members = u.removed.union(u.added)
+        for (key, spelling) in declared {
+            guard let u = uses[key] else { continue }
+            var members = u.removed.union(u.added)
+            // A name mentioned nearly everywhere groups only its mentions in code, then only the
+            // places that declare it.
+            if members.count > cap { members = members.filter { !isProse(hunks[$0].path) } }
+            if members.count > cap { members = declaredIn[key] ?? [] }
             guard members.count >= 2, members.count <= cap else { continue }
             let fileCount = Set(members.map { hunks[$0].path }).count
             let kind: HunkGroup.Kind = u.added.isEmpty ? .removes : u.removed.isEmpty ? .adds : .changes
             // An identifier edited in place within one file is ordinary churn, not a cross-cutting change.
             if kind == .changes && fileCount < 2 { continue }
             if fileCount < 2 && members.count < 3 { continue }
-            let spelling = u.spellings.max { $0.value < $1.value || ($0.value == $1.value && $0.key > $1.key) }!.key
             // A symbol that disappears or appears everywhere is the clearest unit of review; one that is
             // merely mentioned on both sides of many hunks is usually a type passing through.
-            let score: Int
+            var score: Int
             switch kind {
             case .removes, .adds: score = 1000 + fileCount * 3 + members.count
             default: score = fileCount * 3 + members.count - max(0, members.count - 12) * 4
             }
+            // A new or deleted file is listed with its own module before any other group it touches.
+            if modules.contains(key) { score += 1000 }
             candidates.append(Candidate(keys: [key], kind: kind, symbols: [spelling], members: members, score: score))
         }
         candidates.sort { $0.score != $1.score ? $0.score > $1.score : $0.symbols[0] < $1.symbols[0] }

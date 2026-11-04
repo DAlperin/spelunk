@@ -348,10 +348,14 @@ its group. Esc returns the pane to the hunk after you click a symbol.
 
 ### Groups
 
-Related hunks are kept together inside the importance list. Every identifier (including those in
-string literals, so a config flag and its name match) that the change removes everywhere, adds
-fresh, or edits across several files forms a group, filed under the tier of its most important
-member. Spelling variants such as `ENABLE_FOO`, `enable_foo` and `EnableFoo` count as one.
+Related hunks are kept together inside the importance list. Each name the change declares (a
+function, type, variant, field, constant or module it adds, removes or redefines) forms a group
+with every hunk that mentions it, including mentions in string literals, so a config flag and its
+name match. A new or deleted file declares its own name, so it is listed with the `mod` line that
+declares it. Names the change only uses, such as library methods, do not form groups, and a name
+mentioned nearly everywhere groups only the hunks that declare it. Groups are filed under the tier
+of their most important member. Spelling variants such as `ENABLE_FOO`, `enable_foo` and
+`EnableFoo` count as one. A hunk that adds or deletes a whole file is titled with the file's name.
 
 Triage › Group with Claude asks a cheaper model (Hunk grouping, `sonnet` by default) for logical
 groups too; those are listed first. "Keep Related Hunks Together" in the Triage menu turns grouping

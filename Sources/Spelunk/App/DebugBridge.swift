@@ -337,6 +337,7 @@ final class DebugBridge {
                 if hs.isEmpty { continue }
                 s += "  \(t.rawValue): " + hs.map { "\($0.path.lastPathComponent)[\(r.analyses[$0.id]?.enclosing ?? "-")]: \(r.reasons(of: $0).joined(separator: ","))" }.joined(separator: " | ") + "\n"
             }
+            for g in r.allGroups { s += "  group \(g.title): " + r.hunks(of: g).map { "\($0.path.lastPathComponent):\($0.newStart)[\(r.tier(of: $0).rawValue)]" }.joined(separator: " ") + "\n" }
             if let o = r.overview { s += "  overview: \(o)\n" }
             if let ts = r.triageState { s += "  triage: \(ts)\n" }
             if let cs = r.classifyState { s += "  classify: \(cs)\n" }
