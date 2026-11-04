@@ -213,7 +213,7 @@ struct ChangesView: View {
         }
         if !review.body.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                Text(review.body).font(.caption).foregroundStyle(.secondary).lineLimit(descriptionOpen ? 30 : 2)
+                Text(Prose.unwrap(review.body)).font(.caption).foregroundStyle(.secondary).lineLimit(descriptionOpen ? 30 : 2)
                     .textSelection(.enabled)
                 Button(descriptionOpen ? "Less" : "More") { descriptionOpen.toggle() }.buttonStyle(.link).font(.caption)
             }
@@ -652,5 +652,45 @@ struct SidebarMessage<Actions: View>: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16).padding(.top, 40)
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+enum Prose {
+    /// Joins the lines of each paragraph of hard-wrapped text, as Markdown does. Blank lines, list
+    /// items, headings, quotes, indented lines and fenced code keep their own lines.
+    static func unwrap(_ text: String) -> String {
+        var out: [String] = []
+        var fenced = false
+        var joinable = false
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.hasSuffix("\r") ? String(raw.dropLast()) : String(raw)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                fenced.toggle()
+                out.append(line)
+                joinable = false
+                continue
+            }
+            if fenced || trimmed.isEmpty {
+                out.append(line)
+                joinable = false
+                continue
+            }
+            if joinable, !startsBlock(line, trimmed), let last = out.popLast() {
+                out.append(last + " " + trimmed)
+            } else {
+                out.append(line)
+            }
+            joinable = !line.hasPrefix("    ") && !line.hasPrefix("\t") && !trimmed.hasPrefix("#")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private static func startsBlock(_ line: String, _ trimmed: String) -> Bool {
+        if line.hasPrefix("    ") || line.hasPrefix("\t") { return true }
+        if trimmed.hasPrefix("#") || trimmed.hasPrefix(">") || trimmed.hasPrefix("|") { return true }
+        if ["- ", "* ", "+ "].contains(where: trimmed.hasPrefix) { return true }
+        let digits = trimmed.prefix { $0.isNumber }
+        return !digits.isEmpty && (trimmed.dropFirst(digits.count).hasPrefix(". ") || trimmed.dropFirst(digits.count).hasPrefix(") "))
     }
 }

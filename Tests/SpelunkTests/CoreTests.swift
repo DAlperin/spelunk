@@ -411,4 +411,31 @@ final class CommitGraphTests: XCTestCase {
         XCTAssertEqual(removed.map(9), 6)
         XCTAssertEqual(LineShift(old: old, new: old).map(4), 4)
     }
+
+    func testProseUnwrapJoinsParagraphLines() {
+        let text = """
+        Unique keys are a plain list. Nothing in
+        that form records equivalences.
+
+        - one item
+          continued
+        - two
+
+        ```
+        let a = 1
+        let b = 2
+        ```
+        """
+        XCTAssertEqual(Prose.unwrap(text), """
+        Unique keys are a plain list. Nothing in that form records equivalences.
+
+        - one item continued
+        - two
+
+        ```
+        let a = 1
+        let b = 2
+        ```
+        """)
+    }
 }
