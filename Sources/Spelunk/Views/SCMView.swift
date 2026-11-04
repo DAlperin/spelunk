@@ -265,6 +265,8 @@ struct FileStatusRow: View {
 struct PullRequestListView: View {
     @Bindable var ws: Workspace
     @State private var filter: GitHubService.PRFilter = .reviewRequested
+    /// The filter the list was last fetched for; showing the tab again does not fetch it again.
+    @State private var listed: GitHubService.PRFilter?
     @State private var query = ""
     @State private var prs: [GitHubService.PullRequestSummary] = []
     @State private var checks: [Int: String] = [:]
@@ -277,8 +279,8 @@ struct PullRequestListView: View {
                 ForEach(GitHubService.PRFilter.allCases) { Text($0.rawValue).tag($0) }
             }.labelsHidden().padding(.horizontal, 8)
             HStack {
-                TextField("Search (GitHub syntax) or #number", text: $query).textFieldStyle(.roundedBorder).onSubmit(load)
-                Button { load() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
+                TextField("Search (GitHub syntax) or #number", text: $query).textFieldStyle(.roundedBorder).onSubmit { submit() }
+                Button { submit() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
             }.padding(.horizontal, 8)
             if let r = ws.github.repo { Text(r).font(.caption).foregroundStyle(.secondary) }
             if loading { ProgressView().controlSize(.small) }
@@ -293,15 +295,23 @@ struct PullRequestListView: View {
             }
             .listStyle(.sidebar)
         }
-        .task(id: filter) { load() }
+        .task(id: filter) { if listed != filter { load() } }
+    }
+
+    /// A pull request number opens that pull request's review; anything else searches.
+    private func submit() {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if let n = Int(q.trimmingCharacters(in: CharacterSet(charactersIn: "#"))) {
+            query = ""
+            ws.startReview(.githubPR(n))
+        } else {
+            load()
+        }
     }
 
     private func load() {
         let q = query.trimmingCharacters(in: .whitespaces)
-        if let n = Int(q.trimmingCharacters(in: CharacterSet(charactersIn: "#"))) {
-            ws.startReview(.githubPR(n))
-            return
-        }
+        listed = filter
         loading = true
         Task {
             do {
