@@ -70,6 +70,10 @@ final class DebugBridge {
         case "addstep": ws.addCurrentToTrace()
         case "newpath": ws.newCodePath(fromCursor: true)
         case "step": ws.playStep((Int(arg) ?? 1) - 1)
+        case "path":
+            // path <title prefix>: makes the first code path whose title starts with it the active one
+            if let t = ws.traces.traces.first(where: { $0.title.lowercased().hasPrefix(arg.lowercased()) }) { ws.traces.activeID = t.id }
+            Log.debug("paths: " + ws.traces.traces.map { "\($0.title.prefix(30)) (\($0.steps.count))\($0.id == ws.traces.activeID ? " *" : "")" }.joined(separator: " | "))
         case "review":
             let p = arg.split(separator: ":").map(String.init)
             switch p.first {
