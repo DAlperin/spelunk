@@ -288,13 +288,16 @@ final class Workspace {
 
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Where history stood at the last refresh, as `historyMark` reads it.
+    @ObservationIgnored private var lastHistoryMark: String?
     @ObservationIgnored private var fileListStale = false
     @ObservationIgnored private var pendingListPaths: Set<String> = []
     @ObservationIgnored private var unlistedPaths: Set<String> = []
 
     private func startWatching() {
-        let w = FileWatcher(root: root) { [weak self] paths in
-            Task { @MainActor in self?.filesChanged(paths) }
+        lastHistoryMark = historyMark()
+        let w = FileWatcher(root: root) { [weak self] paths, historyMoved in
+            Task { @MainActor in self?.filesChanged(paths, historyMoved: historyMoved) }
         }
         w.start()
         watcher = w
@@ -302,7 +305,9 @@ final class Workspace {
 
     /// Debounced reaction to edits on disk (yours, Claude's, a checkout): refresh the open file,
     /// the working-copy review, and the change graph when it is visible.
-    private func filesChanged(_ paths: [String]) {
+    private func filesChanged(_ paths: [String], historyMoved: Bool = false) {
+        // Spelunk's own jj commands record operations too; only an operation it has not seen refreshes.
+        if paths.isEmpty && (!historyMoved || historyMark() == lastHistoryMark) { return }
         for s in servers { s.filesChanged(paths, except: document?.isWorkingCopy == true ? document?.path : nil) }
         if let d = document, d.isWorkingCopy, paths.contains(d.path) { reloadCurrentDocument(keepPosition: true) }
         // A path that is new to the file list, or a listed one that is gone, means files were added or removed.
@@ -323,6 +328,7 @@ final class Workspace {
 
     private func refreshAfterChanges() async {
         await refreshWorkingReview()
+        lastHistoryMark = historyMark()
         // After the review's diff, which snapshots a jj working copy, so the list includes new files.
         if fileListStale {
             fileListStale = false
@@ -337,8 +343,18 @@ final class Workspace {
         if sidebarTab == .scm { await scm.refresh(kind: vcs.kind) }
     }
 
-    /// What "the current revision" means: @ when it has changes, otherwise the change below it
-    /// (right after `jj new`). For git, uncommitted changes, or the last commit when clean.
+    /// Identifies where history stands: jj's current operation, or git's HEAD and the branch it names.
+    private func historyMark() -> String? {
+        let fm = FileManager.default
+        let heads = root.appendingPathComponent(".jj/repo/op_heads/heads")
+        if let ops = try? fm.contentsOfDirectory(atPath: heads.path) { return ops.sorted().joined(separator: ",") }
+        let git = root.appendingPathComponent(".git")
+        guard let head = try? String(contentsOf: git.appendingPathComponent("HEAD"), encoding: .utf8) else { return nil }
+        let ref = head.hasPrefix("ref: ") ? head.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        let target = ref.flatMap { try? String(contentsOf: git.appendingPathComponent($0), encoding: .utf8) } ?? ""
+        return head + target
+    }
+
     /// The working copy's own changes: `@` against its parent for jj, uncommitted changes for git.
     /// An empty working copy is an empty review.
     private func workingTarget() async -> ReviewTarget? {

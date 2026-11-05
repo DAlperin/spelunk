@@ -272,8 +272,9 @@ ten. Right-click to remove one.
 ### Review targets
 
 The working copy review is always open: `@` against its parent in a jj repository, or uncommitted
-changes against `HEAD` in git. It refreshes as files change on disk, after a short delay (0.6 s,
-Settings › Review › Live review). When `@` is empty, the Review tab offers to review the parent
+changes against `HEAD` in git. It refreshes as files change on disk and when history moves (a jj
+operation such as `jj new`, `jj edit` or `jj describe`, or a git commit or checkout), after a short
+delay (0.6 s, Settings › Review › Live review). When `@` is empty, the Review tab offers to review the parent
 change instead.
 
 ### Reviewing and browsing

@@ -2,14 +2,16 @@ import CoreServices
 import Foundation
 
 /// Recursive FSEvents watch on a repository, reporting changed repo-relative paths in batches.
-/// VCS metadata and build output are ignored, so jj or cargo writing there never triggers a refresh.
+/// VCS metadata and build output are left out of the paths, so jj or cargo writing there never
+/// reports a file; a batch notes instead whether history may have moved (a jj operation, or a git
+/// HEAD or ref update).
 final class FileWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let root: URL
-    private let onChange: @Sendable ([String]) -> Void
+    private let onChange: @Sendable (_ paths: [String], _ historyMoved: Bool) -> Void
     private static let ignoredComponents: Set<String> = [".git", ".jj", "target", "node_modules", ".build", "dist"]
 
-    init(root: URL, onChange: @escaping @Sendable ([String]) -> Void) {
+    init(root: URL, onChange: @escaping @Sendable (_ paths: [String], _ historyMoved: Bool) -> Void) {
         self.root = root.standardizedFileURL
         self.onChange = onChange
     }
@@ -55,12 +57,14 @@ final class FileWatcher: @unchecked Sendable {
 
     private func handle(_ absolute: [String]) {
         let prefixes = self.prefixes
+        var historyMoved = false
         let relevant = absolute.compactMap { p -> String? in
             guard let prefix = prefixes.first(where: { p.hasPrefix($0) }) else { return nil }
             let rel = String(p.dropFirst(prefix.count))
+            if rel.hasPrefix(".jj/repo/op_heads/") || rel == ".git/HEAD" || rel.hasPrefix(".git/refs/heads/") { historyMoved = true }
             if rel.split(separator: "/").contains(where: { Self.ignoredComponents.contains(String($0)) }) { return nil }
             return rel
         }
-        if !relevant.isEmpty { onChange(relevant) }
+        if !relevant.isEmpty || historyMoved { onChange(relevant, historyMoved) }
     }
 }
