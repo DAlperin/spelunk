@@ -480,3 +480,74 @@ final class CommitGraphTests: XCTestCase {
         """)
     }
 }
+
+final class LeanSyntaxTests: XCTestCase {
+    private let sample = """
+    /-! Module docs. -/
+    namespace Vtime.HoldView
+
+    /-- A record. -/
+    structure Rec where
+      upper : Nat
+      holds : List (Nat × Nat)
+
+    @[simp] private def alive (r : Rec) : Bool :=
+      r.upper > 0
+
+    theorem alive_of_pos {r : Rec} (h : r.upper > 0) : alive r = true := by
+      simp [alive, h]
+
+    instance : Inhabited Rec where
+      default := ⟨0, []⟩
+
+    end Vtime.HoldView
+    """
+
+    func testOutlineNestsDeclarationsInTheirNamespace() {
+        let info = SyntaxAnalyzer.analyze(sample, language: .lean)
+        XCTAssertEqual(info.outline.map(\.name), ["Vtime.HoldView"])
+        let ns = info.outline[0]
+        XCTAssertEqual(ns.kind, .module)
+        XCTAssertEqual(ns.range.end.line, 17)
+        XCTAssertEqual(ns.children.map(\.name), ["Rec", "alive", "alive_of_pos", "Inhabited Rec"])
+        XCTAssertEqual(ns.children.map(\.kind), [.structItem, .function, .theorem, .impl])
+        let rec = ns.children[0], alive = ns.children[1], thm = ns.children[2]
+        XCTAssertEqual(rec.range.start.line, 4)
+        XCTAssertEqual(rec.range.end.line, 6)
+        XCTAssertEqual(alive.range.start.line, 8)
+        XCTAssertEqual(alive.range.end.line, 9)
+        XCTAssertFalse(alive.isPublic)
+        XCTAssertEqual(thm.headerEndLine, 11)
+        XCTAssertEqual(thm.range.end.line, 12)
+    }
+
+    /// Prints the outline of a real file: SPELUNK_OUTLINE=/path/to/File.lean swift test --filter LeanSyntaxTests
+    func testPrintOutline() throws {
+        guard let path = ProcessInfo.processInfo.environment["SPELUNK_OUTLINE"] else { throw XCTSkip("SPELUNK_OUTLINE not set") }
+        let text = try String(contentsOfFile: path, encoding: .utf8)
+        let info = SyntaxAnalyzer.analyze(text, language: SourceLanguage.from(path: path), path: path)
+        func walk(_ items: [OutlineItem], _ depth: Int) {
+            for i in items {
+                print(String(repeating: "  ", count: depth) + "\(i.kind.label) \(i.name) \(i.range.start.line + 1)-\(i.range.end.line + 1) header \(i.headerEndLine + 1)")
+                walk(i.children, depth + 1)
+            }
+        }
+        walk(info.outline, 0)
+    }
+
+    func testTokens() {
+        let info = SyntaxAnalyzer.analyze(sample, language: .lean)
+        let ns = sample as NSString
+        func kinds(_ s: String) -> Set<TokenKind> {
+            Set(info.tokens.filter { ns.substring(with: $0.range) == s }.map(\.kind))
+        }
+        XCTAssertEqual(kinds("structure"), [.keyword])
+        XCTAssertEqual(kinds("Rec"), [.type])
+        XCTAssertEqual(kinds("alive_of_pos"), [.function])
+        XCTAssertEqual(kinds("simp"), [.macro])
+        XCTAssertEqual(kinds("@[simp]"), [.attribute])
+        XCTAssertEqual(kinds("/-- A record. -/"), [.docComment])
+        XCTAssertEqual(kinds("Vtime.HoldView"), [.module])
+        XCTAssertEqual(kinds("h"), [])
+    }
+}

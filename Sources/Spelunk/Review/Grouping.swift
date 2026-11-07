@@ -53,7 +53,7 @@ enum HunkGrouper {
 
     private static let identRE = try! NSRegularExpression(pattern: #"[A-Za-z_][A-Za-z0-9_]*"#)
     private static let keywordDeclRE = try! NSRegularExpression(
-        pattern: #"\b(fn|struct|enum|trait|mod|type|const|static|union|func|class|protocol|def|interface)\s+([A-Za-z_][A-Za-z0-9_]*)"#)
+        pattern: #"\b(fn|struct|enum|trait|mod|type|const|static|union|func|class|protocol|def|interface|theorem|lemma|abbrev|structure|inductive)\s+([A-Za-z_][A-Za-z0-9_]*)"#)
     /// A variant on a line of its own: `Name,` `Name(..),` or `Name { .. },`.
     private static let variantRE = try! NSRegularExpression(pattern: #"^\s*([A-Z][A-Za-z0-9_]*)\s*(\(.*\)|\{.*\})?\s*,?\s*$"#)
     /// A field on a line of its own: `name: Type,` with an optional `pub`.
@@ -94,7 +94,7 @@ enum HunkGrouper {
     }
 
     private static let moduleExtensions: Set<String> = [
-        "rs", "py", "go", "ts", "tsx", "js", "jsx", "mjs", "swift", "rb", "java", "kt", "scala", "ml", "ex", "hs",
+        "rs", "py", "go", "ts", "tsx", "js", "jsx", "mjs", "swift", "rb", "java", "kt", "scala", "ml", "ex", "hs", "lean",
     ]
 
     /// The module a source file declares by existing: its stem, or its folder's for a module file.

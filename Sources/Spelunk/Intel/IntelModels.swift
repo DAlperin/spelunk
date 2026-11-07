@@ -2,12 +2,13 @@ import Foundation
 import Observation
 
 enum IntelSource: String, Codable, Sendable, CaseIterable {
-    case rustAnalyzer, sourceKit, scip, treeSitter, textSearch, claude, manual
+    case rustAnalyzer, sourceKit, leanServer, scip, treeSitter, textSearch, claude, manual
 
     var label: String {
         switch self {
         case .rustAnalyzer: "rust-analyzer"
         case .sourceKit: "sourcekit-lsp"
+        case .leanServer: "Lean server"
         case .scip: "SCIP"
         case .treeSitter: "tree-sitter"
         case .textSearch: "text search"
@@ -19,7 +20,7 @@ enum IntelSource: String, Codable, Sendable, CaseIterable {
     /// Precision rank; higher wins when providers disagree.
     var precision: Int {
         switch self {
-        case .rustAnalyzer, .sourceKit: 5
+        case .rustAnalyzer, .sourceKit, .leanServer: 5
         case .scip: 4
         case .treeSitter: 2
         case .textSearch: 1

@@ -64,6 +64,11 @@ final class DebugBridge {
             ws.open(CodeLocation(path: String(p[0]), range: SourceRange(line: line)), edge: .manual)
         case "click": ws.didClick(at: pos(arg))
         case "def": ws.goToDefinition(at: pos(arg))
+        case "server":
+            if let srv = ws.servers.first(where: { $0.spec.name.lowercased() == arg.lowercased() }) {
+                srv.start(near: ws.document?.path)
+                if let d = ws.document { srv.didOpen(path: d.path, text: d.text, language: d.language) }
+            }
         case "back": ws.goBack()
         case "calls":
             if let c = ws.context { c.callDirection = arg == "out" ? .outgoing : .incoming; Task { await ws.loadCalls(c) } }
@@ -318,6 +323,8 @@ final class DebugBridge {
 
     private func dump(_ ws: Workspace) {
         var s = "doc=\(ws.document?.path ?? "-") cursor=\(String(describing: ws.cursor)) ra=\(ws.ra.status.label) scip=\(ws.scip.summary)\n"
+        for srv in ws.servers where srv.status != .off { s += "server \(srv.spec.name) \(srv.status.label) in \(srv.serverRoot.path)\n" }
+        if let d = ws.document { s += "language \(d.languageName) outline=\(d.syntax.flatOutline.count) tokens=\(d.syntax.tokens.count)\n" }
         if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let d = tv.coordinator?.display,
            let lm = tv.layoutManager, let tc = tv.textContainer, d.ns.length > 0 {
             let g = lm.glyphIndex(for: NSPoint(x: 0, y: max(0, tv.visibleRect.minY)), in: tc)

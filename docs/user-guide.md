@@ -163,8 +163,11 @@ whitespace.
 
 Navigation asks the most precise provider available and falls back when it cannot answer:
 
-1. The file's language server: rust-analyzer for `.rs`, sourcekit-lsp for `.swift`. A server counts
-   as available while it is indexing as well as when ready.
+1. The file's language server: rust-analyzer for `.rs`, sourcekit-lsp for `.swift`, and `lake serve`
+   for `.lean`. A server counts as available while it is indexing as well as when ready. The Lean
+   server starts when the first `.lean` file opens, in the nearest folder above it that holds a
+   `lakefile.toml` or `lakefile.lean`, and goes through elan so the project's `lean-toolchain` picks
+   the version.
 2. The SCIP index, for Rust. It is generated with `rust-analyzer scip` and cached per repository.
    While rust-analyzer is still warming up, the SCIP index answers first (Settings › Code
    Intelligence › "Answer from the SCIP index while rust-analyzer warms up"). A file modified after
@@ -508,7 +511,9 @@ removes all finished cards.
 
 ## Languages
 
-Rust uses a bundled tree-sitter grammar. Other languages get a basic highlighter until you install a
+Rust uses a bundled tree-sitter grammar. Lean has a built-in highlighter and outline: declarations
+(`def`, `theorem`, `structure`, `inductive`, `instance`, …) nested under their `namespace` or
+`section`, with tactics and doc comments marked. Other languages get a basic highlighter until you install a
 grammar in Settings › Languages: pick a preset (Swift, Python, Go, JavaScript, TypeScript + TSX, C,
 C++, Java, JSON, Bash, TOML, YAML, …) or give a grammar's git URL, with an optional subdirectory
 and tag or branch. Spelunk clones it, reads `tree-sitter.json` for grammar names and file types,
@@ -573,6 +578,7 @@ Text settings apply when a file is next opened.
 | Start language servers automatically | on | |
 | rust-analyzer path | empty (detect) | |
 | sourcekit-lsp path | empty (detect) | |
+| lake path for Lean | empty (detect) | |
 | Keep N files open in each server | 24 | 4–100 |
 | Index pull request heads with their own rust-analyzer | off | |
 | Answer from the SCIP index while rust-analyzer warms up | on | |

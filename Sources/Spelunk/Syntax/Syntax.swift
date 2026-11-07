@@ -13,11 +13,12 @@ struct Token: Sendable {
 }
 
 enum OutlineKind: String, Codable, Sendable {
-    case function, method, structItem, enumItem, union, trait, impl, module, macro, constant, staticItem, typeAlias, classItem, interface
+    case function, method, theorem, structItem, enumItem, union, trait, impl, module, macro, constant, staticItem, typeAlias, classItem, interface
 
     var symbolGlyph: String {
         switch self {
         case .function, .method: "f(x)"
+        case .theorem: "⊢"
         case .structItem, .union: "S"
         case .enumItem: "E"
         case .trait: "T"
@@ -35,6 +36,7 @@ enum OutlineKind: String, Codable, Sendable {
         switch self {
         case .function: "Function"
         case .method: "Method"
+        case .theorem: "Theorem"
         case .structItem: "Struct"
         case .union: "Union"
         case .enumItem: "Enum"
@@ -184,6 +186,7 @@ enum SyntaxAnalyzer {
     static func analyze(_ text: String, language: SourceLanguage) -> SyntaxInfo {
         switch language {
         case .rust: return RustSyntax.analyze(text)
+        case .lean: return LeanSyntax.analyze(text)
         default: return GenericLexer.analyze(text, language: language)
         }
     }

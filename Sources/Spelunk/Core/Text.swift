@@ -125,7 +125,7 @@ enum ColumnEncoding {
 }
 
 enum SourceLanguage: String, Codable, Sendable {
-    case rust, toml, markdown, swift, c, cpp, go, python, javascript, typescript, json, yaml, shell, protobuf, sql, plain
+    case rust, toml, markdown, swift, c, cpp, go, python, javascript, typescript, json, yaml, shell, protobuf, sql, lean, plain
 
     static func from(path: String) -> SourceLanguage {
         switch path.pathExtension.lowercased() {
@@ -144,6 +144,7 @@ enum SourceLanguage: String, Codable, Sendable {
         case "sh", "bash", "zsh": return .shell
         case "proto": return .protobuf
         case "sql": return .sql
+        case "lean": return .lean
         default:
             if path.lastPathComponent == "Cargo.lock" { return .toml }
             return .plain
@@ -167,6 +168,7 @@ enum SourceLanguage: String, Codable, Sendable {
         case .shell: "Shell"
         case .protobuf: "Protobuf"
         case .sql: "SQL"
+        case .lean: "Lean"
         case .plain: "Plain Text"
         }
     }

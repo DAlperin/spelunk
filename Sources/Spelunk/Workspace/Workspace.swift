@@ -188,7 +188,8 @@ final class Workspace {
     /// rust-analyzer; other languages' servers are in `servers`.
     let ra: LanguageServer
     let sourceKit: LanguageServer
-    var servers: [LanguageServer] { [ra, sourceKit] }
+    let lean: LanguageServer
+    var servers: [LanguageServer] { [ra, sourceKit, lean] }
     func server(for path: String) -> LanguageServer? { servers.first { $0.spec.handles(path) } }
     /// The server for the file on screen, or rust-analyzer when the file has none.
     var activeServer: LanguageServer { document.flatMap { server(for: $0.path) } ?? ra }
@@ -206,9 +207,10 @@ final class Workspace {
         docs = DocumentCache(root: self.root)
         ra = LanguageServer(root: self.root, spec: .rust)
         sourceKit = LanguageServer(root: self.root, spec: .swift)
+        lean = LanguageServer(root: self.root, spec: .lean)
         scip = SCIPService(root: self.root)
         clippy = ClippyService(root: self.root)
-        intel = IntelHub(root: self.root, ra: ra, servers: [ra, sourceKit], scip: scip, docs: docs)
+        intel = IntelHub(root: self.root, ra: ra, servers: [ra, sourceKit, lean], scip: scip, docs: docs)
         traces = TraceStore(root: self.root)
         bookmarks = BookmarkStore(root: self.root)
         github = GitHubService(root: self.root)
@@ -818,7 +820,7 @@ final class Workspace {
     /// Sends a working-copy document to its language server, starting the server on first use.
     func openInServer(_ d: SourceDocument) {
         guard let srv = server(for: d.path) else { return }
-        if srv.status == .off, Prefs.autoStartServers { srv.start() }
+        if srv.status == .off, Prefs.autoStartServers { srv.start(near: d.path) }
         srv.didOpen(path: d.path, text: d.text, language: d.language)
     }
 

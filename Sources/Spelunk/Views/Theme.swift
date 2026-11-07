@@ -73,7 +73,7 @@ extension ChangeTier {
 extension IntelSource {
     var color: Color {
         switch self {
-        case .rustAnalyzer, .sourceKit: .green
+        case .rustAnalyzer, .sourceKit, .leanServer: .green
         case .scip: .blue
         case .treeSitter: .orange
         case .textSearch: .gray

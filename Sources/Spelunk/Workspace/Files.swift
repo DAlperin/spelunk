@@ -117,12 +117,13 @@ final class FileNode: Identifiable, Hashable, Sendable {
 enum FileClassifier {
     static let sourceExtensions: Set<String> = [
         "rs", "toml", "md", "swift", "c", "h", "cc", "cpp", "hpp", "go", "py", "js", "ts", "tsx", "jsx", "proto",
-        "sql", "sh", "yml", "yaml", "json", "lock", "slt", "td", "txt",
+        "sql", "sh", "yml", "yaml", "json", "lock", "slt", "td", "txt", "lean", "rb", "java", "kt", "scala", "hs", "ml", "mli",
+        "ex", "exs", "zig", "nix", "mjs", "cjs",
     ]
 
     static func isSource(_ path: String) -> Bool {
         let ext = path.pathExtension.lowercased()
-        if ext.isEmpty { return ["Makefile", "Dockerfile", "BUILD", "WORKSPACE"].contains(path.lastPathComponent) }
+        if ext.isEmpty { return ["Makefile", "Dockerfile", "BUILD", "WORKSPACE", "lean-toolchain"].contains(path.lastPathComponent) }
         return sourceExtensions.contains(ext)
     }
 

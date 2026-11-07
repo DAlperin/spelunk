@@ -31,6 +31,7 @@ final class IntelHub {
         switch SourceLanguage.from(path: path) {
         case .swift: return ("*.swift", "func|class|struct|enum|protocol|actor|extension|typealias|var|let|case")
         case .rust: return ("*.rs", "fn|struct|enum|trait|type|const|static|mod|union|macro_rules!")
+        case .lean: return ("*.lean", "def|theorem|lemma|abbrev|structure|class|inductive|instance|axiom|opaque")
         default:
             let ext = path.pathExtension
             return (ext.isEmpty ? "*" : "*.\(ext)", "def|class|function|func|fn|struct|type|interface|const|let|var")
@@ -93,7 +94,8 @@ final class IntelHub {
             d.kindLabel = item.kind.label
             if d.signature == nil, !item.detail.isEmpty { d.signature = item.detail }
         } else if let sig = d.signature {
-            d.kindLabel = Self.kindFromSignature(sig)
+            // Lean's hover is the bare `name : type`, which says nothing about the kind.
+            d.kindLabel = d.source == .leanServer ? "Definition" : Self.kindFromSignature(sig)
         }
         return d
     }

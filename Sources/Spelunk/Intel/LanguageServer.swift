@@ -22,6 +22,9 @@ struct LanguageServerSpec: @unchecked Sendable {
     var probeArgs: [String]?
     /// The server sends rust-analyzer's experimental serverStatus; others are ready once indexing ends.
     var reportsQuiescence: Bool
+    /// Files that mark a project directory. When set, the server runs in the nearest such directory
+    /// above the first file it serves rather than in the workspace root.
+    var projectMarkers: [String] = []
 
     func handles(_ path: String) -> Bool { fileExtensions.contains(path.pathExtension.lowercased()) }
 
@@ -68,6 +71,21 @@ struct LanguageServerSpec: @unchecked Sendable {
             return c
         },
         probeArgs: nil, reportsQuiescence: false)
+
+    /// Lake's server, started through elan's proxy so the project's lean-toolchain picks the version.
+    static let lean = LanguageServerSpec(
+        name: "Lean", language: .lean, languageId: "lean4", source: .leanServer,
+        fileExtensions: ["lean"], watchedSuffixes: [".lean"], settingsSection: nil,
+        settings: [:], args: ["serve"],
+        pathKey: "lakePath",
+        candidates: {
+            var c: [String] = []
+            if let p = Shell.which("lake") { c.append(p) }
+            c.append("\(NSHomeDirectory())/.elan/bin/lake")
+            c.append("/opt/homebrew/bin/lake")
+            return c
+        },
+        probeArgs: nil, reportsQuiescence: false, projectMarkers: ["lakefile.toml", "lakefile.lean"])
 }
 
 /// A language server over LSP (rust-analyzer, sourcekit-lsp). Owns the server process for one
@@ -96,6 +114,8 @@ final class LanguageServer {
     }
 
     let root: URL
+    /// Where the server runs: the workspace root, or the project directory found by `start(near:)`.
+    private(set) var serverRoot: URL
     var status: Status = .off
     var binaryPath: String?
     var version: String?
@@ -109,7 +129,21 @@ final class LanguageServer {
 
     init(root: URL, spec: LanguageServerSpec) {
         self.root = root
+        self.serverRoot = root
         self.spec = spec
+    }
+
+    /// The nearest directory at or above `path`, inside the workspace, holding one of the spec's
+    /// project markers.
+    func projectRoot(for path: String) -> URL? {
+        let fm = FileManager.default
+        var dir = root.appendingPathComponent(path).deletingLastPathComponent().standardizedFileURL
+        while dir.path.hasPrefix(root.path) {
+            if spec.projectMarkers.contains(where: { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }) { return dir }
+            if dir.path == root.path { break }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
     }
 
     /// True once the server has finished its startup indexing.
@@ -154,8 +188,9 @@ final class LanguageServer {
     private var queuedOpens: [String: String] = [:]
     private var openOrder: [String] = []
 
-    func start() {
+    func start(near path: String? = nil) {
         guard client == nil, status != .starting else { return }
+        if let path, !spec.projectMarkers.isEmpty { serverRoot = projectRoot(for: path) ?? root }
         status = .starting
         Task {
             let bin = await Self.resolveBinary(self.spec)
@@ -174,7 +209,7 @@ final class LanguageServer {
         let gen = generation
         initialized = false
         versions.removeAll()
-        let c = LSPClient(executable: bin, args: spec.args, cwd: root)
+        let c = LSPClient(executable: bin, args: spec.args, cwd: serverRoot)
         if Log.enabled, let filter = ProcessInfo.processInfo.environment["SPELUNK_RA_LOG"] { c.environment["RA_LOG"] = filter }
         c.onNotification = { [weak self] method, params in
             let box = JSONBox(value: params)
@@ -217,8 +252,8 @@ final class LanguageServer {
             do {
                 let params: [String: Any] = [
                     "processId": ProcessInfo.processInfo.processIdentifier,
-                    "rootUri": root.absoluteString,
-                    "workspaceFolders": [["uri": root.absoluteString, "name": root.lastPathComponent]],
+                    "rootUri": self.serverRoot.absoluteString,
+                    "workspaceFolders": [["uri": self.serverRoot.absoluteString, "name": self.serverRoot.lastPathComponent]],
                     "capabilities": [
                         "general": ["positionEncodings": ["utf-16"]],
                         "window": ["workDoneProgress": true],
@@ -245,6 +280,7 @@ final class LanguageServer {
                 for (path, text) in self.queuedOpens { self.didOpen(path: path, text: text, language: self.spec.language) }
                 self.queuedOpens = [:]
                 if case .starting = self.status { self.status = .indexing("Loading workspace") }
+                if !self.spec.reportsQuiescence { self.refreshStatus() }
             } catch {
                 self.status = .failed(error.localizedDescription)
             }
@@ -284,6 +320,16 @@ final class LanguageServer {
                 if let msg = value["message"] as? String, !msg.isEmpty { s += " \(msg)" }
                 if let pct = value["percentage"] as? Int { s += " \(pct)%" }
                 progress[token] = s
+            }
+            refreshStatus()
+        case "$/lean/fileProgress":
+            // Lean reports the ranges of a file it is still checking; an empty list means done.
+            guard let uri = (p?["textDocument"] as? [String: Any])?["uri"] as? String else { return }
+            let key = "lean:" + uri
+            if ((p?["processing"] as? [Any]) ?? []).isEmpty {
+                progress.removeValue(forKey: key)
+            } else {
+                progress[key] = "Checking \(URL(string: uri)?.lastPathComponent ?? uri)"
             }
             refreshStatus()
         case "experimental/serverStatus":

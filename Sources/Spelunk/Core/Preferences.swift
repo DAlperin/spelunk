@@ -36,6 +36,7 @@ enum Prefs {
         static let autoStartServers = "autoStartRA"
         static let rustAnalyzerPath = "rustAnalyzerPath"
         static let sourceKitPath = "sourceKitPath"
+        static let lakePath = "lakePath"
         static let scipFirst = "intel.scipFirstWhileCold"
         static let openDocuments = "intel.openDocuments"
         static let documentCacheSize = "intel.documentCacheSize"
@@ -71,6 +72,7 @@ enum Prefs {
         Key.autoStartServers: true,
         Key.rustAnalyzerPath: "",
         Key.sourceKitPath: "",
+        Key.lakePath: "",
         Key.scipFirst: true,
         Key.openDocuments: 24,
         Key.documentCacheSize: 300,

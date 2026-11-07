@@ -158,12 +158,14 @@ private struct IntelligenceSettings: View {
     @AppStorage(Prefs.Key.autoStartServers) var autoStart = true
     @AppStorage(Prefs.Key.rustAnalyzerPath) var raPath = ""
     @AppStorage(Prefs.Key.sourceKitPath) var skPath = ""
+    @AppStorage(Prefs.Key.lakePath) var lakePath = ""
     @AppStorage(Prefs.Key.scipFirst) var scipFirst = true
     @AppStorage(Prefs.Key.openDocuments) var openDocuments = 24
     @AppStorage(Prefs.Key.documentCacheSize) var cacheSize = 300
     @AppStorage(Prefs.Key.headServer) var headServer = false
     @State private var detectedRA = "…"
     @State private var detectedSK = "…"
+    @State private var detectedLake = "…"
 
     var body: some View {
         Form {
@@ -173,11 +175,14 @@ private struct IntelligenceSettings: View {
                 Note("Detected: \(detectedRA)")
                 TextField("sourcekit-lsp path (empty: detect)", text: $skPath)
                 Note("Detected: \(detectedSK)")
+                TextField("lake path for Lean (empty: detect)", text: $lakePath)
+                Note("Detected: \(detectedLake). Runs `lake serve` in the folder holding the lakefile.")
                 Stepper(value: $openDocuments, in: 4...100, step: 4) { Text(verbatim: "Keep \(openDocuments) files open in each server") }
             }
             .task {
                 detectedRA = await LanguageServer.resolveBinary(.rust) ?? "none"
                 detectedSK = await LanguageServer.resolveBinary(.swift) ?? "none"
+                detectedLake = await LanguageServer.resolveBinary(.lean) ?? "none"
             }
             Section("Reviews") {
                 Toggle("Index pull request heads with their own rust-analyzer", isOn: $headServer)

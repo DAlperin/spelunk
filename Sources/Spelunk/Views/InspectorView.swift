@@ -708,7 +708,7 @@ struct ProvenanceFooter: View {
 
     func color(_ s: IntelSource?) -> Color {
         switch s {
-        case .rustAnalyzer, .sourceKit: .green
+        case .rustAnalyzer, .sourceKit, .leanServer: .green
         case .scip: .blue
         case nil: ws.activeServer.status == .ready ? .green : .yellow
         default: .orange
