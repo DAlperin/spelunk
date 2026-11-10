@@ -65,6 +65,15 @@ final class DebugBridge {
         case "search": ws.sidebarTab = .search; ws.search.query = arg
         case "searchfiles": ws.search.files = arg
         case "find": ws.findInRepository()
+        case "guide":
+            switch arg {
+            case "restart": Guide.shared.restart()
+            case "close": Guide.shared.close()
+            case "collapse": Guide.shared.collapsed.toggle()
+            case "skip": if let s = Guide.shared.focus { Guide.shared.skip(s) }
+            case "showme": if let s = Guide.shared.focus, let m = s.showMe, m.available(ws) { m.run(ws) }
+            default: if let s = Guide.steps.first(where: { $0.id == arg }) { Guide.shared.picked = s.id } else { Guide.shared.show() }
+            }
         case "browse": ws.open(CodeLocation(path: arg, range: SourceRange(line: 0)), reason: .browse)
         case "diff": if let m = DiffMode(rawValue: arg.capitalized) { ws.setDiffMode(m) }
         case "click": ws.didClick(at: pos(arg))
@@ -332,6 +341,8 @@ final class DebugBridge {
         for srv in ws.servers where srv.status != .off { s += "server \(srv.spec.name) \(srv.status.label) in \(srv.serverRoot.path)\n" }
         if let d = ws.document { s += "language \(d.languageName) outline=\(d.syntax.flatOutline.count) tokens=\(d.syntax.tokens.count)\n" }
         if let v = ws.versionInfo { s += "version \(v.title) \(v.notReviewed ?? "-") alternatives=\(v.alternatives.map(\.label))\n" }
+        let g = Guide.shared
+        s += "guide visible=\(g.visible) closed=\(g.closed) focus=\(g.focus?.id ?? "-") done=\(Guide.steps.filter(g.isDone).map(\.id)) events=\(g.events.map(\.rawValue).sorted())\n"
         if !ws.search.query.isEmpty { s += "search '\(ws.search.searched)' matches=\(ws.search.matchCount) files=\(ws.search.groups.count) exts=\(Set(ws.search.groups.map { $0.path.pathExtension }).sorted()) truncated=\(ws.search.truncated) error=\(ws.search.error ?? "-")\n" }
         s += "open \(ws.pinnedReviews.map { "\($0.target.key)[\($0.state == .ready ? "ready" : "-")\($0.freshness == .current ? "" : ",stale")\($0.workingCopyRelation.map { "," + $0 } ?? "")]" })\n"
         if let r = ws.review { s += "active \(r.target.key) newRev=\(r.newRev ?? "nil") files=\(r.files.map(\.newPath))\n" }

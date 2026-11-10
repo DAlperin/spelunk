@@ -248,6 +248,7 @@ enum PaletteCommands {
         add("Reveal Open File in Files", icon: "scope", when: ws.document != nil) { ws.sidebarTab = .files; ws.revealInTreePending = true }
         add("Show Search", nil, "⇧⌘F", icon: "magnifyingglass") { ws.findInRepository() }
         add("Show History", icon: "arrow.triangle.branch") { ws.sidebarTab = .scm }
+        add("Show Getting Started", "A short guide to the main workflows", icon: "flashlight.on.fill") { Guide.shared.show() }
         add("Show Review", icon: "list.bullet.indent", when: hasReview) { ws.sidebarTab = .changes }
 
         // Review

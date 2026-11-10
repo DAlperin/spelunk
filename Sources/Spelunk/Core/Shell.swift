@@ -112,11 +112,15 @@ extension String {
 }
 
 enum AppPaths {
-    /// Per-repository data: the store, caches and checkouts. SPELUNK_SUPPORT_DIR moves it, so a test
-    /// instance can run on a repository without touching the data of an instance already open on it.
-    static func support(for root: URL) -> URL {
-        let base = ProcessInfo.processInfo.environment["SPELUNK_SUPPORT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    /// Spelunk's Application Support folder. SPELUNK_SUPPORT_DIR moves it, so a test instance can run
+    /// on a repository without touching the data of an instance already open on it.
+    static var base: URL {
+        ProcessInfo.processInfo.environment["SPELUNK_SUPPORT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Spelunk", isDirectory: true)
+    }
+
+    /// Per-repository data: the store, caches and checkouts.
+    static func support(for root: URL) -> URL {
         let slug = root.lastPathComponent + "-" + String(UInt64(bitPattern: Int64(root.path.stableHash)), radix: 36)
         let dir = base.appendingPathComponent(slug, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

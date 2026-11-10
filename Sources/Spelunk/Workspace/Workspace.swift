@@ -157,7 +157,12 @@ final class Workspace {
         guard let r = review, !r.files.isEmpty, let d = document else { return false }
         return reviewFile(for: d) != nil
     }
-    var palette: PaletteMode? { didSet { if palette != oldValue { paletteQuery = "" } } }
+    var palette: PaletteMode? {
+        didSet {
+            if palette != oldValue { paletteQuery = "" }
+            if palette == .commands { Guide.shared.note(.openedPalette) }
+        }
+    }
     var paletteQuery = ""
     var scmSection: SCMSection = .changes
     var showSubmitReview = false
@@ -560,6 +565,7 @@ final class Workspace {
         highlightRanges = []
         revealRequest += 1
         arrival = edge.map { (edge: $0, source: source) }
+        if edge == .definition { Guide.shared.note(.followedDefinition) }
     }
 
     /// Shows a document that is not the working copy (review before/after).
@@ -738,6 +744,7 @@ final class Workspace {
                              snippet: d.lineText(p.line).trimmingCharacters(in: .whitespaces), anchor: CodeAnchor.make(loc, in: d))
         traces.insert(step)
         editingStepID = step.id
+        Guide.shared.note(.addedPathStep)
     }
 
     /// Adds a code path from `Trace.plainText()`'s format, finding each step by its symbol.

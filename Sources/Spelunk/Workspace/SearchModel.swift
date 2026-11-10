@@ -103,6 +103,7 @@ final class SearchModel {
         error = o.error
         searched = q
         searching = false
+        if matchCount > 0 { Guide.shared.note(.searched) }
     }
 
     /// The declaration keywords of the languages Spelunk reads, followed by a name containing the query.

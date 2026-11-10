@@ -140,6 +140,7 @@ struct MainView: View {
         .navigationTitle(ws.name)
         .sheet(isPresented: $ws.showRuleWriter) { RuleWriterSheet(ws: ws) }
         .onAppear {
+            Guide.shared.windowOpened()
             if let m = keyMonitor { NSEvent.removeMonitor(m) }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [ws, host] e in
                 let handled = MainActor.assumeIsolated { () -> Bool in
@@ -382,6 +383,13 @@ struct EditorColumn: View {
             Divider()
             StatusBar(ws: ws)
         }
+        .overlay(alignment: .bottomTrailing) {
+            if Guide.shared.visible {
+                GuideCard(ws: ws).padding(.trailing, 18).padding(.bottom, 36)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: Guide.shared.visible)
     }
 }
 

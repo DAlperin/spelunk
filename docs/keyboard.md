@@ -109,7 +109,7 @@ there is one. Typing filters by title and by the subtitle shown under it.
 | Go to Symbol in Workspace… | | always (opens the file palette) |
 | Go Back / Go Forward | ⌘[ / ⌘] | there is history in that direction |
 | Go to Definition | ⇧⌘D | the cursor is in a file |
-| Show Files, Show Search, Show History | ⇧⌘F for Search | always |
+| Show Files, Show Search, Show History, Show Getting Started | ⇧⌘F for Search | always |
 | Show Review | | a review is open |
 | Review Working Copy, Review Stack Since trunk() | | jj repository |
 | Review Uncommitted Git Changes, Review GitHub Pull Request… | | the repository has git |

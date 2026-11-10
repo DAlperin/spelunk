@@ -9,6 +9,19 @@ thread or submit a review.
 Keyboard shortcuts are collected in [keyboard.md](keyboard.md) and the review rule language in
 [rules.md](rules.md).
 
+## Getting Started
+
+A Getting Started card opens over the bottom corner of the editor in repository windows. It covers
+eight things: opening a file, following a definition and coming back, searching, stepping through
+the working copy's changes, reviewing another change, returning to the working copy, recording a code
+path and the command palette. Each step is ticked off when you do it, in any order; "Show me" brings
+up the part of the window the step is about, and Skip marks it done. All Steps lists them so you can
+pick one.
+
+The card stops opening once every step is done or you close it. Help › Getting Started (or "Show
+Getting Started" in the palette) shows it again, and Settings › General › "Start the Guide Over"
+clears its progress. Progress is kept in `~/Library/Application Support/Spelunk/guide.json`.
+
 ## Repositories and windows
 
 - Open a repository with ⌘O (File › Open Repository…) or from the welcome screen, which lists the
@@ -589,7 +602,8 @@ loaded into the app. Queries can be edited in place and reloaded. Grammars live 
 
 ### General
 
-Buttons to edit your review rules and view the defaults, and a note on windows.
+Buttons to edit your review rules and view the defaults, a note on windows, and "Start the Guide
+Over" for the Getting Started guide.
 
 ### Editor
 

@@ -92,6 +92,9 @@ struct SpelunkApp: App {
             CommandMenu("Claude") {
                 Button("Ask…") { model.workspace?.openAsk() }.keyboardShortcut("l", modifiers: [.command])
             }
+            CommandGroup(replacing: .help) {
+                Button("Getting Started") { Guide.shared.show() }
+            }
         }
         Settings { SettingsView() }
     }

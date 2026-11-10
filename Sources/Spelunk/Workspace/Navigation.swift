@@ -22,6 +22,7 @@ extension Workspace {
         if reason != .step && reason != .click { traces.currentStepID = nil }
         switch reason {
         case .hunk:
+            Guide.shared.note(.steppedHunk)
             diffShown = true
             if !contextPinned { contextFocus = .hunk }
             if inspectorPane == .paths { inspectorPane = .context }
@@ -32,7 +33,10 @@ extension Workspace {
         case .thread:
             diffShown = true
         case .browse:
+            Guide.shared.note(.openedFile)
             if review?.follows == true { diffShown = false }
+        case .history:
+            Guide.shared.note(.wentBack)
         default:
             break
         }
@@ -52,6 +56,7 @@ extension Workspace {
         guard let key = activeReviewKey else { return }
         let doc = document, line = cursor?.line ?? 0
         closeReview(key)
+        Guide.shared.note(.closedReview)
         if let doc, !doc.isWorkingCopy, doc.side != .old {
             open(CodeLocation(path: doc.path, range: SourceRange(line: line)), record: false, reason: .manual)
         }
@@ -62,6 +67,7 @@ extension Workspace {
     /// review is cleared, then the new review's first hunk is selected.
     /// `showList` brings the Review tab forward, for requests to open a review rather than to close one.
     func activateReview(_ key: String?, showList: Bool = true) {
+        if key != nil { Guide.shared.note(.openedReview) }
         if key != activeReviewKey {
             diffShown = true
             activeReviewKey = key

@@ -37,6 +37,10 @@ private struct GeneralSettings: View {
             Section("Windows") {
                 Note("Each repository opens in its own window (⌘O). ⌘N opens a new window. Windows come back on relaunch.")
             }
+            Section("Getting Started") {
+                Button("Start the Guide Over") { Guide.shared.restart() }
+                Note("Clears the guide's progress and shows it again. Help › Getting Started shows it without clearing anything.")
+            }
         }
         .formStyle(.grouped)
     }
