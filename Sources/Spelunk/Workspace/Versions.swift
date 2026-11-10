@@ -49,7 +49,8 @@ extension Workspace {
                 if f.status != .deleted { info.alternatives.append(.init(label: "After · \(r.shortLabel)") { showSide(r, .new, f.newPath) }) }
                 if f.status != .added { info.alternatives.append(.init(label: "Before · \(r.shortLabel)") { showSide(r, .old, f.oldPath) }) }
             } else if let r = review, r.afterIsWorkingCopy, let f = r.files.first(where: { $0.newPath == path }), f.status != .added {
-                info.alternatives.append(.init(label: "Before · \(r.shortLabel)") { showSide(r, .old, f.oldPath) })
+                let name = r.tracksWorkingCopy ? "working copy changes" : r.shortLabel
+                info.alternatives.append(.init(label: "Before · \(name)") { showSide(r, .old, f.oldPath) })
             }
             return info
         }

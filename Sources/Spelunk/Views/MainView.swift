@@ -201,7 +201,7 @@ struct MainToolbar: ToolbarContent {
                     .help("Close this review and go back to the working copy (⌥⌘W)")
             }
 
-            if ws.documentInReview {
+            if ws.documentInReview, ws.review?.files.isEmpty == false {
                 Picker("Diff", selection: Binding(get: { ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
                     ForEach(DiffMode.toolbar) { Text($0.rawValue).tag($0) }
                 }
@@ -560,7 +560,7 @@ struct StatusBar: View {
             }
             Spacer(minLength: 8)
             StatusIndicators(ws: ws).fixedSize()
-            if ws.reviewing {
+            if ws.reviewing, ws.review?.files.isEmpty == false {
                 ViewThatFits(in: .horizontal) {
                     keyHints(labels: true)
                     keyHints(labels: false)

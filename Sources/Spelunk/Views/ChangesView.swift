@@ -46,6 +46,32 @@ struct CheckoutMenu: View {
     }
 }
 
+/// Says that `@` is now a different change, with a way to review the one it was.
+struct MoveNotice: View {
+    @Bindable var ws: Workspace
+    let move: WorkingCopyMove
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: "@ moved at \(move.at.formatted(date: .omitted, time: .shortened))").font(.caption.weight(.semibold))
+                Text(verbatim: move.previousIsParent
+                     ? "\(move.previous) is now @-; this review shows the new @, \(move.current)."
+                     : "It was \(move.previous) and is now \(move.current).")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Review \(move.previous)") { ws.startReview(.jj(from: move.previous + "-", to: move.previous)) }
+                    .buttonStyle(.link).font(.caption)
+            }
+            Spacer(minLength: 0)
+            Button { ws.workingCopyMove = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless).font(.caption).help("Dismiss")
+        }
+        .padding(7)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
 struct ChangesView: View {
     @Bindable var ws: Workspace
     @Bindable var review: ReviewSession
@@ -69,7 +95,7 @@ struct ChangesView: View {
                                    detail: review.tracksWorkingCopy && ws.vcs.kind == .jj ? "@ is empty. Its parent change is not part of this review." : nil) {
                         if review.tracksWorkingCopy {
                             Button(ws.vcs.kind == .jj ? "Review the Parent Change (@-)" : "Review the Last Commit") {
-                                ws.startReview(ws.vcs.kind == .jj ? .jj(from: "@--", to: "@-") : .git(base: "HEAD~1", head: "HEAD"))
+                                Task { await ws.reviewParentChange() }
                             }
                         }
                     }
@@ -87,6 +113,7 @@ struct ChangesView: View {
 
     var header: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if review.tracksWorkingCopy, let m = ws.workingCopyMove { MoveNotice(ws: ws, move: m) }
             if let pr = review.pullRequest {
                 prHeader(pr)
             } else {
@@ -94,8 +121,10 @@ struct ChangesView: View {
                     if let id = review.changeID {
                         Text(verbatim: (review.tracksWorkingCopy ? "@ " : "") + id).font(.caption.monospaced()).foregroundStyle(.purple)
                     }
-                    Text(verbatim: "· \(review.files.count) files · +\(review.addedCount) −\(review.removedCount)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if !review.files.isEmpty {
+                        Text(verbatim: "· \(review.files.count) files · +\(review.addedCount) −\(review.removedCount)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     if review.tracksWorkingCopy {
                         HStack(spacing: 3) { Circle().fill(.green).frame(width: 6, height: 6); Text("live") }
@@ -125,25 +154,25 @@ struct ChangesView: View {
             }
             if !review.rangeCommits.isEmpty { CommitStepper(review: review) }
             if !review.files.isEmpty {
-            ImportanceBar(review: review)
-            HStack(spacing: 8) {
-                let p = review.progress
-                ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(minWidth: 30, maxWidth: 70)
-                Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-                if let pr = review.pullRequest {
-                    let open = pr.threads.filter { !$0.isResolved }.count
-                    if open > 0 {
-                        Text(verbatim: "● \(open) unresolved").font(.caption).foregroundStyle(.orange).lineLimit(1).fixedSize()
+                ImportanceBar(review: review)
+                HStack(spacing: 8) {
+                    let p = review.progress
+                    ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(minWidth: 30, maxWidth: 70)
+                    Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    if let pr = review.pullRequest {
+                        let open = pr.threads.filter { !$0.isResolved }.count
+                        if open > 0 {
+                            Text(verbatim: "● \(open) unresolved").font(.caption).foregroundStyle(.orange).lineLimit(1).fixedSize()
+                        }
                     }
+                    Spacer()
+                    TriageMenu(ws: ws, review: review)
                 }
-                Spacer()
-                TriageMenu(ws: ws, review: review)
+                Picker("", selection: $review.listMode) {
+                    ForEach(ReviewSession.ListMode.allCases) { m in Text(m.rawValue).tag(m) }
+                }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             }
-            }
-            Picker("", selection: $review.listMode) {
-                ForEach(ReviewSession.ListMode.allCases) { m in Text(m.rawValue).tag(m) }
-            }
-            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             if !review.ruleErrors.isEmpty {
                 Label(review.ruleErrors.count == 1 ? "1 rule error" : "\(review.ruleErrors.count) rule errors", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                     .onTapGesture { RulesFiles.openUserRules() }

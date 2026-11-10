@@ -155,6 +155,9 @@ final class Workspace {
 
     /// Always-on review of the current jj revision (or uncommitted git changes).
     var workingReview: ReviewSession?
+    /// The last time `@` became a different change, for the notice in the Review tab.
+    var workingCopyMove: WorkingCopyMove?
+    @ObservationIgnored private var lastWorkingChange: String?
     /// Reviews opened explicitly: pull requests, graph changes, custom ranges.
     var pinnedReviews: [ReviewSession] = []
     /// Key of the pinned review being shown; nil shows the working copy.
@@ -378,6 +381,33 @@ final class Workspace {
             workingReview = r
             await r.load()
         }
+        let moved = await noteWorkingCopyMove()
+        dropStaleSelection(moved: moved)
+    }
+
+    /// Records `@` becoming a different change. Returns whether it did.
+    private func noteWorkingCopyMove() async -> Bool {
+        guard vcs.kind == .jj, let now = workingReview?.changeID else { return false }
+        defer { lastWorkingChange = now }
+        guard let previous = lastWorkingChange, previous != now else { return false }
+        if workingCopyMove?.previous == now {
+            workingCopyMove = nil
+            return true
+        }
+        let parent = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", "@-", "-T", "change_id.short(8)"], cwd: root))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        workingCopyMove = WorkingCopyMove(previous: previous, current: now, previousIsParent: parent == previous, at: Date())
+        return true
+    }
+
+    /// Clears a hunk selection the working-copy review no longer has, or all of it once `@` is a
+    /// different change, along with the context and split view that belonged to it.
+    private func dropStaleSelection(moved: Bool) {
+        guard activeReviewKey == nil, let r = workingReview, let id = selectedHunkID,
+              moved || !r.allHunks.contains(where: { $0.id == id }) else { return }
+        selectedHunkID = nil
+        if changeContext?.hunkID == id { changeContext = nil }
+        splitDocument = nil
     }
 
     func closeReview(_ key: String) {
@@ -749,6 +779,16 @@ final class Workspace {
 
     /// Opens a review. The working copy's own target switches to the working tab; anything else is
     /// pinned beside it (reusing an existing pin for the same target).
+    /// Opens a review of `@`'s parent, named by its change id so it stays that change after `@`
+    /// moves; for git, the last commit.
+    func reviewParentChange() async {
+        guard vcs.kind == .jj else { startReview(.git(base: "HEAD~1", head: "HEAD")); return }
+        let id = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", "@-", "-T", "change_id.short(8)"], cwd: root))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let id, !id.isEmpty else { startReview(.jj(from: "@--", to: "@-")); return }
+        startReview(.jj(from: id + "-", to: id))
+    }
+
     func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
         let r: ReviewSession
         if let w = workingReview, w.target == target {
@@ -1128,4 +1168,13 @@ final class Workspace {
         open(CodeLocation(path: p, range: SourceRange(line: max(0, line)), version: inReview ? version : nil),
              edge: .manual, source: .claude, reason: .citation)
     }
+}
+
+/// `@` became a different change: from `previous` to `current`.
+struct WorkingCopyMove: Equatable {
+    var previous: String
+    var current: String
+    /// `previous` is now `@-`, as after `jj new` or `jj commit`.
+    var previousIsParent: Bool
+    var at: Date
 }
