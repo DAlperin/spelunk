@@ -64,6 +64,12 @@ extension Workspace {
             traces.currentStepID = nil
         }
         sidebarTab = .changes
+        if let r = review, !r.follows {
+            Task {
+                await checkFreshness([r])
+                if case .githubPR = r.target { await r.refreshPullRequest() }
+            }
+        }
         if let r = review, r.state == .ready, selectedHunkID == nil, let h = r.tierSections.first?.hunks.first ?? r.allHunks.first {
             selectHunk(h)
         }

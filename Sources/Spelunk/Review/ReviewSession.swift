@@ -199,6 +199,42 @@ final class ReviewSession {
     /// True for the always-on working-copy review, which refreshes as files change.
     let tracksWorkingCopy: Bool
 
+    /// Whether a fixed review still matches the repository.
+    enum Freshness: Equatable {
+        case current
+        /// The change, or the commit under it, now has different commits.
+        case rewritten
+        /// The head no longer resolves: abandoned, or hidden.
+        case gone
+    }
+    var freshness: Freshness = .current
+    /// For a jj change: "@" or "@-" when the head is the working copy's change or its parent.
+    var workingCopyRelation: String?
+
+    /// The commit the After side was loaded at, when it is a commit.
+    var loadedHead: String? { newRev.flatMap { $0.isEmpty ? nil : $0 } ?? prHeadOid }
+
+    /// A pull request whose head on GitHub is no longer the one loaded.
+    var pushedSinceLoad: Bool {
+        guard case .githubPR = target, let pr = pullRequest, !pr.headSha.isEmpty, let h = prHeadOid else { return false }
+        return pr.headSha != h
+    }
+
+    /// Re-resolves a fixed jj review's revisions and compares them with the ones loaded, without
+    /// reloading. `at` and `parent` are the change ids of `@` and `@-`.
+    func checkFreshness(at: String?, parent: String?) async {
+        guard !follows, state == .ready, case .jj(let from, let to) = target else { return }
+        func commit(_ rev: String) async -> String? {
+            (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", rev, "-T", "commit_id"], cwd: root))?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+        guard let head = await commit(to) else { freshness = .gone; workingCopyRelation = nil; return }
+        let base = await commit(from)
+        freshness = head == newRev && (base == nil || base == oldRev) ? .current : .rewritten
+        func same(_ a: String?) -> Bool { guard let a, let c = changeID, a.count >= 4 else { return false }; return a.hasPrefix(c) || c.hasPrefix(a) }
+        workingCopyRelation = same(at) ? "@" : same(parent) ? "@-" : nil
+    }
+
     /// The review reloads as the working copy changes: the working-copy review, and any range that
     /// ends at `@` or at git's working tree. Every other review is fixed at the commits it loaded.
     var follows: Bool {
@@ -349,6 +385,7 @@ final class ReviewSession {
             await hydrate()
             overviewIsStale = overview != nil && overviewFingerprint != nil && overviewFingerprint != fingerprint
             lastLoaded = Date()
+            freshness = .current
             state = .ready
             save()
             saveSnapshot(diffText)

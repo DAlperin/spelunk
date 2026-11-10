@@ -326,6 +326,14 @@ working-copy review. A range that ends at `@` ("Stack since trunk()", Review fro
 the working copy: it reloads as files change, like the working-copy review. Every other review is
 fixed at the commits it loaded.
 
+A fixed review's header says what it was loaded at: "Fixed at 1c5b729d · loaded 17:52", and
+"checked out as @" or "parent of @" when it is. Whenever history moves (and when you switch to the
+review) Spelunk checks its revisions again without reloading. If the change was rewritten, or the
+commits under it were, the header says so with a Reload link; if it no longer exists (abandoned or
+hidden), it offers to close the review. A pull request says when commits were pushed after it
+loaded. The ⟳ button reloads any fixed review. Viewed marks are kept by hunk content, so they
+survive a reload. Reviews that follow `@` show "following @" instead.
+
 Each review you open is pinned in the review menu beside the working copy; ⌃1 to ⌃9 switch between
 them. The toolbar names the active review ("Working copy · qqtqomnp", "Change qqtqomnp", "Range a → b",
 "PR #123") and how many are open. Each menu row says what the review diffs, its size, and whether it

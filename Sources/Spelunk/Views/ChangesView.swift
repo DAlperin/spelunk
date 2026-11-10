@@ -46,6 +46,70 @@ struct CheckoutMenu: View {
     }
 }
 
+/// What a fixed review was loaded at, how it relates to `@`, and a notice with Reload once the
+/// repository or the pull request has moved past it.
+struct FreshnessLine: View {
+    @Bindable var ws: Workspace
+    @Bindable var review: ReviewSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let notice {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath").foregroundStyle(.orange)
+                    Text(verbatim: notice).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if review.freshness == .gone {
+                        Button("Close") { ws.closeReview(review.target.key) }.buttonStyle(.link).font(.caption)
+                    } else {
+                        Button("Reload") { reload() }.buttonStyle(.link).font(.caption)
+                    }
+                }
+                .padding(7)
+                .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+            }
+            HStack(spacing: 4) {
+                Text(verbatim: summary).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 4)
+                Button { reload() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless).help("Reload this review from the repository")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var name: String { review.changeID ?? review.shortLabel }
+
+    private var notice: String? {
+        if review.pushedSinceLoad { return "New commits were pushed to the pull request since it loaded." }
+        switch review.freshness {
+        case .current: return nil
+        case .rewritten: return "\(name) was rewritten since it loaded; this review shows the old commits."
+        case .gone: return "\(name) no longer exists: it was abandoned or hidden."
+        }
+    }
+
+    private var summary: String {
+        var parts: [String] = []
+        if let h = review.loadedHead { parts.append("Fixed at " + h.prefix(8)) } else { parts.append("Fixed") }
+        if let t = review.lastLoaded { parts.append("loaded " + t.formatted(date: .omitted, time: .shortened)) }
+        switch review.workingCopyRelation {
+        case "@": parts.append("checked out as @")
+        case "@-": parts.append("parent of @")
+        default: break
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func reload() {
+        Task {
+            await review.load()
+            await ws.checkFreshness([review])
+            if case .githubPR = review.target { await review.refreshPullRequest() }
+        }
+    }
+}
+
 /// Says that `@` is now a different change, with a way to review the one it was.
 struct MoveNotice: View {
     @Bindable var ws: Workspace
@@ -126,14 +190,15 @@ struct ChangesView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if review.tracksWorkingCopy {
-                        HStack(spacing: 3) { Circle().fill(.green).frame(width: 6, height: 6); Text("live") }
-                            .font(.caption).foregroundStyle(.secondary).help("Refreshes as files change on disk")
+                    if review.follows {
+                        HStack(spacing: 3) { Circle().fill(.green).frame(width: 6, height: 6); Text("following @") }
+                            .font(.caption).foregroundStyle(.secondary).help("Reloads as files change on disk and as @ moves")
                     } else {
                         CheckoutMenu(ws: ws, review: review).controlSize(.small)
                     }
                 }
                 Text(review.title).font(.headline).lineLimit(3)
+                if !review.follows { FreshnessLine(ws: ws, review: review) }
                 if let n = review.linkedPR {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.triangle.pull").font(.caption)
@@ -228,6 +293,7 @@ struct ChangesView: View {
             }
         }
         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        FreshnessLine(ws: ws, review: review)
         if let b = review.linkedBookmark {
             HStack(spacing: 4) {
                 Image(systemName: "link").font(.caption2)

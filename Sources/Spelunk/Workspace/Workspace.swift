@@ -333,8 +333,10 @@ final class Workspace {
     }
 
     private func refreshAfterChanges() async {
+        let historyMoved = historyMark() != lastHistoryMark
         await refreshWorkingReview()
         for r in pinnedReviews where r.follows { await r.load() }
+        if historyMoved { await checkFreshness(pinnedReviews) }
         lastHistoryMark = historyMark()
         // After the review's diff, which snapshots a jj working copy, so the list includes new files.
         if fileListStale {
@@ -817,6 +819,14 @@ final class Workspace {
         return lines.count == 1 ? lines[0] : nil
     }
 
+    /// Compares fixed reviews with where their revisions stand now.
+    func checkFreshness(_ reviews: [ReviewSession]) async {
+        let fixed = reviews.filter { !$0.follows }
+        guard !fixed.isEmpty else { return }
+        let parent = vcs.kind == .jj ? await resolveRevision("@-") : nil
+        for r in fixed { await r.checkFreshness(at: workingChange, parent: parent) }
+    }
+
     /// Whether `target` is the working-copy review's change written out by id.
     private func isWorkingChange(_ target: ReviewTarget) -> Bool {
         guard case .jj(let from, let to) = target, let at = workingChange, workingReview != nil else { return false }
@@ -846,6 +856,7 @@ final class Workspace {
         if let p = focusPath, r.state == .ready, r.allHunks.contains(where: { $0.path == p }) { selectFirst() }
         Task {
             await r.load()
+            await checkFreshness([r])
             if Prefs.headServer, r.files.contains(where: { $0.path.hasSuffix(".rs") }) { await r.startHeadIntel() }
             guard review === r else { return }
             if selectedHunkID == nil || !r.allHunks.contains(where: { $0.id == selectedHunkID }) { selectFirst() }
