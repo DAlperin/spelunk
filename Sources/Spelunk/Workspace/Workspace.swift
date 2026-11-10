@@ -243,6 +243,7 @@ final class Workspace {
     let bookmarks: BookmarkStore
     let github: GitHubService
     let scm: SCMService
+    let search: SearchModel
     private var contextTask: Task<Void, Never>?
 
     init(root: URL) {
@@ -258,6 +259,7 @@ final class Workspace {
         bookmarks = BookmarkStore(root: self.root)
         github = GitHubService(root: self.root)
         scm = SCMService(root: self.root)
+        search = SearchModel(root: self.root)
         loadJobs()
         let store = Store.shared(for: self.root)
         Task { await store.prune(days: Prefs.cacheDays) }
@@ -834,6 +836,18 @@ final class Workspace {
     }
 
     // MARK: Review
+
+    /// Shows the Search tab with its field focused, searching for the selected text when it is on
+    /// one line.
+    func findInRepository() {
+        if let d = document, let r = selection, r.start.line == r.end.line, r.start.col < r.end.col {
+            let line = d.lineText(r.start.line) as NSString
+            let len = min(r.end.col, line.length) - r.start.col
+            if len > 0 { search.query = line.substring(with: NSRange(location: r.start.col, length: len)) }
+        }
+        sidebarTab = .search
+        search.focusRequest += 1
+    }
 
     /// Opens a review. jj revisions written relative to `@` are resolved to change ids first, so a
     /// review keeps showing the change it opened on after `@` moves; a range that ends at `@` stays

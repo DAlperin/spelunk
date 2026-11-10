@@ -22,6 +22,36 @@ enum TextSearch {
         var limit = 2000
     }
 
+    /// What a search found, whether it stopped at the limit, and ripgrep's complaint when it had one
+    /// (such as an invalid regular expression).
+    struct Outcome: Sendable {
+        var matches: [TextMatch] = []
+        var truncated = false
+        var error: String?
+    }
+
+    static func run(root: URL, query: String, options: Options) async -> Outcome {
+        guard !query.isEmpty else { return Outcome() }
+        guard Shell.which("rg") != nil else {
+            let m = fallback(root: root, query: query, options: options)
+            return Outcome(matches: m, truncated: m.count >= options.limit)
+        }
+        var args = ["--json", "--max-columns", "400", "--max-count", "200"]
+        if !options.regex { args.append("--fixed-strings") }
+        if options.wholeWord { args.append("--word-regexp") }
+        args.append(options.caseSensitive ? "--case-sensitive" : "--smart-case")
+        for g in options.globs { args += ["--glob", g] }
+        args += ["--", query, "."]
+        guard let r = try? await Shell.run("rg", args, cwd: root) else { return Outcome() }
+        // ripgrep exits 1 for no matches and 2 for errors.
+        if r.status == 2, r.stdout.isEmpty {
+            let e = r.stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            return Outcome(error: e.prefix(4).joined(separator: "\n"))
+        }
+        let m = parseRipgrepJSON(r.stdout, limit: options.limit + 1)
+        return Outcome(matches: Array(m.prefix(options.limit)), truncated: m.count > options.limit)
+    }
+
     static func search(root: URL, query: String, options: Options) async throws -> [TextMatch] {
         guard !query.isEmpty else { return [] }
         if Shell.which("rg") != nil {

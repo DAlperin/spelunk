@@ -39,7 +39,7 @@ struct SpelunkApp: App {
                 Button("Go to File…") { model.workspace?.palette = .files }.keyboardShortcut("k")
                 Button("Command Palette…") { model.workspace?.palette = .commands }.keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Filter File Tree") { model.workspace?.sidebarTab = .files; model.focusFilter.toggle() }.keyboardShortcut("p")
-                Button("Find in Repository…") { model.workspace?.sidebarTab = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
+                Button("Find in Repository…") { model.workspace?.findInRepository() }.keyboardShortcut("f", modifiers: [.command, .shift])
                 Divider()
                 Button("Fold Function") { model.workspace?.setFold(true) }.keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 Button("Unfold Function") { model.workspace?.setFold(false) }.keyboardShortcut(.rightArrow, modifiers: [.command, .option])

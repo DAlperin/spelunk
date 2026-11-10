@@ -273,75 +273,208 @@ struct StepBadges: View {
 
 struct SearchView: View {
     @Bindable var ws: Workspace
-    @State private var query = ""
-    @State private var regex = false
-    @State private var word = false
-    @State private var caseSensitive = false
-    @State private var rustOnly = true
-    @State private var results: [TextMatch] = []
-    @State private var searching = false
-    @State private var symbolMode = false
-    @State private var task: Task<Void, Never>?
+    @FocusState private var queryFocused: Bool
+
+    private var search: SearchModel { ws.search }
 
     var body: some View {
-        VStack(spacing: 6) {
-            TextField(symbolMode ? "Find definitions (fn, struct, trait…)" : "Search repository", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(run)
-                .padding(.horizontal, 8)
-            HStack(spacing: 10) {
-                Toggle(".*", isOn: $regex).help("Regular expression")
-                Toggle("W", isOn: $word).help("Whole word")
-                Toggle("Aa", isOn: $caseSensitive).help("Case sensitive")
-                Toggle(".rs", isOn: $rustOnly).help("Rust files only")
-                Toggle("Defs", isOn: $symbolMode).help("Definitions only")
-                Spacer()
-                if searching { ProgressView().controlSize(.small) }
-            }
-            .toggleStyle(.button).controlSize(.small).padding(.horizontal, 8)
-            let grouped = Dictionary(grouping: results, by: \.path)
-            if query.isEmpty && results.isEmpty {
-                ContentUnavailableView("Search the repository", systemImage: "magnifyingglass",
-                                       description: Text("ripgrep over the working copy. Toggle regex, whole word, case and definitions above."))
-                    .frame(maxHeight: .infinity)
-            } else {
-            List {
-                ForEach(grouped.keys.sorted(), id: \.self) { path in
-                    Section {
-                        ForEach(grouped[path]!) { m in
-                            Button { ws.open(m.location, edge: .manual, reason: .browse) } label: {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text(verbatim: "\(m.line + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
-                                    Text(m.text.trimmingCharacters(in: .whitespaces)).font(.system(size: 11, design: .monospaced)).lineLimit(1)
-                                }
-                            }.buttonStyle(.plain)
-                        }
-                    } header: {
-                        Text(path).lineLimit(1).truncationMode(.head)
+        @Bindable var search = ws.search
+        VStack(spacing: 0) {
+            VStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 11))
+                    TextField(search.definitionsOnly ? "Find definitions" : "Search the working copy", text: $search.query)
+                        .textFieldStyle(.plain)
+                        .focused($queryFocused)
+                        .onSubmit { search.submit() }
+                        .onKeyPress(.escape) { search.query = ""; return .handled }
+                    if search.searching {
+                        ProgressView().controlSize(.mini)
+                    } else if !search.query.isEmpty {
+                        Button { search.query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary).help("Clear")
                     }
+                    OptionToggle(label: "Aa", help: "Match case", isOn: $search.matchCase)
+                    OptionToggle(label: "ab", help: "Whole word", isOn: $search.wholeWord, underline: true)
+                    OptionToggle(label: ".*", help: "Regular expression", isOn: $search.regex)
                 }
+                .padding(.horizontal, 7).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(queryFocused ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.25)))
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.secondary).font(.system(size: 10))
+                    TextField("Files: *.rs, src/sys/, !tests/", text: $search.files)
+                        .textFieldStyle(.plain).font(.system(size: 11))
+                        .help("Comma- or space-separated globs. A folder ends in /, and ! excludes. Empty searches every file not ignored by .gitignore.")
+                    Toggle("Definitions", isOn: $search.definitionsOnly)
+                        .toggleStyle(.button).controlSize(.mini)
+                        .help("Only lines that declare a name containing the query (fn, struct, class, def, theorem, …)")
+                }
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.07)))
             }
-            .listStyle(.sidebar)
-            Text(verbatim: "\(results.count) matches").font(.caption).foregroundStyle(.secondary).padding(.bottom, 6)
+            .padding(.horizontal, 8).padding(.top, 2).padding(.bottom, 6)
+            Divider()
+            content
+        }
+        .onAppear { queryFocused = true }
+        .onChange(of: search.focusRequest) { queryFocused = true }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let e = search.error {
+            SidebarMessage(icon: "exclamationmark.triangle", title: "Search failed", detail: e) { EmptyView() }
+        } else if search.searched.isEmpty {
+            if search.query.isEmpty {
+                SidebarMessage(icon: "magnifyingglass", title: "Search the working copy",
+                               detail: "Results update as you type. Files ignored by .gitignore are skipped.") { EmptyView() }
+            } else if search.query.count < SearchModel.minimumLength {
+                SidebarMessage(icon: "return", title: "Press Return to search for one character", detail: nil) { EmptyView() }
+            } else {
+                Spacer()
             }
+        } else if search.groups.isEmpty {
+            SidebarMessage(icon: "magnifyingglass", title: "No matches", detail: noMatchesHint) { EmptyView() }
+        } else {
+            summary
+            results
         }
     }
 
-    private func run() {
-        task?.cancel()
-        searching = true
-        var opts = TextSearch.Options()
-        opts.regex = regex || symbolMode
-        opts.wholeWord = word
-        opts.caseSensitive = caseSensitive
-        if rustOnly { opts.globs = ["*.rs"] }
-        let q = symbolMode
-            ? #"(fn|struct|enum|trait|type|const|static|mod|union|macro_rules!)\s+\w*"# + (regex ? query : NSRegularExpression.escapedPattern(for: query)) + #"\w*"#
-            : query
-        let root = ws.root
-        task = Task {
-            let r = (try? await TextSearch.search(root: root, query: q, options: opts)) ?? []
-            if !Task.isCancelled { results = r; searching = false }
+    private var noMatchesHint: String? {
+        var hints: [String] = []
+        if !search.files.isEmpty { hints.append("only files matching \(search.files)") }
+        if search.matchCase { hints.append("matching case") }
+        if search.wholeWord { hints.append("whole words") }
+        if search.definitionsOnly { hints.append("definitions only") }
+        return hints.isEmpty ? nil : "Searched " + hints.joined(separator: ", ") + "."
+    }
+
+    private var summary: some View {
+        HStack(spacing: 6) {
+            Text(verbatim: "\(search.matchCount) match\(search.matchCount == 1 ? "" : "es") in \(search.groups.count) file\(search.groups.count == 1 ? "" : "s")"
+                 + (search.truncated ? " · first \(SearchModel.limit) shown" : ""))
+            Spacer()
+            let allCollapsed = search.collapsed.count == search.groups.count
+            Button(allCollapsed ? "Expand All" : "Collapse All") {
+                search.collapsed = allCollapsed ? [] : Set(search.groups.map(\.path))
+            }
+            .buttonStyle(.link)
         }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+    }
+
+    private var results: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(search.groups) { g in
+                    Section {
+                        if !search.collapsed.contains(g.path) {
+                            ForEach(g.matches) { m in
+                                Button { ws.open(m.location, edge: .manual, reason: .browse) } label: { MatchRow(match: m) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    } header: {
+                        FileHeader(group: g, collapsed: search.collapsed.contains(g.path)) {
+                            if search.collapsed.contains(g.path) { search.collapsed.remove(g.path) } else { search.collapsed.insert(g.path) }
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+        }
+    }
+}
+
+/// A search option as a small toggle inside the query field.
+private struct OptionToggle: View {
+    let label: String
+    let help: String
+    @Binding var isOn: Bool
+    var underline = false
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            Text(label).underline(underline)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .frame(width: 22, height: 18)
+                .foregroundStyle(isOn ? Color.white : Color.secondary)
+                .background(RoundedRectangle(cornerRadius: 4).fill(isOn ? Color.accentColor : Color.clear))
+        }
+        .buttonStyle(.plain)
+        .help(help + (isOn ? " (on)" : ""))
+    }
+}
+
+private struct FileHeader: View {
+    let group: SearchModel.Group
+    let collapsed: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).frame(width: 10)
+                Text(group.path.lastPathComponent).fontWeight(.semibold).lineLimit(1)
+                let dir = (group.path as NSString).deletingLastPathComponent
+                if !dir.isEmpty { Text(dir).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
+                Spacer(minLength: 4)
+                Text(verbatim: "\(group.matches.count)").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(.bar)
+        .help(group.path)
+    }
+}
+
+/// One matching line: its number and the line's text with the match highlighted, scrolled so the
+/// match stays visible in a narrow sidebar.
+private struct MatchRow: View {
+    let match: TextMatch
+    @State private var hover = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(verbatim: "\(match.line + 1)").font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .trailing)
+            Text(snippet).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+        }
+        .padding(.vertical, 2).padding(.trailing, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hover ? Color.accentColor.opacity(0.1) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+    }
+
+    private var snippet: AttributedString {
+        let ns = match.text as NSString
+        var start = 0
+        while start < ns.length, [32, 9].contains(ns.character(at: start)) { start += 1 }
+        // Keep the match in view: show up to 24 characters before it.
+        if match.col - start > 30 { start = match.col - 24 }
+        let lead = start > 0 && start > leadingSpaces(ns) ? "…" : ""
+        let col = max(0, min(match.col, ns.length))
+        let end = max(col, min(col + match.length, ns.length))
+        var out = AttributedString(lead + ns.substring(with: NSRange(location: start, length: max(0, col - start))))
+        var hit = AttributedString(ns.substring(with: NSRange(location: col, length: end - col)))
+        hit.backgroundColor = Color.yellow.opacity(0.35)
+        hit.inlinePresentationIntent = .stronglyEmphasized
+        out += hit
+        out += AttributedString(ns.substring(from: end))
+        return out
+    }
+
+    private func leadingSpaces(_ ns: NSString) -> Int {
+        var i = 0
+        while i < ns.length, [32, 9].contains(ns.character(at: i)) { i += 1 }
+        return i
     }
 }

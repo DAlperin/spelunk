@@ -55,10 +55,18 @@ expands to whichever file the code view has open and scrolls it into view. Turn 
 tree where you left it; the palette's "Reveal Open File in Files" reveals the open file once either
 way. Files added or deleted on disk appear in or leave the tree at the next refresh.
 
-Search runs ripgrep over the working copy. The buttons next to the field toggle regular expressions
-(`.*`), whole word (`W`), case sensitivity (`Aa`), Rust files only (`.rs`, on by default) and
-definitions only (`Defs`, which looks for `fn`, `struct`, `enum`, `trait` and similar followed by the
-query).
+Search runs ripgrep over the working copy, in every file `.gitignore` does not exclude, and updates as
+you type (after a short pause; a one-character query waits for Return). ⇧⌘F opens it with the
+selected text, when the selection is on one line. The buttons inside the field toggle match case
+(`Aa`), whole word (`ab`) and regular expressions (`.*`); Escape clears the query. The line below takes
+file globs separated by commas or spaces: `*.rs`, `src/sys/` (a folder), `!tests/` (exclude). Its
+Definitions toggle keeps only lines that declare a name containing the query (`fn`, `struct`, `class`,
+`def`, `func`, `theorem`, `structure` and similar).
+
+Results are grouped by file, with each match highlighted and a count per file; click a file's header to
+collapse it, or Collapse All. The summary says how many matches were found, and when the first 2,000
+are shown out of more. An invalid regular expression shows ripgrep's error. The query and results
+stay while you use other tabs.
 
 History has two sections:
 
@@ -317,8 +325,8 @@ How you arrive decides it, not which sidebar tab is showing. Selecting a hunk, m
 (J and K, or the Navigate menu), a review thread or a comment shows the diff. Opening a file from the
 Files tab, search results, the palette or the History file list shows it plain while the active
 review follows the working copy. Everything else (definitions, references, Back) leaves it as it was.
-Moving between hunks no longer switches the sidebar to the Review tab, so History or Search stays
-open while you step through a review.
+Moving between hunks leaves the sidebar on its tab, so History or Search stays open while you step
+through a review.
 
 A fixed review's diff appears only on its own versions of its files:
 opening the working copy of a file the review touches shows that file without the review's diff or

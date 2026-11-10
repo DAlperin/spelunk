@@ -246,7 +246,7 @@ enum PaletteCommands {
         }
         add("Show Files", icon: "folder") { ws.sidebarTab = .files }
         add("Reveal Open File in Files", icon: "scope", when: ws.document != nil) { ws.sidebarTab = .files; ws.revealInTreePending = true }
-        add("Show Search", nil, "⇧⌘F", icon: "magnifyingglass") { ws.sidebarTab = .search }
+        add("Show Search", nil, "⇧⌘F", icon: "magnifyingglass") { ws.findInRepository() }
         add("Show History", icon: "arrow.triangle.branch") { ws.sidebarTab = .scm }
         add("Show Review", icon: "list.bullet.indent", when: hasReview) { ws.sidebarTab = .changes }
 
