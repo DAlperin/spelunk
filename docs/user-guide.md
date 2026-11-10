@@ -55,13 +55,14 @@ expands to whichever file the code view has open and scrolls it into view. Turn 
 tree where you left it; the palette's "Reveal Open File in Files" reveals the open file once either
 way. Files added or deleted on disk appear in or leave the tree at the next refresh.
 
-Search runs ripgrep over the working copy, in every file `.gitignore` does not exclude, and updates as
-you type (after a short pause; a one-character query waits for Return). ⇧⌘F opens it with the
-selected text, when the selection is on one line. The buttons inside the field toggle match case
-(`Aa`), whole word (`ab`) and regular expressions (`.*`); Escape clears the query. The line below takes
-file globs separated by commas or spaces: `*.rs`, `src/sys/` (a folder), `!tests/` (exclude). Its
-Definitions toggle keeps only lines that declare a name containing the query (`fn`, `struct`, `class`,
-`def`, `func`, `theorem`, `structure` and similar).
+Search runs ripgrep over the working copy, in every file `.gitignore` does not exclude, and updates
+as you type (after a short pause; a one-character query waits for Return). Choosing the tab or
+pressing ⇧⌘F puts the cursor in the query field, and ⇧⌘F also fills it with the selected text when
+the selection is on one line. The buttons inside the field toggle match case (`Aa`), whole word
+(`ab`) and regular expressions (`.*`); Escape clears the query. The line below takes file globs
+separated by commas or spaces: `*.rs`, `src/sys/` (a folder), `!tests/` (exclude). Its Definitions
+toggle keeps only lines that declare a name containing the query (`fn`, `struct`, `class`, `def`,
+`func`, `theorem`, `structure` and similar).
 
 Results are grouped by file, with each match highlighted and a count per file; click a file's header to
 collapse it, or Collapse All. The summary says how many matches were found, and when the first 2,000

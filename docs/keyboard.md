@@ -15,7 +15,7 @@ These work in any repository window.
 | ⌘K | Go to File… | Navigate |
 | ⇧⌘K | Command Palette… | Navigate |
 | ⌘P | Filter File Tree (switches to the Files tab and focuses its filter) | Navigate |
-| ⇧⌘F | Find in Repository… (the Search tab, with the selected text when it is on one line) | Navigate |
+| ⇧⌘F | Find in Repository… (the Search tab with its field focused, filled with the selected text when it is on one line) | Navigate |
 | ⌥⌘← / ⌥⌘→ | Fold / Unfold Function at the cursor | Navigate |
 | ⇧⌥⌘← / ⇧⌥⌘→ | Fold / Unfold All Functions | Navigate |
 | ⇧⌘T | Add Location to Code Path | Code Paths |

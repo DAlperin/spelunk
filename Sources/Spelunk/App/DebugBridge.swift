@@ -64,6 +64,7 @@ final class DebugBridge {
             ws.open(CodeLocation(path: String(p[0]), range: SourceRange(line: line)), edge: .manual)
         case "search": ws.sidebarTab = .search; ws.search.query = arg
         case "searchfiles": ws.search.files = arg
+        case "find": ws.findInRepository()
         case "browse": ws.open(CodeLocation(path: arg, range: SourceRange(line: 0)), reason: .browse)
         case "diff": if let m = DiffMode(rawValue: arg.capitalized) { ws.setDiffMode(m) }
         case "click": ws.didClick(at: pos(arg))
@@ -147,6 +148,7 @@ final class DebugBridge {
                     NSApp.postEvent(e, atStart: false)
                 }
             }
+        case "focuseditor": mainWindow.map { $0.makeFirstResponder($0.contentView?.firstSubview(ofType: SourceTextView.self)) }
         case "responder":
             if let r = mainWindow?.firstResponder {
                 let x = (r as? NSView).map { Int($0.convert($0.visibleRect, to: nil).midX) } ?? -1

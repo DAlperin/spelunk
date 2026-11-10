@@ -75,7 +75,9 @@ final class Workspace {
     var sourceOnly = UserDefaults.standard.object(forKey: "sourceOnly") as? Bool ?? true { didSet { UserDefaults.standard.set(sourceOnly, forKey: "sourceOnly"); rebuildTree() } }
     var visibleFileCount = 0
 
-    var sidebarTab: SidebarTab = .files
+    var sidebarTab: SidebarTab = .files {
+        didSet { if sidebarTab == .search, oldValue != .search { search.focusRequest += 1 } }
+    }
     var document: SourceDocument? {
         didSet { if let d = document, d !== oldValue, d.isWorkingCopy { reanchor(in: d) } }
     }

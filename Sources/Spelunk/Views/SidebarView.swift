@@ -301,6 +301,7 @@ struct SearchView: View {
                 .padding(.horizontal, 7).padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(queryFocused ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.25)))
+                .background(FocusRequest(request: search.focusRequest))
                 HStack(spacing: 4) {
                     Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.secondary).font(.system(size: 10))
                     TextField("Files: *.rs, src/sys/, !tests/", text: $search.files)
@@ -317,8 +318,6 @@ struct SearchView: View {
             Divider()
             content
         }
-        .onAppear { queryFocused = true }
-        .onChange(of: search.focusRequest) { queryFocused = true }
     }
 
     @ViewBuilder private var content: some View {
