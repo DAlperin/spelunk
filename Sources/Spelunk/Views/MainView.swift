@@ -337,7 +337,7 @@ struct EditorColumn: View {
             BreadcrumbBar(ws: ws)
             Divider()
             if ws.reviewing, let r = ws.review, let id = ws.selectedHunkID, let h = r.allHunks.first(where: { $0.id == id }),
-               ws.document?.path == h.path || ws.document?.path == r.file(for: h)?.oldPath {
+               let doc = ws.document, ws.reviewFile(for: doc) != nil, doc.path == h.path || doc.path == r.file(for: h)?.oldPath {
                 HunkStrip(ws: ws, review: r, hunk: h)
                 Divider()
             }
@@ -409,11 +409,65 @@ struct BreadcrumbBar: View {
                 }
             }
             Spacer()
+            if let v = ws.versionInfo { VersionChip(info: v) }
         }
         .font(.system(size: 12))
         .lineLimit(1)
         .padding(.horizontal, 10)
         .frame(height: 28)
+    }
+}
+
+/// Which text of the file is open: the working copy, or a review's Before or After. Its menu
+/// switches to the other versions that exist.
+struct VersionChip: View {
+    let info: VersionInfo
+
+    var body: some View {
+        let label = HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 10))
+            Text(verbatim: info.title)
+            if let n = info.notReviewed { Text(verbatim: "· " + n).foregroundStyle(.orange) }
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(tint.opacity(0.12), in: Capsule())
+        .overlay(Capsule().strokeBorder(info.notReviewed != nil ? Color.orange.opacity(0.6) : .clear))
+        Group {
+            if info.alternatives.isEmpty {
+                label
+            } else {
+                Menu {
+                    Section("Show") {
+                        ForEach(info.alternatives) { a in Button(a.label) { a.open() } }
+                    }
+                } label: { label }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+            }
+        }
+        .fixedSize()
+        .help(info.help)
+    }
+
+    private var icon: String {
+        switch info.kind {
+        case .workingCopy: "internaldrive"
+        case .after: "plus.forwardslash.minus"
+        case .before: "clock.arrow.circlepath"
+        case .other: "number"
+        }
+    }
+
+    private var tint: Color {
+        switch info.kind {
+        case .workingCopy: .secondary
+        case .after: .green
+        case .before: .red
+        case .other: .purple
+        }
     }
 }
 

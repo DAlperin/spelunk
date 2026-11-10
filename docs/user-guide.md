@@ -31,7 +31,10 @@ SCIP index if there is one, starts the working-copy review, and opens `README.md
 
 - The sidebar has four tabs: Review, Files, Search and History.
 - The editor in the middle shows one file, with a breadcrumb bar above it (path and enclosing item)
-  and a status bar below.
+  and a status bar below. The chip at the right of the breadcrumb says which version of the file is
+  open: Working copy (the file on disk), After (as a review has it, with its commit) in green, or
+  Before in red. Its menu switches to the file's other versions. When a fixed review is active and
+  the file open is the working copy's, the chip turns orange and reads "not <review>'s version".
 - The context pane on the right (toggle it with the rightmost toolbar button) follows what you are
   doing. Its Panes menu switches between Context, Claude, Conversation, Code Paths, Outline,
   Bookmarks and Problems.
@@ -291,7 +294,9 @@ hunks (J and K, or the Navigate menu) switches to the Review tab. A jump from a 
 Definition, keeps the Review tab, so review mode stays on.
 
 A pinned review is always in review mode. Its diff appears only on its own versions of its files:
-opening the working copy of a file the review touches shows that file without the review's diff.
+opening the working copy of a file the review touches shows that file without the review's diff or
+its hunk strip, and the version chip turns orange. Pick After in the chip's menu to go back to the
+review's version.
 
 While a file changes on disk (your editor, Claude, a checkout), the open view keeps its place. The
 line at the top and the caret follow the code around the edit, and in review mode a folded function
