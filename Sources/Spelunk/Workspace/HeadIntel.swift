@@ -46,10 +46,22 @@ extension Workspace {
     /// position when it is running for that head, otherwise the working copy's intelligence at the
     /// mapped position.
     func intelTarget(_ d: SourceDocument, name: String, range: SourceRange) -> (hub: IntelHub, pos: SourcePos, version: CodeVersion?) {
-        if !d.isWorkingCopy, let r = review, let h = r.headIntel, h.ready, d.version == h.version, h.server.spec.handles(d.path) {
-            return (h.hub, range.start, h.version)
-        }
+        if let h = headIntel(for: d) { return (h.hub, range.start, h.version) }
         return (intel, intelPosition(in: d, name: name, range: range), nil)
+    }
+
+    /// The running head intelligence that answers for `d`'s own text, if any.
+    func headIntel(for d: SourceDocument) -> HeadIntel? {
+        guard !d.isWorkingCopy, let r = owningReview(of: d), let h = r.headIntel, h.ready, d.version == h.version,
+              h.server.spec.handles(d.path) else { return nil }
+        return h
+    }
+
+    /// For a document that is not the working copy and has a language server: where its symbols
+    /// are answered. Nil for working-copy documents, whose answers are about their own text.
+    func intelTree(for d: SourceDocument) -> String? {
+        guard !d.isWorkingCopy, server(for: d.path) != nil else { return nil }
+        return headIntel(for: d) != nil ? "review head" : "working copy"
     }
 
     /// Marks a location from a head's intelligence as belonging to that head; files outside the

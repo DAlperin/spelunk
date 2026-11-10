@@ -144,10 +144,11 @@ review mode and browsing, and the split diff view shows no folds so its two side
 
 ### Diff modes
 
-While a file of the review is open in review mode, the toolbar's picker sets how it is shown:
+While a file of the review is open, the toolbar's picker sets how it is shown:
 
 | Mode | Shows |
 |---|---|
+| Plain | The file without the review's diff: change bars in the gutter only |
 | Inline | The new version, with removed lines in place, numbered with their old line numbers |
 | Split | The old version on the left and the new on the right, scrolled together |
 | After | The new version only |
@@ -179,6 +180,16 @@ Navigation asks the most precise provider available and falls back when it canno
    outline, callers found as call expressions grouped by enclosing function, callees from the
    function body.
 4. Text search with ripgrep, for references, implementations (`impl … Name`) and callers.
+
+When the open file is not the working copy (a review's Before or After), the status bar says where
+answers come from: "answers from the working copy" in orange when the working copy's intelligence
+answers at the matching place, which can differ from the code on screen, or "answers from the review
+head" once the review's own rust-analyzer is running. The context pane's footer adds "about the
+working copy's code" in the same case. Any fixed review with Rust files offers "Index head" in its
+header to start that rust-analyzer.
+
+Back and Forward reach locations in any open review, not only the active one; the version chip says
+which review a file belongs to.
 
 Every answer carries its source. Results from anything below a language server have a small tag:
 SCIP (it may trail the working copy), tree-sitter (types are not resolved), or text search (it may

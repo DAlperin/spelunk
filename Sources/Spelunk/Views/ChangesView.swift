@@ -71,6 +71,7 @@ struct FreshnessLine: View {
             HStack(spacing: 4) {
                 Text(verbatim: summary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
+                if review.pullRequest == nil { HeadIntelButton(review: review).fixedSize() }
                 Button { reload() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Reload this review from the repository")
             }
@@ -675,14 +676,14 @@ struct HeadIntelButton: View {
                     Circle().fill(h.server.status == .ready ? Color.green : h.server.status.isUsable ? .yellow : .gray).frame(width: 6, height: 6)
                     if !compact { Text(h.server.status == .ready ? "head indexed" : "indexing head").font(.caption).foregroundStyle(.secondary) }
                 }
-                .help("This PR's own rust-analyzer: \(h.server.status.label). Symbols in PR files are answered about the PR's code.")
+                .help("This review head's own rust-analyzer: \(h.server.status.label). Symbols in the review's files are answered about its own code.")
             }
         } else {
             Button { Task { await review.startHeadIntel() } } label: {
                 if compact { Image(systemName: "cpu") } else { Text("Index head") }
             }
                 .buttonStyle(.link).font(.caption)
-                .help("Start a rust-analyzer on this PR's head so answers come from the PR's own code (a second full index)")
+                .help("Start a rust-analyzer on this review's head so answers come from its own code (a second full index)")
         }
     }
 }

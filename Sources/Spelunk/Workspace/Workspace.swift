@@ -479,8 +479,11 @@ final class Workspace {
         // A location names the text it belongs to. Review-side locations open that side's document;
         // everything else (code intelligence answers, files, history) is the working copy.
         if let v = loc.version, v != .workingCopy {
-            guard let r = review, v == r.headVersion || v == r.baseVersion else {
-                statusMessage = "\(loc.path) is from a review that is not open"
+            // Any open review's version opens; the active review stays as it is, and the version chip
+            // names the review the file belongs to.
+            let open = [review].compactMap { $0 } + [workingReview].compactMap { $0 } + pinnedReviews
+            guard let r = open.first(where: { v == $0.headVersion || v == $0.baseVersion }) else {
+                statusMessage = "\(loc.path) is from a review that has been closed"
                 return
             }
             let side: ReviewSession.Side = v == r.baseVersion && v != r.headVersion ? .old : .new

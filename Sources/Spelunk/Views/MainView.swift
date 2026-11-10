@@ -612,6 +612,13 @@ struct StatusIndicators: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showIndex, arrowEdge: .top) { IndexPopover(ws: ws) }
+            if let d = ws.document, let tree = ws.intelTree(for: d) {
+                Text(verbatim: "answers from the " + tree)
+                    .foregroundStyle(tree == "working copy" ? Color.orange : .secondary)
+                    .help(tree == "working copy"
+                          ? "This file is not the working copy, but definitions, references and hover come from the working copy's code at the matching place. Index the review head (in the Review tab's header) for answers about this version."
+                          : "Definitions, references and hover come from a language server running on this review's own code.")
+            }
             if let r = ws.removedLineAtCaret { Text(verbatim: "Removed line \(r)").foregroundStyle(.red) }
             else if let c = ws.cursor { Text(verbatim: "Line \(c.line + 1)").foregroundStyle(.secondary) }
         }

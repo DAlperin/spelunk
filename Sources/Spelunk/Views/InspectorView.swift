@@ -725,6 +725,7 @@ struct ProvenanceFooter: View {
             parts.append(ws.activeServer.spec.name + " " + ws.activeServer.status.label.lowercased())
         }
         if ws.scip.index != nil { parts.append(ws.scip.uncoveredFiles.isEmpty ? "index complete" : "index partial") }
+        if !showingHunk, let d = ws.document, ws.intelTree(for: d) == "working copy" { parts.append("about the working copy's code") }
         return parts.joined(separator: " · ")
     }
 }
