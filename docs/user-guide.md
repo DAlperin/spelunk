@@ -315,7 +315,9 @@ Request…"), the History tab, or the command palette:
 | A GitHub pull request | History › Pull Requests › Review in Spelunk, or a PR number in Compare Revisions… |
 
 Each review you open is pinned in the review menu beside the working copy; ⌃1 to ⌃9 switch between
-them.
+them. The toolbar names the active review ("Working copy · qqtqomnp", "Change qqtqomnp", "Range a → b",
+"PR #123") and how many are open. Each menu row says what the review diffs, its size, and whether it
+follows the working copy or is fixed at the commits it loaded, with the time it loaded.
 
 For a pull request, Spelunk fetches the PR's head from a remote that points at the GitHub repository
 (`git fetch <remote> pull/N/head`) the first time, then diffs locally from the merge base. If the

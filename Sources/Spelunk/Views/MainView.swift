@@ -236,10 +236,9 @@ struct ReviewTargetMenu: View {
         Menu {
             ForEach(Array(all.enumerated()), id: \.element.target.key) { i, r in
                 let active = (r.tracksWorkingCopy && ws.activeReviewKey == nil) || ws.activeReviewKey == r.target.key
-                Button {
-                    if r.tracksWorkingCopy { ws.activateReview(nil) } else { ws.activateReview(r.target.key) }
-                } label: {
-                    if active { Label(menuTitle(r), systemImage: "checkmark") } else { Text(menuTitle(r)) }
+                Toggle(isOn: Binding(get: { active }, set: { _ in ws.activateReview(r.tracksWorkingCopy ? nil : r.target.key) })) {
+                    Text(verbatim: Self.name(r) + (r.tracksWorkingCopy || r.title.isEmpty ? "" : " — " + r.title.prefix(50)))
+                    Text(verbatim: Self.coverage(r))
                 }
                 .keyboardShortcut(i < 9 ? KeyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .control) : nil)
             }
@@ -252,25 +251,37 @@ struct ReviewTargetMenu: View {
                     .keyboardShortcut("w", modifiers: [.command, .option])
             }
         } label: {
-            HStack(spacing: 5) {
-                if let r = ws.review {
-                    Image(systemName: r.pullRequest != nil || isPR(r) ? "arrow.triangle.pull" : r.tracksWorkingCopy ? "circle.fill" : "square.stack")
-                        .font(.system(size: r.tracksWorkingCopy ? 6 : 11)).foregroundStyle(r.tracksWorkingCopy ? .green : .secondary)
-                    Text(r.shortLabel)
-                    if r.tracksWorkingCopy, let id = r.changeID { Text(id).font(.caption.monospaced()).foregroundStyle(.secondary) }
-                } else {
-                    Text("No review")
-                }
-                if all.count > 1 { Text(verbatim: "\(all.count) open").font(.caption).foregroundStyle(.secondary) }
+            // A toolbar menu draws one icon and one text, so the label is a single string.
+            if let r = ws.review {
+                Label(Self.name(r) + (all.count > 1 ? " · \(all.count) open" : ""), systemImage: Self.icon(r)).labelStyle(.titleAndIcon)
+            } else {
+                Text("No review")
             }
         }
-        .help(ws.review?.target.label ?? "Choose what to review")
+        .help(ws.review.map(Self.coverage) ?? "Choose what to review")
     }
 
-    func isPR(_ r: ReviewSession) -> Bool { if case .githubPR = r.target { return true }; return false }
+    static func icon(_ r: ReviewSession) -> String {
+        if case .githubPR = r.target { return "arrow.triangle.pull" }
+        return r.tracksWorkingCopy ? "pencil.line" : "square.stack"
+    }
 
-    func menuTitle(_ r: ReviewSession) -> String {
-        r.tracksWorkingCopy ? "Working copy" + (r.changeID.map { " (\($0))" } ?? "") : "\(r.shortLabel) · \(r.title.prefix(50))"
+    /// The review's kind and identity: "Working copy · qqtqomnp", "Change qqtqomnp", "PR #123".
+    static func name(_ r: ReviewSession) -> String {
+        if r.tracksWorkingCopy { return "Working copy" + (r.changeID.map { " · " + $0 } ?? "") }
+        switch r.target {
+        case .githubPR(let n): return "PR #" + String(n)
+        case .jj: return r.rangeCommits.count > 1 ? "Range " + r.target.label : "Change " + (r.changeID ?? r.target.label)
+        case .git(_, let h): return h.map { "Commit " + $0.prefix(8) } ?? "Uncommitted"
+        }
+    }
+
+    /// What the review diffs and whether it keeps up with the repository.
+    static func coverage(_ r: ReviewSession) -> String {
+        let size = r.state == .ready ? " · \(r.files.count) files +\(r.addedCount) −\(r.removedCount)" : ""
+        if r.tracksWorkingCopy { return "Follows the working copy (\(r.target.label))" + size }
+        let loaded = r.lastLoaded.map { ", loaded " + $0.formatted(date: .omitted, time: .shortened) } ?? ""
+        return r.target.label + size + " · fixed" + loaded
     }
 }
 
