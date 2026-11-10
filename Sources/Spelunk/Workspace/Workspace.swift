@@ -168,8 +168,38 @@ final class Workspace {
     var workingCopyMove: WorkingCopyMove?
     /// `@`'s change id as of the last refresh.
     private(set) var workingChange: String?
-    /// Reviews opened explicitly: pull requests, graph changes, custom ranges.
-    var pinnedReviews: [ReviewSession] = []
+    /// Reviews opened explicitly: pull requests, graph changes, custom ranges. Kept per repository
+    /// so they reopen with it.
+    var pinnedReviews: [ReviewSession] = [] {
+        didSet { if pinnedReviews.map(\.target) != oldValue.map(\.target) { saveOpenReviews() } }
+    }
+
+    private var openReviewsURL: URL { AppPaths.support(for: root).appendingPathComponent("open-reviews.json") }
+
+    private func saveOpenReviews() {
+        guard openReviewsRestored else { return }
+        if let d = try? JSONEncoder().encode(pinnedReviews.map(\.target)) { try? d.write(to: openReviewsURL, options: .atomic) }
+    }
+
+    /// Reopens the reviews open when the repository was last closed. Each shows its last result at
+    /// once and reloads in the background, one at a time.
+    private func restoreOpenReviews() {
+        defer { openReviewsRestored = true }
+        guard let d = try? Data(contentsOf: openReviewsURL), let targets = try? JSONDecoder().decode([ReviewTarget].self, from: d) else { return }
+        let restored = targets.filter { t in !pinnedReviews.contains { $0.target == t } }.map { t in
+            let r = ReviewSession(root: root, target: t, github: github)
+            attachSemantics(r)
+            return r
+        }
+        pinnedReviews += restored
+        Task {
+            for r in restored {
+                await r.load()
+                await checkFreshness([r])
+            }
+        }
+    }
+    @ObservationIgnored private var openReviewsRestored = false
     /// Key of the pinned review being shown; nil shows the working copy.
     var activeReviewKey: String?
 
@@ -286,6 +316,7 @@ final class Workspace {
         scip.loadCached(sourceFiles: allFiles)
         startWatching()
         Task { await refreshWorkingReview() }
+        restoreOpenReviews()
         if let readme = ["README.md", "src/main.rs", "src/lib.rs"].first(where: { allFileSet.contains($0) }) {
             open(CodeLocation(path: readme, range: SourceRange(line: 0)), record: false)
         }
@@ -446,6 +477,7 @@ final class Workspace {
             statusMessage = "Check out failed: \(error.localizedDescription)"
         }
         await refreshWorkingReview()
+        await checkFreshness(pinnedReviews)
         await scm.refresh(kind: vcs.kind)
     }
 

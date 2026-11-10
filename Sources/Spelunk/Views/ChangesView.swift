@@ -68,6 +68,13 @@ struct FreshnessLine: View {
                 .padding(7)
                 .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
             }
+            if review.workingCopyRelation == "@" {
+                HStack(spacing: 4) {
+                    Text("This change is checked out, and the working-copy review follows it live.")
+                    Button("Switch") { ws.activateReview(nil) }.buttonStyle(.link)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 4) {
                 Text(verbatim: summary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)

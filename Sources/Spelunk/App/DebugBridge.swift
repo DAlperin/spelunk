@@ -328,6 +328,7 @@ final class DebugBridge {
         for srv in ws.servers where srv.status != .off { s += "server \(srv.spec.name) \(srv.status.label) in \(srv.serverRoot.path)\n" }
         if let d = ws.document { s += "language \(d.languageName) outline=\(d.syntax.flatOutline.count) tokens=\(d.syntax.tokens.count)\n" }
         if let v = ws.versionInfo { s += "version \(v.title) \(v.notReviewed ?? "-") alternatives=\(v.alternatives.map(\.label))\n" }
+        s += "open \(ws.pinnedReviews.map { "\($0.target.key)[\($0.state == .ready ? "ready" : "-")\($0.freshness == .current ? "" : ",stale")\($0.workingCopyRelation.map { "," + $0 } ?? "")]" })\n"
         if let r = ws.review { s += "active \(r.target.key) newRev=\(r.newRev ?? "nil") files=\(r.files.map(\.newPath))\n" }
         if let tv = mainWindow?.contentView?.firstSubview(ofType: SourceTextView.self), let d = tv.coordinator?.display,
            let lm = tv.layoutManager, let tc = tv.textContainer, d.ns.length > 0 {

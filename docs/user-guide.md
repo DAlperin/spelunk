@@ -356,6 +356,10 @@ hidden), it offers to close the review. A pull request says when commits were pu
 loaded. The ⟳ button reloads any fixed review. Viewed marks are kept by hunk content, so they
 survive a reload. Reviews that follow `@` show "following @" instead.
 
+Open reviews are kept per repository and come back when it reopens, showing their last result at
+once while they reload. After Check out (or a `jj edit` of your own), a fixed review whose change is
+now `@` says so and offers to switch to the working-copy review, which follows the same change live.
+
 Each review you open is pinned in the review menu beside the working copy; ⌃1 to ⌃9 switch between
 them. The toolbar names the active review ("Working copy · qqtqomnp", "Change qqtqomnp", "Range a → b",
 "PR #123") and how many are open. Each menu row says what the review diffs, its size, and whether it
