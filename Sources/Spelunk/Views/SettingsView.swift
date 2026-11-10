@@ -99,6 +99,7 @@ private struct ReviewSettings: View {
     @AppStorage(Prefs.Key.groupOverlap) var overlap = 0.6
     @AppStorage(Prefs.Key.groupDistinctLength) var plainLength = 14
     @AppStorage(Prefs.Key.refreshDelay) var refreshDelay = 0.6
+    @AppStorage(Prefs.Key.parentWhenEmpty) var parentWhenEmpty = true
     @AppStorage(Prefs.Key.autoAttachments) var autoAttachments = true
 
     var body: some View {
@@ -121,6 +122,8 @@ private struct ReviewSettings: View {
             }
             Section("Live review") {
                 Slider(value: $refreshDelay, in: 0.2...3.0) { Text(verbatim: String(format: "Refresh %.1f s after files change", refreshDelay)) }
+                Toggle("When @ is empty, review its parent", isOn: $parentWhenEmpty)
+                    .onChange(of: parentWhenEmpty) { NotificationCenter.default.post(name: .diffOptionsChanged, object: nil) }
                 Toggle("Run attachments marked auto", isOn: $autoAttachments)
                 Note("Commands from a repository's own rules file still need that repository to be trusted.")
             }

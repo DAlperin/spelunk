@@ -121,12 +121,17 @@ struct MoveNotice: View {
             Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: "@ moved at \(move.at.formatted(date: .omitted, time: .shortened))").font(.caption.weight(.semibold))
-                Text(verbatim: move.previousIsParent
+                let showingPrevious = move.previousIsParent && ws.workingReview?.showsParent == true
+                Text(verbatim: showingPrevious
+                     ? "\(move.previous) is now @-. The new @, \(move.current), is empty, so this review still shows \(move.previous)."
+                     : move.previousIsParent
                      ? "\(move.previous) is now @-; this review shows the new @, \(move.current)."
                      : "It was \(move.previous) and is now \(move.current).")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Review \(move.previous)") { ws.startReview(.jj(from: move.previous + "-", to: move.previous)) }
-                    .buttonStyle(.link).font(.caption)
+                if !showingPrevious {
+                    Button("Review \(move.previous)") { ws.startReview(.jj(from: move.previous + "-", to: move.previous)) }
+                        .buttonStyle(.link).font(.caption)
+                }
             }
             Spacer(minLength: 0)
             Button { ws.workingCopyMove = nil } label: { Image(systemName: "xmark") }
@@ -184,7 +189,7 @@ struct ChangesView: View {
             } else {
                 HStack(spacing: 6) {
                     if let id = review.changeID {
-                        Text(verbatim: (review.tracksWorkingCopy ? "@ " : "") + id).font(.caption.monospaced()).foregroundStyle(.purple)
+                        Text(verbatim: (review.showsParent ? "@- " : review.tracksWorkingCopy ? "@ " : "") + id).font(.caption.monospaced()).foregroundStyle(.purple)
                     }
                     if !review.files.isEmpty {
                         Text(verbatim: "· \(review.files.count) files · +\(review.addedCount) −\(review.removedCount)")
@@ -199,6 +204,10 @@ struct ChangesView: View {
                     }
                 }
                 Text(review.title).font(.headline).lineLimit(3)
+                if review.showsParent {
+                    Text("@ is empty, so this shows its parent. Once @ has changes, it shows them instead.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if !review.follows { FreshnessLine(ws: ws, review: review) }
                 if let n = review.linkedPR {
                     HStack(spacing: 6) {

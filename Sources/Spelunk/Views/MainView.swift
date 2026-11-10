@@ -268,6 +268,7 @@ struct ReviewTargetMenu: View {
 
     /// The review's kind and identity: "Working copy · qqtqomnp", "Change qqtqomnp", "PR #123".
     static func name(_ r: ReviewSession) -> String {
+        if r.showsParent { return "Working copy · @ empty, showing " + (r.changeID ?? "@-") }
         if r.tracksWorkingCopy { return "Working copy" + (r.changeID.map { " · " + $0 } ?? "") }
         switch r.target {
         case .githubPR(let n): return "PR #" + String(n)
@@ -279,6 +280,7 @@ struct ReviewTargetMenu: View {
     /// What the review diffs and whether it keeps up with the repository.
     static func coverage(_ r: ReviewSession) -> String {
         let size = r.state == .ready ? " · \(r.files.count) files +\(r.addedCount) −\(r.removedCount)" : ""
+        if r.showsParent { return "Follows the working copy; @ is empty, so this is its parent (@- → its parent)" + size }
         if r.tracksWorkingCopy { return "Follows the working copy (\(r.target.label))" + size }
         let loaded = r.lastLoaded.map { ", loaded " + $0.formatted(date: .omitted, time: .shortened) } ?? ""
         return r.target.label + size + " · fixed" + loaded

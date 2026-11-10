@@ -291,8 +291,13 @@ ten. Right-click to remove one.
 The working copy review is always open: `@` against its parent in a jj repository, or uncommitted
 changes against `HEAD` in git. It refreshes as files change on disk and when history moves (a jj
 operation such as `jj new`, `jj edit` or `jj describe`, or a git commit or checkout), after a short
-delay (0.6 s, Settings › Review › Live review). When `@` is empty, the Review tab offers to review the parent
-change instead, by its change id, so that review stays on that change when `@` moves again.
+delay (0.6 s, Settings › Review › Live review). When `@` is empty (just after `jj new` or `jj commit`), the
+working-copy review shows its parent instead, and says so: the header reads "@- <id>" with a line
+explaining it, and the toolbar "Working copy · @ empty, showing <id>". The parent's files are the
+working copy's, so navigation stays live. As soon as `@` has changes of its own, the review shows
+them. Turn this off in Settings › Review › Live review ("When @ is empty, review its parent"); the
+Review tab then offers "Review the Parent Change (@-)", which opens that change by its id, so the
+review stays on it when `@` moves again.
 
 When `@` becomes a different change (`jj new`, `jj commit`, `jj edit`), the Review tab says so at the
 top: "@ moved at 17:53", which change it was, and a link to review that change. The notice goes away

@@ -15,7 +15,7 @@ extension ReviewSession {
         guard !oldRev.isEmpty, newRev != "" else { rangeCommits = []; return }
         var out: [RangeCommit] = []
         if vcs == .jj {
-            let to = newRev ?? "@"
+            let to = newRev ?? (showsParent ? "@-" : "@")
             let t = #"commit_id ++ "\t" ++ change_id.short(8) ++ "\t" ++ description.first_line() ++ "\t" ++ author.name() ++ "\n""#
             let text = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "--color", "never",
                                                        "-r", "\(oldRev)..\(to)", "-T", t], cwd: root)) ?? ""

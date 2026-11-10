@@ -25,6 +25,7 @@ enum Prefs {
         static let groupOverlap = "grouping.overlap"
         static let groupDistinctLength = "grouping.plainWordLength"
         static let refreshDelay = "review.refreshDelay"
+        static let parentWhenEmpty = "review.parentWhenEmpty"
         static let autoAttachments = "review.autoAttachments"
         // Claude
         static let claudePath = "claudePath"
@@ -63,6 +64,7 @@ enum Prefs {
         Key.groupOverlap: 0.6,
         Key.groupDistinctLength: 14,
         Key.refreshDelay: 0.6,
+        Key.parentWhenEmpty: true,
         Key.autoAttachments: true,
         Key.claudePath: "",
         Key.claudeConcurrency: 4,
@@ -106,6 +108,7 @@ enum Prefs {
     static var groupOverlap: Double { d.double(forKey: Key.groupOverlap) }
     static var groupDistinctLength: Int { max(4, d.integer(forKey: Key.groupDistinctLength)) }
     static var refreshDelay: Double { d.double(forKey: Key.refreshDelay) }
+    static var parentWhenEmpty: Bool { d.bool(forKey: Key.parentWhenEmpty) }
     static var autoAttachments: Bool { d.bool(forKey: Key.autoAttachments) }
     static var claudeConcurrency: Int { max(1, d.integer(forKey: Key.claudeConcurrency)) }
     static var claudeTimeout: TimeInterval { Double(max(1, d.integer(forKey: Key.claudeTimeoutMinutes))) * 60 }

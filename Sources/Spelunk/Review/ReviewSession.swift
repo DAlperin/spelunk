@@ -199,6 +199,10 @@ final class ReviewSession {
     /// True for the always-on working-copy review, which refreshes as files change.
     let tracksWorkingCopy: Bool
 
+    /// The working-copy review's target while `@` is empty and its parent is shown.
+    static let parentOfEmpty = ReviewTarget.jj(from: "@--", to: "@-")
+    var showsParent: Bool { tracksWorkingCopy && target == Self.parentOfEmpty }
+
     /// Whether a fixed review still matches the repository.
     enum Freshness: Equatable {
         case current
@@ -424,7 +428,8 @@ final class ReviewSession {
                 return id?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? rev
             }
             oldRev = await commit(from)
-            newRev = to == "@" ? nil : await commit(to)
+            // An empty `@` has its parent's files, so its parent's After side is the working copy.
+            newRev = to == "@" || showsParent ? nil : await commit(to)
             let desc = try? await Shell.output("jj", ["log", "--no-graph", "-r", to, "-T", "description"], cwd: root)
             let lines = (desc ?? "").split(separator: "\n", omittingEmptySubsequences: false)
             title = lines.first.map(String.init) ?? target.label

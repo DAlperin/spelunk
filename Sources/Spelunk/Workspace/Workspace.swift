@@ -240,7 +240,9 @@ final class Workspace {
         diffOptionsObserver = NotificationCenter.default.addObserver(forName: .diffOptionsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                for r in [self.workingReview].compactMap({ $0 }) + self.pinnedReviews { Task { await r.load() } }
+                // The working-copy review may change target (an empty `@` and its parent), so it is resolved again.
+                Task { await self.refreshWorkingReview() }
+                for r in self.pinnedReviews { Task { await r.load() } }
             }
         }
     }
@@ -374,10 +376,16 @@ final class Workspace {
     }
 
     /// The working copy's own changes: `@` against its parent for jj, uncommitted changes for git.
-    /// An empty working copy is an empty review.
+    /// An empty `@` shows its parent instead when Settings ask for it.
     private func workingTarget() async -> ReviewTarget? {
         switch vcs.kind {
-        case .jj: return .jj(from: "@-", to: "@")
+        case .jj:
+            if Prefs.parentWhenEmpty,
+               (try? await Shell.output("jj", ["log", "--no-graph", "-r", "@", "-T", "if(empty, \"empty\", \"\")"], cwd: root))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "empty" {
+                return ReviewSession.parentOfEmpty
+            }
+            return .jj(from: "@-", to: "@")
         case .git: return .git(base: "HEAD", head: nil)
         case .none: return nil
         }
