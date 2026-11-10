@@ -126,7 +126,7 @@ struct PaletteView: View {
         if q.hasPrefix("#") { return symbolResults }
         if q.hasPrefix(":"), let line = Int(q.dropFirst()), let d = ws.document {
             return [PaletteItem(id: "line", title: "Go to line \(line)", subtitle: d.path, icon: "arrow.right.to.line") { [ws] in
-                ws.open(CodeLocation(path: d.path, range: SourceRange(line: max(0, line - 1))))
+                ws.open(CodeLocation(path: d.path, range: SourceRange(line: max(0, line - 1))), reason: .browse)
             }]
         }
         var path = q
@@ -152,7 +152,7 @@ struct PaletteView: View {
             PaletteItem(id: p, title: p.lastPathComponent, subtitle: p.deletingLastPathComponent,
                         detail: line.map { ":\($0)" } ?? (ws.recentFiles.contains(p) && path.isEmpty ? "recent" : nil),
                         icon: icon(for: p)) { [ws] in
-                ws.open(CodeLocation(path: p, range: SourceRange(line: max(0, (line ?? 1) - 1))))
+                ws.open(CodeLocation(path: p, range: SourceRange(line: max(0, (line ?? 1) - 1))), reason: .browse)
             }
         }
     }
@@ -170,7 +170,7 @@ struct PaletteView: View {
             .map { item, _ in
                 PaletteItem(id: item.id.uuidString, title: item.kind == .impl ? item.detail : item.qualifiedName, subtitle: item.kind.label,
                             detail: "\(item.nameRange.start.line + 1)", icon: "function") { [ws] in
-                    ws.open(CodeLocation(path: d.path, range: item.nameRange))
+                    ws.open(CodeLocation(path: d.path, range: item.nameRange), reason: .browse)
                 }
             }
     }
@@ -268,8 +268,9 @@ enum PaletteCommands {
             if let id = ws.selectedHunkID { ws.review?.toggleViewed(id); ReviewNav.next(ws) }
         }
         for m in DiffMode.allCases {
-            add("Diff: \(m.rawValue)", m == .inline ? "new version with removed lines in place" : m == .split ? "old and new side by side" : "\(m.rawValue.lowercased()) version only",
-                icon: "rectangle.split.2x1", when: hasReview && ws.diffMode != m) { ws.setDiffMode(m) }
+            let current = m == .plain ? !ws.diffShown : ws.diffShown && ws.diffMode == m
+            add("Diff: \(m.rawValue)", m == .plain ? "the file without the review's diff" : m == .inline ? "new version with removed lines in place" : m == .split ? "old and new side by side" : "\(m.rawValue.lowercased()) version only",
+                icon: "rectangle.split.2x1", when: hasReview && !current) { ws.setDiffMode(m) }
         }
         add("Submit GitHub Review…", "\(ws.review?.pendingForCurrentPR.count ?? 0) pending comments", icon: "paperplane",
             when: ws.review?.pullRequest != nil) { ws.showSubmitReview = true }

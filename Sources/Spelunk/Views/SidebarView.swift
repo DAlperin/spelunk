@@ -126,7 +126,7 @@ struct FileTreeView: View {
         return out
     }
 
-    private func open(_ p: String) { ws.open(CodeLocation(path: p, range: SourceRange(line: 0))) }
+    private func open(_ p: String) { ws.open(CodeLocation(path: p, range: SourceRange(line: 0)), reason: .browse) }
 
     /// Review tier of each changed file, and of each folder the most important tier inside it.
     private var tiers: [String: ChangeTier] {
@@ -309,7 +309,7 @@ struct SearchView: View {
                 ForEach(grouped.keys.sorted(), id: \.self) { path in
                     Section {
                         ForEach(grouped[path]!) { m in
-                            Button { ws.open(m.location, edge: .manual) } label: {
+                            Button { ws.open(m.location, edge: .manual, reason: .browse) } label: {
                                 HStack(alignment: .firstTextBaseline) {
                                     Text(verbatim: "\(m.line + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
                                     Text(m.text.trimmingCharacters(in: .whitespaces)).font(.system(size: 11, design: .monospaced)).lineLimit(1)

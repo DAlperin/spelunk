@@ -201,13 +201,13 @@ struct MainToolbar: ToolbarContent {
                     .help("Close this review and go back to the working copy (⌥⌘W)")
             }
 
-            if ws.documentInReview, ws.review?.files.isEmpty == false {
-                Picker("Diff", selection: Binding(get: { ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
+            if ws.diffPickerApplies {
+                Picker("Diff", selection: Binding(get: { !ws.diffShown ? .plain : ws.diffMode == .before ? .after : ws.diffMode }, set: { ws.setDiffMode($0) })) {
                     ForEach(DiffMode.toolbar) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 170)
-                .help("Inline: new version with removed lines in place. Split: old and new side by side.")
+                .frame(width: 220)
+                .help("Plain: the file without the review's diff. Inline: new version with removed lines in place. Split: old and new side by side. After: the new version only.")
             }
             if ws.reviewing {
                 Toggle(isOn: Binding(get: { ignoreWhitespace }, set: { Prefs.setIgnoreWhitespace($0) })) {

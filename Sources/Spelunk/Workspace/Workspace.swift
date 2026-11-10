@@ -19,10 +19,12 @@ enum ReviewSide: String, CaseIterable { case before = "Before", after = "After" 
 /// How a review shows a file: the new version with removed lines inline, both versions side by
 /// side, or either version alone.
 enum DiffMode: String, CaseIterable, Identifiable {
-    case inline = "Inline", split = "Split", after = "After", before = "Before"
+    /// Plain is the file without the review's decorations; choosing it turns `diffShown` off and
+    /// leaves the stored mode alone.
+    case plain = "Plain", inline = "Inline", split = "Split", after = "After", before = "Before"
     var id: String { rawValue }
     /// The modes offered in the toolbar; Before stays reachable from menus and the palette.
-    static let toolbar: [DiffMode] = [.inline, .split, .after]
+    static let toolbar: [DiffMode] = [.plain, .inline, .split, .after]
 }
 
 /// What the context pane is about: the symbol under the cursor.
@@ -124,13 +126,14 @@ final class Workspace {
     /// Set to have the Files tab reveal the open file once, whether or not it follows it.
     var revealInTreePending = false
 
+    /// Whether the editor shows the active review's diff on the review's files. Arriving at a hunk,
+    /// a thread or a comment turns it on; opening a file from Files, Search or the palette turns it
+    /// off while the review follows the working copy; the toolbar's Plain choice turns it off.
+    var diffShown = true
+
     /// Review mode: the review being shown decorates its files with removed lines inline, hunk
-    /// tiers, review folds and comments. Pinned reviews are always in it; the working copy only while
-    /// the sidebar shows the Review tab, and otherwise is read as plain code with gutter change bars.
-    var reviewing: Bool {
-        guard let r = review else { return false }
-        return !r.tracksWorkingCopy || sidebarTab == .changes
-    }
+    /// tiers, review folds and comments. Otherwise its files read as plain code with gutter change bars.
+    var reviewing: Bool { review != nil && diffShown }
 
     /// The review's change to `doc`'s file, when `doc` is one of the review's two versions of it.
     func reviewFile(for doc: SourceDocument) -> FileDiff? {
@@ -141,10 +144,16 @@ final class Workspace {
     /// `reviewFile(for:)` while in review mode.
     func reviewedFile(_ doc: SourceDocument) -> FileDiff? { reviewing ? reviewFile(for: doc) : nil }
 
-    /// Whether the diff controls apply: in review mode, on the Review tab or a file of the review.
+    /// In review mode on one of the review's files.
     var documentInReview: Bool {
         guard reviewing, let d = document else { return false }
-        return sidebarTab == .changes || reviewFile(for: d) != nil
+        return reviewFile(for: d) != nil
+    }
+
+    /// Whether the toolbar's diff picker applies: the open file is one of the active review's.
+    var diffPickerApplies: Bool {
+        guard let r = review, !r.files.isEmpty, let d = document else { return false }
+        return reviewFile(for: d) != nil
     }
     var palette: PaletteMode? { didSet { if palette != oldValue { paletteQuery = "" } } }
     var paletteQuery = ""
@@ -416,7 +425,7 @@ final class Workspace {
     func closeReview(_ key: String) {
         pinnedReviews.first { $0.target.key == key }?.stopHeadIntel()
         pinnedReviews.removeAll { $0.target.key == key }
-        if activeReviewKey == key { activateReview(nil) }
+        if activeReviewKey == key { activateReview(nil, showList: false) }
     }
 
     func checkOut(_ r: ReviewSession, _ option: ReviewSession.CheckoutOption) async {
@@ -885,7 +894,7 @@ final class Workspace {
             return
         }
         // The composer shows in review mode.
-        if !reviewing { sidebarTab = .changes }
+        diffShown = true
         var side = d.side == .old ? "LEFT" : "RIGHT"
         let line: Int
         if let lines {
@@ -922,7 +931,6 @@ final class Workspace {
 
     func selectHunk(_ h: Hunk) {
         selectedHunkID = h.id
-        if review?.tracksWorkingCopy == true, sidebarTab != .changes { sidebarTab = .changes }
         let gen = beginNavigation(.hunk)
         if let r = review, let g = r.listedGroup(of: h) { r.expandedGroups.insert(g.id) }
         if let r = review, r.tier(of: h).isLowSignal { r.showLowSignal = true }
@@ -1035,12 +1043,15 @@ final class Workspace {
     }
 
     func setDiffMode(_ mode: DiffMode) {
+        guard mode != .plain else { diffShown = false; return }
+        diffShown = true
         let sideChanged = (mode == .before) != (diffMode == .before)
         diffMode = mode
         if sideChanged || mode == .split, let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
     }
 
     func setReviewSide(_ side: ReviewSide) {
+        diffShown = true
         if side == .before { diffMode = .before } else if diffMode == .before { diffMode = .inline }
         if let id = selectedHunkID, let h = review?.allHunks.first(where: { $0.id == id }) { selectHunk(h) }
     }

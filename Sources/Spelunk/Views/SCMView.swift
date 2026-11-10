@@ -128,7 +128,7 @@ struct ChangeGraphView: View {
             if !scm.workingCopyFiles.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(scm.workingCopyFiles.prefix(40)) { f in
-                        FileStatusRow(file: f) { ws.open(CodeLocation(path: f.path, range: SourceRange(line: 0))) }
+                        FileStatusRow(file: f) { ws.open(CodeLocation(path: f.path, range: SourceRange(line: 0)), reason: .browse) }
                     }
                     if scm.workingCopyFiles.count > 40 {
                         Text(verbatim: "+\(scm.workingCopyFiles.count - 40) more").font(.caption2).foregroundStyle(.secondary)

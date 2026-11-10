@@ -5,6 +5,8 @@ import Foundation
 /// here from the reason, in one place.
 enum NavReason: Equatable {
     case hunk, step, thread, symbol, definition, reference, history, citation, search, manual
+    /// Opening a file from the Files tab, search results or the palette.
+    case browse
     /// A click inside the code: updates the symbol context but is not a move.
     case click
 }
@@ -20,12 +22,17 @@ extension Workspace {
         if reason != .step && reason != .click { traces.currentStepID = nil }
         switch reason {
         case .hunk:
+            diffShown = true
             if !contextPinned { contextFocus = .hunk }
             if inspectorPane == .paths { inspectorPane = .context }
         case .step:
             inspectorPane = .paths
         case .symbol, .click, .definition:
             if !contextPinned { contextFocus = .symbol }
+        case .thread:
+            diffShown = true
+        case .browse:
+            if review?.follows == true { diffShown = false }
         default:
             break
         }
@@ -53,8 +60,10 @@ extension Workspace {
 
     /// Makes a review active (nil: the working-copy review). Selection that belongs to the previous
     /// review is cleared, then the new review's first hunk is selected.
-    func activateReview(_ key: String?) {
+    /// `showList` brings the Review tab forward, for requests to open a review rather than to close one.
+    func activateReview(_ key: String?, showList: Bool = true) {
         if key != activeReviewKey {
+            diffShown = true
             activeReviewKey = key
             selectedHunkID = nil
             changeContext = nil
@@ -63,7 +72,7 @@ extension Workspace {
             splitDocument = nil
             traces.currentStepID = nil
         }
-        sidebarTab = .changes
+        if showList { sidebarTab = .changes }
         if let r = review, !r.follows {
             Task {
                 await checkFreshness([r])

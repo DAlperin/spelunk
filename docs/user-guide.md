@@ -290,15 +290,21 @@ the review has no changes the diff picker and review keys are hidden.
 
 ### Reviewing and browsing
 
-The working copy has two modes. While the sidebar shows the Review tab, it is reviewed like any other
-target: removed lines inline, tier bars on hunks, unchanged functions folded, comments, and the diff
-mode picker and whitespace button in the toolbar. On the Files, Search and History tabs the same
-files read as plain code, with change bars in the gutter: green for added lines, blue for lines that
-replace removed ones, and a red tick where lines were deleted. Selecting a hunk or moving between
-hunks (J and K, or the Navigate menu) switches to the Review tab. A jump from a hunk, such as Go to
-Definition, keeps the Review tab, so review mode stays on.
+The editor shows a review's files in one of two ways. With the diff shown (review mode) you get
+removed lines inline, tier bars on hunks, unchanged functions folded, comments, and the whitespace
+button. Plain shows the same files as ordinary code, with change bars in the gutter: green for added
+lines, blue for lines that replace removed ones, and a red tick where lines were deleted. The
+toolbar's picker (Plain, Inline, Split, After) shows and switches the choice whenever the open file is
+one of the active review's.
 
-A pinned review is always in review mode. Its diff appears only on its own versions of its files:
+How you arrive decides it, not which sidebar tab is showing. Selecting a hunk, moving between hunks
+(J and K, or the Navigate menu), a review thread or a comment shows the diff. Opening a file from the
+Files tab, search results, the palette or the History file list shows it plain while the active
+review follows the working copy. Everything else (definitions, references, Back) leaves it as it was.
+Moving between hunks no longer switches the sidebar to the Review tab, so History or Search stays
+open while you step through a review.
+
+A fixed review's diff appears only on its own versions of its files:
 opening the working copy of a file the review touches shows that file without the review's diff or
 its hunk strip, and the version chip turns orange. Pick After in the chip's menu to go back to the
 review's version.

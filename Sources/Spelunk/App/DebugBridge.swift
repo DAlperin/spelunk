@@ -62,6 +62,8 @@ final class DebugBridge {
             let p = arg.split(separator: ":")
             let line = p.count > 1 ? (Int(p[1]) ?? 1) - 1 : 0
             ws.open(CodeLocation(path: String(p[0]), range: SourceRange(line: line)), edge: .manual)
+        case "browse": ws.open(CodeLocation(path: arg, range: SourceRange(line: 0)), reason: .browse)
+        case "diff": if let m = DiffMode(rawValue: arg.capitalized) { ws.setDiffMode(m) }
         case "click": ws.didClick(at: pos(arg))
         case "def": ws.goToDefinition(at: pos(arg))
         case "server":
