@@ -162,7 +162,7 @@ struct ChangesView: View {
             case .loading(let s):
                 ProgressView(s).frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let e):
-                SidebarMessage(icon: "exclamationmark.triangle", title: "Could not load change", detail: e) {
+                SidebarMessage(icon: "exclamationmark.triangle", title: "Could not load \(review.tracksWorkingCopy ? "the working copy" : ReviewTargetMenu.name(review))", detail: e) {
                     Button("Retry") { Task { await review.load() } }
                     if !review.tracksWorkingCopy { Button("Close Review") { ws.closeReview(review.target.key) } }
                 }
@@ -239,8 +239,12 @@ struct ChangesView: View {
                 ImportanceBar(review: review)
                 HStack(spacing: 8) {
                     let p = review.progress
-                    ProgressView(value: Double(p.viewed), total: Double(max(1, p.total))).frame(minWidth: 30, maxWidth: 70)
-                    Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    if p.total > 0 {
+                        ProgressView(value: Double(p.viewed), total: Double(p.total)).frame(minWidth: 30, maxWidth: 70)
+                        Text(verbatim: "\(p.viewed)/\(p.total) important reviewed").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    } else {
+                        Text("Nothing important; only low-signal changes").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     if let pr = review.pullRequest {
                         let open = pr.threads.filter { !$0.isResolved }.count
                         if open > 0 {

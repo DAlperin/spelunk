@@ -33,7 +33,7 @@ struct InspectorView: View {
         HStack(spacing: 6) {
             switch ws.inspectorPane {
             case .context:
-                if ws.review != nil, ws.changeContext != nil, !ws.contextPinned {
+                if ws.reviewing, ws.changeContext != nil, !ws.contextPinned {
                     Picker("", selection: Binding(get: { showingHunk ? ContextFocus.hunk : .symbol }, set: { ws.contextFocus = $0 })) {
                         Text(verbatim: ReviewNav.importantPosition(ws).map { "Hunk \($0.0)/\($0.1)" } ?? "Hunk").tag(ContextFocus.hunk)
                         Text(verbatim: ws.context.map { $0.name.count > 16 ? $0.name.prefix(15) + "…" : $0.name } ?? "Symbol").tag(ContextFocus.symbol)

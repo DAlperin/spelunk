@@ -299,7 +299,6 @@ struct ReviewPicker: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Review a change").font(.headline)
             if ws.vcs.kind == .jj {
-                Button { go(.jj(from: "@-", to: "@")) } label: { Label("Working copy (@- → @)", systemImage: "pencil.and.outline") }
                 Button { go(.jj(from: "trunk()", to: "@")) } label: { Label("Stack since trunk()", systemImage: "square.stack") }
                 HStack {
                     TextField("from", text: $from).frame(width: 110)
@@ -328,10 +327,6 @@ struct ReviewPicker: View {
                     TextField("PR number", text: $pr).frame(width: 110).textFieldStyle(.roundedBorder)
                     Button("Review GitHub PR") { if let n = Int(pr.trimmingCharacters(in: CharacterSet(charactersIn: "# "))) { go(.githubPR(n)) } }
                 }
-            }
-            if ws.activeReviewKey != nil {
-                Divider()
-                Button("Close this review", role: .destructive) { ws.review = nil; dismiss() }
             }
         }
         .buttonStyle(.borderless)
@@ -606,9 +601,11 @@ struct StatusIndicators: View {
             clippyStatus
             Button { showIndex.toggle() } label: {
                 HStack(spacing: 4) {
-                    Circle().fill(raColor).frame(width: 7, height: 7)
-                    Text(raLabel)
-                    Text("·").foregroundStyle(.tertiary)
+                    if ws.document.map({ ws.server(for: $0.path) != nil }) ?? true {
+                        Circle().fill(raColor).frame(width: 7, height: 7)
+                        Text(raLabel)
+                        Text("·").foregroundStyle(.tertiary)
+                    }
                     Text(ws.scip.summary)
                 }
             }

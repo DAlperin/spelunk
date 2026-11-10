@@ -395,7 +395,7 @@ Each hunk is sorted into a tier by the [review rules](rules.md):
 The list has two modes. Importance lists the Critical, Behavior and Plumbing tiers, then a "Low
 signal" box holding Docs, Tests and Mechanical hunks, which you can mark viewed together. Files lists
 files ordered by their most important hunk. The importance bar and the "x/y important reviewed"
-count above the list cover the important tiers only.
+count above the list cover the important tiers only; a review with nothing important says so instead.
 
 The strip above the editor shows the selected hunk's tier, enclosing item, size and summary; hover
 the summary to see which rule decided it and what Claude said. In the context pane, the change

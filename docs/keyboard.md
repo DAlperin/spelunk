@@ -58,7 +58,7 @@ Single-letter keys act on the review shown in the window. They apply when no tex
 the palette and comment composer are closed, and, with vim mode on, the code view does not have
 focus (vim bindings apply there instead; see below). In a jj or git repository the working-copy
 review is always open, so these keys are always live in the code view when vim mode is off. Moving
-to a hunk from the Files, Search or History tab switches to the Review tab.
+to a hunk shows the review's diff in the editor and leaves the sidebar on whichever tab it shows.
 
 Letters are case-insensitive except J.
 
@@ -109,14 +109,14 @@ there is one. Typing filters by title and by the subtitle shown under it.
 | Go to Symbol in Workspace… | | always (opens the file palette) |
 | Go Back / Go Forward | ⌘[ / ⌘] | there is history in that direction |
 | Go to Definition | ⇧⌘D | the cursor is in a file |
-| Show Files, Show Search, Show Source Control | ⇧⌘F for Search | always |
-| Show Changes | | a review is open |
+| Show Files, Show Search, Show History | ⇧⌘F for Search | always |
+| Show Review | | a review is open |
 | Review Working Copy, Review Stack Since trunk() | | jj repository |
 | Review Uncommitted Git Changes, Review GitHub Pull Request… | | the repository has git |
 | Triage Review with Claude | | a review is open |
 | Next Hunk / Previous Hunk | ⌘J / ⇧⌘J | a review is open |
 | Mark Hunk Viewed | ⇧⌘V | a hunk is selected |
-| Diff: Inline, Diff: Split, Diff: After, Diff: Before | | a review is open (the current mode is hidden) |
+| Diff: Plain, Diff: Inline, Diff: Split, Diff: After, Diff: Before | | a review is open (the current mode is hidden) |
 | Submit GitHub Review… | | the review has a pull request |
 | Close Review | | a review other than the working copy is shown |
 | Add Location to Code Path | ⇧⌘T | a file is open |

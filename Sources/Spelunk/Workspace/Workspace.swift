@@ -378,7 +378,10 @@ final class Workspace {
         let historyMoved = historyMark() != lastHistoryMark
         await refreshWorkingReview()
         for r in pinnedReviews where r.follows { await r.load() }
-        if historyMoved { await checkFreshness(pinnedReviews) }
+        if historyMoved {
+            await checkFreshness(pinnedReviews)
+            vcs = await VCS.detect(root)
+        }
         lastHistoryMark = historyMark()
         // After the review's diff, which snapshots a jj working copy, so the list includes new files.
         if fileListStale {
