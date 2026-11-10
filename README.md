@@ -6,6 +6,8 @@ review changes hunk by hunk, from your working copy, a jj change, a git range or
 request. Rust has the most support. Swift works through sourcekit-lsp and an installable grammar,
 and other languages get highlighting and an outline from tree-sitter grammars you install.
 
+![Spelunk showing a Rust file, with the context pane listing the selected method's callers, callees and references from rust-analyzer](docs/images/reading.png)
+
 ## What it does
 
 - Code navigation with go to definition, references, callers and callees, implementations and hover
@@ -22,6 +24,19 @@ and other languages get highlighting and an outline from tree-sitter grammars yo
 - Ask Claude about the code with read-only tools; any number of questions and generated traces can
   run at once.
 - An optional vim mode for the code view.
+
+Reviewing the working copy: hunks sorted into tiers in the sidebar, the selected one shown inline,
+and the context pane listing callers of what the hunk touches.
+
+![The Review tab with Behavior and Low signal hunks, an inline diff in the editor, and the hunk's change context in the right pane](docs/images/review.png)
+
+A code path through the same repository, with a note on each step. The banner above the editor
+shows the current step's note, and the gutter and file tree mark where the steps are.
+
+![The Code Paths pane listing four steps with notes, the editor on step 3, and step markers in the gutter and file tree](docs/images/code-paths.png)
+
+The screenshots show [imessage-exporter](https://github.com/ReagentX/imessage-exporter), with a small
+change to its attachment paths made for the review.
 
 ## Requirements
 
