@@ -29,10 +29,14 @@ Dependencies:
 open dist/Spelunk.app --args -repo ~/path/to/repo
 ```
 
-`scripts/bundle.sh` builds with the given configuration (default `release`), copies the binary and
+`scripts/bundle.sh` builds with the given configuration (default `release`), copies the binary, the app icon and
 any resource bundles into `dist/Spelunk.app`, writes an `Info.plist` (bundle identifier
 `dev.spelunk.Spelunk`, version 0.1.0, minimum macOS 15.0), signs the bundle ad hoc, and prints the
 app's path. `dist/` is ignored by git.
+
+The app icon is `assets/AppIcon.icns`, rendered from `assets/AppIcon.svg` by `scripts/icon.sh`
+(which needs `rsvg-convert`, from `brew install librsvg`). Run it after editing the SVG and commit
+both files; the bundle script copies the `.icns` and does not render it.
 
 ## Tests
 

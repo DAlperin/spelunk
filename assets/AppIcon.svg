@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#33271f"/><stop offset="1" stop-color="#140f0c"/></linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2=".6"><stop offset="0" stop-color="#ffe2a3" stop-opacity=".5"/><stop offset=".75" stop-color="#ffb347" stop-opacity=".1"/><stop offset="1" stop-color="#ffb347" stop-opacity="0"/></linearGradient>
+    <radialGradient id="lamp"><stop offset="0" stop-color="#fffbe8"/><stop offset=".35" stop-color="#ffd37a"/><stop offset="1" stop-color="#ff9f2e" stop-opacity="0"/></radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%"><feGaussianBlur stdDeviation="14"/></filter>
+    <clipPath id="squircle"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <clipPath id="beamclip"><path d="M262 250 L940 300 L940 940 L560 940 Z"/></clipPath>
+  </defs>
+  <rect x="100" y="112" width="824" height="824" rx="185" fill="#000" opacity=".35" filter="url(#shadow)"/>
+  <g clip-path="url(#squircle)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <g>
+      <rect x="190" y="340" width="400" height="52" rx="26" fill="#6e5040"/>
+      <rect x="250" y="420" width="560" height="52" rx="26" fill="#5c4234"/>
+      <rect x="250" y="500" width="330" height="52" rx="26" fill="#7a5a46"/>
+      <rect x="310" y="580" width="450" height="52" rx="26" fill="#5c4234"/>
+      <rect x="310" y="660" width="290" height="52" rx="26" fill="#6e5040"/>
+      <rect x="250" y="740" width="480" height="52" rx="26" fill="#5c4234"/>
+      <rect x="190" y="820" width="260" height="52" rx="26" fill="#7a5a46"/>
+    </g>
+    <g clip-path="url(#beamclip)">
+      <rect x="100" y="100" width="824" height="824" fill="url(#beam)"/>
+      <rect x="190" y="340" width="400" height="52" rx="26" fill="#c9a0ff"/>
+      <rect x="250" y="420" width="560" height="52" rx="26" fill="#7fb4ff"/>
+      <rect x="250" y="500" width="330" height="52" rx="26" fill="#ffd37a"/>
+      <rect x="310" y="580" width="450" height="52" rx="26" fill="#7ee0a1"/>
+      <rect x="310" y="660" width="290" height="52" rx="26" fill="#ff7a85"/>
+      <rect x="250" y="740" width="480" height="52" rx="26" fill="#7fb4ff"/>
+      <rect x="190" y="820" width="260" height="52" rx="26" fill="#c9a0ff"/>
+    </g>
+    <circle cx="262" cy="250" r="78" fill="url(#lamp)"/>
+    <circle cx="262" cy="250" r="22" fill="#fffbe8"/>
+  </g>
+</svg>
