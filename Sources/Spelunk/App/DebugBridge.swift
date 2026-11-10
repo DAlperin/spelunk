@@ -88,6 +88,7 @@ final class DebugBridge {
             if let c = ws.context { c.callDirection = arg == "out" ? .outgoing : .incoming; Task { await ws.loadCalls(c) } }
         case "addstep": ws.addCurrentToTrace()
         case "newpath": ws.newCodePath(fromCursor: true)
+        case "importpath": if allowed(arg), let text = try? String(contentsOfFile: arg, encoding: .utf8) { ws.importCodePath(text) }
         case "step": ws.playStep((Int(arg) ?? 1) - 1)
         case "closepath": ws.closeCodePath()
         case "path":
