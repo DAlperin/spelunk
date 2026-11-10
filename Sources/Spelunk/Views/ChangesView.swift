@@ -95,7 +95,7 @@ struct ChangesView: View {
                                    detail: review.tracksWorkingCopy && ws.vcs.kind == .jj ? "@ is empty. Its parent change is not part of this review." : nil) {
                         if review.tracksWorkingCopy {
                             Button(ws.vcs.kind == .jj ? "Review the Parent Change (@-)" : "Review the Last Commit") {
-                                Task { await ws.reviewParentChange() }
+                                ws.startReview(ws.vcs.kind == .jj ? .jj(from: "@--", to: "@-") : .git(base: "HEAD~1", head: "HEAD"))
                             }
                         }
                     }

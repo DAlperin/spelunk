@@ -157,7 +157,8 @@ final class Workspace {
     var workingReview: ReviewSession?
     /// The last time `@` became a different change, for the notice in the Review tab.
     var workingCopyMove: WorkingCopyMove?
-    @ObservationIgnored private var lastWorkingChange: String?
+    /// `@`'s change id as of the last refresh.
+    private(set) var workingChange: String?
     /// Reviews opened explicitly: pull requests, graph changes, custom ranges.
     var pinnedReviews: [ReviewSession] = []
     /// Key of the pinned review being shown; nil shows the working copy.
@@ -333,6 +334,7 @@ final class Workspace {
 
     private func refreshAfterChanges() async {
         await refreshWorkingReview()
+        for r in pinnedReviews where r.follows { await r.load() }
         lastHistoryMark = historyMark()
         // After the review's diff, which snapshots a jj working copy, so the list includes new files.
         if fileListStale {
@@ -387,23 +389,22 @@ final class Workspace {
 
     /// Records `@` becoming a different change. Returns whether it did.
     private func noteWorkingCopyMove() async -> Bool {
-        guard vcs.kind == .jj, let now = workingReview?.changeID else { return false }
-        defer { lastWorkingChange = now }
-        guard let previous = lastWorkingChange, previous != now else { return false }
+        guard vcs.kind == .jj, let now = await resolveRevision("@") else { return false }
+        defer { workingChange = now }
+        guard let previous = workingChange, previous != now else { return false }
         if workingCopyMove?.previous == now {
             workingCopyMove = nil
             return true
         }
-        let parent = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", "@-", "-T", "change_id.short(8)"], cwd: root))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parent = await resolveRevision("@-")
         workingCopyMove = WorkingCopyMove(previous: previous, current: now, previousIsParent: parent == previous, at: Date())
         return true
     }
 
-    /// Clears a hunk selection the working-copy review no longer has, or all of it once `@` is a
-    /// different change, along with the context and split view that belonged to it.
+    /// Clears a hunk selection the active following review no longer has, or all of it once `@` is
+    /// a different change, along with the context and split view that belonged to it.
     private func dropStaleSelection(moved: Bool) {
-        guard activeReviewKey == nil, let r = workingReview, let id = selectedHunkID,
+        guard let r = review, r.follows, let id = selectedHunkID,
               moved || !r.allHunks.contains(where: { $0.id == id }) else { return }
         selectedHunkID = nil
         if changeContext?.hunkID == id { changeContext = nil }
@@ -777,21 +778,56 @@ final class Workspace {
 
     // MARK: Review
 
-    /// Opens a review. The working copy's own target switches to the working tab; anything else is
-    /// pinned beside it (reusing an existing pin for the same target).
-    /// Opens a review of `@`'s parent, named by its change id so it stays that change after `@`
-    /// moves; for git, the last commit.
-    func reviewParentChange() async {
-        guard vcs.kind == .jj else { startReview(.git(base: "HEAD~1", head: "HEAD")); return }
-        let id = (try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", "@-", "-T", "change_id.short(8)"], cwd: root))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let id, !id.isEmpty else { startReview(.jj(from: "@--", to: "@-")); return }
-        startReview(.jj(from: id + "-", to: id))
+    /// Opens a review. jj revisions written relative to `@` are resolved to change ids first, so a
+    /// review keeps showing the change it opened on after `@` moves; a range that ends at `@` stays
+    /// following it.
+    func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
+        if case .git(let base, let head?) = target {
+            // Refs such as HEAD and HEAD~1 move with the next commit; commit ids do not.
+            Task {
+                func sha(_ ref: String) async -> String? {
+                    (try? await Shell.output("git", ["rev-parse", "--short=12", "--verify", "--quiet", ref + "^{commit}"], cwd: root))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                }
+                guard let h = await sha(head) else { openReview(target, focusPath: focusPath); return }
+                let b = await sha(base)
+                let parent = await sha(h + "^")
+                openReview(.git(base: b != nil && b == parent ? h + "^" : b ?? base, head: h), focusPath: focusPath)
+            }
+            return
+        }
+        guard case .jj(let from, let to) = target, vcs.kind == .jj, to != "@", from.contains("@") || to.contains("@") else {
+            openReview(target, focusPath: focusPath)
+            return
+        }
+        Task {
+            guard let head = await resolveRevision(to) else { openReview(target, focusPath: focusPath); return }
+            let base = await resolveRevision(from)
+            let parent = await resolveRevision(head + "-")
+            openReview(.jj(from: base != nil && base == parent ? head + "-" : base ?? from, to: head), focusPath: focusPath)
+        }
     }
 
-    func startReview(_ target: ReviewTarget, focusPath: String? = nil) {
+    /// A jj revision's change id, or its commit id when the change is divergent; nil unless the
+    /// revset names exactly one revision.
+    func resolveRevision(_ rev: String) async -> String? {
+        let out = try? await Shell.output("jj", ["log", "--no-graph", "--ignore-working-copy", "-r", rev, "-T",
+                                                  "if(divergent, commit_id.short(12), change_id.short(8)) ++ \"\\n\""], cwd: root)
+        let lines = (out ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return lines.count == 1 ? lines[0] : nil
+    }
+
+    /// Whether `target` is the working-copy review's change written out by id.
+    private func isWorkingChange(_ target: ReviewTarget) -> Bool {
+        guard case .jj(let from, let to) = target, let at = workingChange, workingReview != nil else { return false }
+        return (to.hasPrefix(at) || at.hasPrefix(to)) && to.count >= 4 && from == to + "-"
+    }
+
+    /// Opens `target` as given. The working copy's own target, or its change by id, shows the
+    /// working-copy review; anything else is pinned beside it (reusing an existing pin).
+    private func openReview(_ target: ReviewTarget, focusPath: String?) {
         let r: ReviewSession
-        if let w = workingReview, w.target == target {
+        if let w = workingReview, w.target == target || isWorkingChange(target) {
             r = w
             activateReview(nil)
         } else if let existing = pinnedReviews.first(where: { $0.target == target }) {

@@ -199,6 +199,17 @@ final class ReviewSession {
     /// True for the always-on working-copy review, which refreshes as files change.
     let tracksWorkingCopy: Bool
 
+    /// The review reloads as the working copy changes: the working-copy review, and any range that
+    /// ends at `@` or at git's working tree. Every other review is fixed at the commits it loaded.
+    var follows: Bool {
+        if tracksWorkingCopy { return true }
+        switch target {
+        case .jj(_, let to): return to == "@"
+        case .git(_, let head): return head == nil
+        case .githubPR: return false
+        }
+    }
+
     init(root: URL, target: ReviewTarget, github: GitHubService? = nil, tracksWorkingCopy: Bool = false) {
         self.root = root
         self.target = target

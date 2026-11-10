@@ -319,6 +319,13 @@ Request…"), the History tab, or the command palette:
 | A git commit | History › Changes › Review This Change in a git repository |
 | A GitHub pull request | History › Pull Requests › Review in Spelunk, or a PR number in Compare Revisions… |
 
+Revisions written relative to `@` (such as `@-`, or "Review the Parent Change") are resolved to
+change ids when the review opens, so the review stays on that change after `@` moves; git refs such
+as `HEAD~1` are resolved to commits the same way. A review whose head is `@` written out by id is the
+working-copy review. A range that ends at `@` ("Stack since trunk()", Review from Here to @) follows
+the working copy: it reloads as files change, like the working-copy review. Every other review is
+fixed at the commits it loaded.
+
 Each review you open is pinned in the review menu beside the working copy; ⌃1 to ⌃9 switch between
 them. The toolbar names the active review ("Working copy · qqtqomnp", "Change qqtqomnp", "Range a → b",
 "PR #123") and how many are open. Each menu row says what the review diffs, its size, and whether it
